@@ -1,0 +1,14 @@
+/home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/deps/serde-1ad3c51ef16574ce.d: /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/build/serde-a463afe2f9a121c6/out/private.rs
+
+/home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/deps/libserde-1ad3c51ef16574ce.rlib: /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/build/serde-a463afe2f9a121c6/out/private.rs
+
+/home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/deps/libserde-1ad3c51ef16574ce.rmeta: /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/build/serde-a463afe2f9a121c6/out/private.rs
+
+/home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/agony/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/build/serde-a463afe2f9a121c6/out/private.rs:
+
+# env-dep:OUT_DIR=/home/agony/.local/share/Astrea/Apps/Weather/backend/target/release/build/serde-a463afe2f9a121c6/out

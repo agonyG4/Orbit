@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$ROOT_DIR/backend-rs/target/release/astrea-screentime"
+MANIFEST="$ROOT_DIR/backend-rs/Cargo.toml"
+
+needs_build=false
+if [[ ! -x "$BIN" ]]; then
+  needs_build=true
+elif [[ -n "$(find "$ROOT_DIR/backend-rs/src" "$ROOT_DIR/backend-rs/Cargo.toml" "$ROOT_DIR/backend-rs/Cargo.lock" -newer "$BIN" -print -quit 2>/dev/null)" ]]; then
+  needs_build=true
+fi
+
+if [[ "$needs_build" == true ]]; then
+  cargo build --release --manifest-path "$MANIFEST"
+fi
+
+export SCREENTIME_PROJECT_DIR="$ROOT_DIR"
+exec "$BIN" "$@"

@@ -1,0 +1,4 @@
+.superpowers/
+__pycache__/
+tests/__pycache__/
+backend-rs/target/
