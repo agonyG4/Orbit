@@ -141,6 +141,8 @@ add_library(astrea_explorer_native_navigation STATIC
     src/controllers/selection_controller.cpp
     src/controllers/recent_controller.h
     src/controllers/recent_controller.cpp
+    src/controllers/preview_controller.h
+    src/controllers/preview_controller.cpp
     src/controllers/app_state_facade.h
     src/controllers/app_state_facade.cpp
 )
@@ -255,6 +257,22 @@ target_link_libraries(tst_recent_controller PRIVATE
 )
 
 add_test(NAME recent_controller COMMAND tst_recent_controller)
+
+qt_add_executable(tst_preview_controller
+    tests/tst_preview_controller.cpp
+)
+
+target_include_directories(tst_preview_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_preview_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME preview_controller COMMAND tst_preview_controller)
 
 set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
