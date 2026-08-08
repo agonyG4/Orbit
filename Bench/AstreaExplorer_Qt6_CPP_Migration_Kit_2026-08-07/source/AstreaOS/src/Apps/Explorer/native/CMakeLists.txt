@@ -61,6 +61,19 @@ target_link_libraries(astrea_explorer_native_clipboard PUBLIC
     Qt6::Gui
 )
 
+add_library(astrea_explorer_native_launch STATIC
+    src/services/launch_service.h
+    src/services/launch_service.cpp
+)
+
+target_include_directories(astrea_explorer_native_launch PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_launch PUBLIC
+    Qt6::Core
+)
+
 qt_add_executable(astrea-explorer
     src/main.cpp
     src/explorer_application.cpp
@@ -208,6 +221,22 @@ target_link_libraries(tst_clipboard_service PRIVATE
 )
 
 add_test(NAME clipboard_service COMMAND tst_clipboard_service)
+
+qt_add_executable(tst_launch_service
+    tests/tst_launch_service.cpp
+)
+
+target_include_directories(tst_launch_service PRIVATE
+    src
+)
+
+target_link_libraries(tst_launch_service PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_launch
+)
+
+add_test(NAME launch_service COMMAND tst_launch_service)
 
 set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
