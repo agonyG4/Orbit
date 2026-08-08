@@ -34,6 +34,19 @@ target_link_libraries(astrea_explorer_native_backend PUBLIC
     Qt6::Core
 )
 
+add_library(astrea_explorer_native_settings STATIC
+    src/services/settings_service.h
+    src/services/settings_service.cpp
+)
+
+target_include_directories(astrea_explorer_native_settings PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_settings PUBLIC
+    Qt6::Core
+)
+
 qt_add_executable(astrea-explorer
     src/main.cpp
     src/explorer_application.cpp
@@ -148,6 +161,22 @@ target_link_libraries(tst_selection_controller PRIVATE
 )
 
 add_test(NAME selection_controller COMMAND tst_selection_controller)
+
+qt_add_executable(tst_settings_service
+    tests/tst_settings_service.cpp
+)
+
+target_include_directories(tst_settings_service PRIVATE
+    src
+)
+
+target_link_libraries(tst_settings_service PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_settings
+)
+
+add_test(NAME settings_service COMMAND tst_settings_service)
 
 set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
