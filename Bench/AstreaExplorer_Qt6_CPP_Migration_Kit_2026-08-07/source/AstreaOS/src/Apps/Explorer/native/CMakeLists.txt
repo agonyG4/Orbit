@@ -156,6 +156,7 @@ target_include_directories(astrea_explorer_native_navigation PUBLIC
 target_link_libraries(astrea_explorer_native_navigation PUBLIC
     Qt6::Core
     astrea_explorer_native_backend
+    astrea_explorer_native_settings
 )
 
 target_link_libraries(astrea-explorer PRIVATE
