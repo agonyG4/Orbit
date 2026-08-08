@@ -160,6 +160,7 @@ target_link_libraries(astrea_explorer_native_navigation PUBLIC
 
 target_link_libraries(astrea-explorer PRIVATE
     astrea_explorer_native_navigation
+    astrea_explorer_native_settings
 )
 
 qt_add_executable(tst_navigation_controller
@@ -291,6 +292,23 @@ target_link_libraries(tst_device_controller PRIVATE
 )
 
 add_test(NAME device_controller COMMAND tst_device_controller)
+
+qt_add_executable(tst_app_state_facade
+    tests/tst_app_state_facade.cpp
+)
+
+target_include_directories(tst_app_state_facade PRIVATE
+    src
+)
+
+target_link_libraries(tst_app_state_facade PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+    astrea_explorer_native_settings
+)
+
+add_test(NAME app_state_facade COMMAND tst_app_state_facade)
 
 set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")

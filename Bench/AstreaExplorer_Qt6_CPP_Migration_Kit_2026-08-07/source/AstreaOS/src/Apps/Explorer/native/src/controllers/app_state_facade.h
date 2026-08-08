@@ -5,6 +5,7 @@
 
 #include "controllers/navigation_controller.h"
 #include "controllers/selection_controller.h"
+#include "services/settings_service.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -26,13 +27,25 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(int lastSelectedIndex READ lastSelectedIndex NOTIFY lastSelectedIndexChanged)
     Q_PROPERTY(int fileModelRevision READ fileModelRevision NOTIFY fileModelRevisionChanged)
     Q_PROPERTY(bool fileModelFilling READ fileModelFilling CONSTANT)
+    Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY showPreviewChanged)
+    Q_PROPERTY(QString viewMode READ viewMode WRITE setViewMode NOTIFY viewModeChanged)
+    Q_PROPERTY(QString sortField READ sortField WRITE setSortField NOTIFY sortFieldChanged)
+    Q_PROPERTY(bool sortAsc READ sortAsc WRITE setSortAsc NOTIFY sortAscChanged)
+    Q_PROPERTY(bool showHidden READ showHidden WRITE setShowHidden NOTIFY showHiddenChanged)
+    Q_PROPERTY(bool foldersFirst READ foldersFirst WRITE setFoldersFirst NOTIFY foldersFirstChanged)
+    Q_PROPERTY(bool groupingEnabled READ groupingEnabled WRITE setGroupingEnabled NOTIFY groupingEnabledChanged)
+    Q_PROPERTY(double zoomLevel READ zoomLevel WRITE setZoomLevel NOTIFY zoomLevelChanged)
+    Q_PROPERTY(QString autoMountDeviceIdsJson READ autoMountDeviceIdsJson WRITE setAutoMountDeviceIdsJson NOTIFY autoMountDeviceIdsJsonChanged)
+    Q_PROPERTY(QString sidebarFavoritesJson READ sidebarFavoritesJson WRITE setSidebarFavoritesJson NOTIFY sidebarFavoritesJsonChanged)
+    Q_PROPERTY(QString sidebarHiddenDefaultFavoritesJson READ sidebarHiddenDefaultFavoritesJson WRITE setSidebarHiddenDefaultFavoritesJson NOTIFY sidebarHiddenDefaultFavoritesJsonChanged)
 
 public:
     AppStateFacade(
         NavigationController *navigation,
         SelectionController *selection,
         DirectoryModel *model,
-        QObject *parent = nullptr);
+        QObject *parent = nullptr,
+        Services::SettingsService *settingsService = nullptr);
 
     QAbstractItemModel *fileModel() const;
     QString currentPath() const;
@@ -49,6 +62,29 @@ public:
     int lastSelectedIndex() const;
     int fileModelRevision() const;
     bool fileModelFilling() const;
+    bool showPreview() const;
+    QString viewMode() const;
+    QString sortField() const;
+    bool sortAsc() const;
+    bool showHidden() const;
+    bool foldersFirst() const;
+    bool groupingEnabled() const;
+    double zoomLevel() const;
+    QString autoMountDeviceIdsJson() const;
+    QString sidebarFavoritesJson() const;
+    QString sidebarHiddenDefaultFavoritesJson() const;
+
+    void setShowPreview(bool showPreview);
+    void setViewMode(const QString &viewMode);
+    void setSortField(const QString &sortField);
+    void setSortAsc(bool sortAscending);
+    void setShowHidden(bool showHidden);
+    void setFoldersFirst(bool foldersFirst);
+    void setGroupingEnabled(bool groupingEnabled);
+    void setZoomLevel(double zoomLevel);
+    void setAutoMountDeviceIdsJson(const QString &json);
+    void setSidebarFavoritesJson(const QString &json);
+    void setSidebarHiddenDefaultFavoritesJson(const QString &json);
 
     Q_INVOKABLE BackendRequestId navigateTo(const QString &path);
     Q_INVOKABLE BackendRequestId submitSearch(const QString &root, const QString &query);
@@ -82,14 +118,31 @@ signals:
     void selectedFilesChanged();
     void lastSelectedIndexChanged();
     void fileModelRevisionChanged();
+    void showPreviewChanged();
+    void viewModeChanged();
+    void sortFieldChanged();
+    void sortAscChanged();
+    void showHiddenChanged();
+    void foldersFirstChanged();
+    void groupingEnabledChanged();
+    void zoomLevelChanged();
+    void autoMountDeviceIdsJsonChanged();
+    void sidebarFavoritesJsonChanged();
+    void sidebarHiddenDefaultFavoritesJsonChanged();
 
 private slots:
     void handleModelReset();
+    void handleListingOptionsChanged();
+    void persistCurrentPath();
 
 private:
+    void persistSettings();
+
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;
+    Services::SettingsService *m_settingsService = nullptr;
+    Services::ExplorerSettings m_settings;
     int m_fileModelRevision = 0;
 };
 

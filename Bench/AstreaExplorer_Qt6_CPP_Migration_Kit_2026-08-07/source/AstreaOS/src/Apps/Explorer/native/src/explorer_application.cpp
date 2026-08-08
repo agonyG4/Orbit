@@ -1,6 +1,7 @@
 #include "explorer_application.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QGuiApplication>
 #include <QQmlEngine>
 #include <QQmlApplicationEngine>
@@ -16,6 +17,7 @@
 #include "controllers/selection_controller.h"
 #include "models/directory_model.h"
 #include "services/directory_watch_service.h"
+#include "services/settings_service.h"
 
 namespace {
 constexpr auto kApplicationName = "Explorer";
@@ -34,10 +36,13 @@ int ExplorerApplication::run(int argc, char **argv)
     QCoreApplication::setOrganizationDomain(QString::fromLatin1(kOrganizationDomain));
 
     using namespace Astrea::Explorer::Native::Backend;
+    using namespace Astrea::Explorer::Native::Services;
     OneShotCliTransport transport({}, &application);
     RustBackendClient backendClient(&transport, &application);
     DirectoryModel directoryModel(&application);
     DirectoryWatchService directoryWatcher(&application);
+    SettingsService settings(
+        QDir(QDir::homePath()).filePath(QStringLiteral(".config/explorer.conf")));
     NavigationController navigation(
         &backendClient,
         &directoryModel,
@@ -48,7 +53,8 @@ int ExplorerApplication::run(int argc, char **argv)
         &navigation,
         &selection,
         &directoryModel,
-        &application);
+        &application,
+        &settings);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,
