@@ -92,4 +92,36 @@ target_link_libraries(tst_directory_model PRIVATE
 
 add_test(NAME directory_model COMMAND tst_directory_model)
 
+add_library(astrea_explorer_native_navigation STATIC
+    src/services/directory_watch_service.h
+    src/services/directory_watch_service.cpp
+    src/controllers/navigation_controller.h
+    src/controllers/navigation_controller.cpp
+)
+
+target_include_directories(astrea_explorer_native_navigation PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_navigation PUBLIC
+    Qt6::Core
+    astrea_explorer_native_backend
+)
+
+qt_add_executable(tst_navigation_controller
+    tests/tst_navigation_controller.cpp
+)
+
+target_include_directories(tst_navigation_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_navigation_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME navigation_controller COMMAND tst_navigation_controller)
+
 add_subdirectory(tests)
