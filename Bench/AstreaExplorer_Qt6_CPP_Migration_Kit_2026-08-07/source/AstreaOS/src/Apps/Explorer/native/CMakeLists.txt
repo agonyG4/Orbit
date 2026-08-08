@@ -149,4 +149,37 @@ target_link_libraries(tst_selection_controller PRIVATE
 
 add_test(NAME selection_controller COMMAND tst_selection_controller)
 
+set(ASTREA_EXPLORER_RUST_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
+
+qt_add_executable(tst_shadow_parity
+    tests/parity/fixture_tree.h
+    tests/parity/fixture_tree.cpp
+    tests/parity/legacy_oracle.h
+    tests/parity/legacy_oracle.cpp
+    tests/parity/native_oracle.h
+    tests/parity/native_oracle.cpp
+    tests/parity/parity_snapshot.h
+    tests/parity/parity_snapshot.cpp
+    tests/tst_shadow_parity.cpp
+)
+
+target_include_directories(tst_shadow_parity PRIVATE
+    src
+    tests
+)
+
+target_compile_definitions(tst_shadow_parity PRIVATE
+    ASTREA_EXPLORER_PARITY_BACKEND="${ASTREA_EXPLORER_RUST_ROOT}/target/debug/explorer_backend"
+    ASTREA_EXPLORER_PARITY_HELPER="${CMAKE_CURRENT_SOURCE_DIR}/../explorer_helper.py"
+)
+
+target_link_libraries(tst_shadow_parity PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME shadow_parity COMMAND tst_shadow_parity)
+
 add_subdirectory(tests)
