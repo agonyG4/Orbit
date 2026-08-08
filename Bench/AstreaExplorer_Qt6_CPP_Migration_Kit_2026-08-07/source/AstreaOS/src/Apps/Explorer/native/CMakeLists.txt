@@ -143,6 +143,8 @@ add_library(astrea_explorer_native_navigation STATIC
     src/controllers/recent_controller.cpp
     src/controllers/preview_controller.h
     src/controllers/preview_controller.cpp
+    src/controllers/device_controller.h
+    src/controllers/device_controller.cpp
     src/controllers/app_state_facade.h
     src/controllers/app_state_facade.cpp
 )
@@ -273,6 +275,22 @@ target_link_libraries(tst_preview_controller PRIVATE
 )
 
 add_test(NAME preview_controller COMMAND tst_preview_controller)
+
+qt_add_executable(tst_device_controller
+    tests/tst_device_controller.cpp
+)
+
+target_include_directories(tst_device_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_device_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME device_controller COMMAND tst_device_controller)
 
 set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
