@@ -20,6 +20,7 @@ private slots:
     void reportsInaccessiblePath();
     void debouncesLocalWatcherChanges();
     void suppressesWatcherForRemotePath();
+    void forwardsListingOptionsToBackend();
 };
 
 DirectoryEntry navigationEntry(const QString &name, const QString &path)
@@ -85,6 +86,28 @@ void NavigationControllerTest::cancelsSupersededSearch()
     QVERIFY(navigation.searchActive());
     QCOMPARE(navigation.searchQuery(), QStringLiteral("second"));
     QCOMPARE(model.paths(), QVector<QString>({QStringLiteral("/root/second.txt")}));
+}
+
+void NavigationControllerTest::forwardsListingOptionsToBackend()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    navigation.setShowHidden(true);
+    navigation.setSortField(QStringLiteral("date"));
+    navigation.setSortAscending(false);
+    navigation.setFoldersFirst(false);
+    navigation.setPreviews(false);
+    const BackendRequestId requestId = navigation.navigateTo(QStringLiteral("/fixture"));
+    QCOMPARE(client.listRequests().constLast().path, QStringLiteral("/fixture"));
+    QCOMPARE(client.listRequests().constLast().showHidden, true);
+    QCOMPARE(client.listRequests().constLast().sortField, QStringLiteral("date"));
+    QCOMPARE(client.listRequests().constLast().sortAscending, false);
+    QCOMPARE(client.listRequests().constLast().foldersFirst, false);
+    QCOMPARE(client.listRequests().constLast().previews, false);
+    client.completeList(requestId, {});
 }
 
 void NavigationControllerTest::preservesTabsAndHistory()

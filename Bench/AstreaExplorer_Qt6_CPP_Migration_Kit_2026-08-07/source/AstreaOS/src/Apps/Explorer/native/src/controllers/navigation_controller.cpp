@@ -97,6 +97,91 @@ bool NavigationController::remoteDirectoryActive() const
     return m_remoteDirectoryActive;
 }
 
+bool NavigationController::showHidden() const
+{
+    return m_showHidden;
+}
+
+QString NavigationController::sortField() const
+{
+    return m_sortField;
+}
+
+bool NavigationController::sortAscending() const
+{
+    return m_sortAscending;
+}
+
+bool NavigationController::foldersFirst() const
+{
+    return m_foldersFirst;
+}
+
+bool NavigationController::previews() const
+{
+    return m_previews;
+}
+
+void NavigationController::setShowHidden(bool showHiddenValue)
+{
+    if (m_showHidden == showHiddenValue) {
+        return;
+    }
+    m_showHidden = showHiddenValue;
+    emit listingOptionsChanged();
+    if (!m_currentPath.isEmpty()) {
+        refreshCurrentFolder();
+    }
+}
+
+void NavigationController::setSortField(const QString &sortFieldValue)
+{
+    if (m_sortField == sortFieldValue) {
+        return;
+    }
+    m_sortField = sortFieldValue;
+    emit listingOptionsChanged();
+    if (!m_currentPath.isEmpty()) {
+        refreshCurrentFolder();
+    }
+}
+
+void NavigationController::setSortAscending(bool sortAscendingValue)
+{
+    if (m_sortAscending == sortAscendingValue) {
+        return;
+    }
+    m_sortAscending = sortAscendingValue;
+    emit listingOptionsChanged();
+    if (!m_currentPath.isEmpty()) {
+        refreshCurrentFolder();
+    }
+}
+
+void NavigationController::setFoldersFirst(bool foldersFirstValue)
+{
+    if (m_foldersFirst == foldersFirstValue) {
+        return;
+    }
+    m_foldersFirst = foldersFirstValue;
+    emit listingOptionsChanged();
+    if (!m_currentPath.isEmpty()) {
+        refreshCurrentFolder();
+    }
+}
+
+void NavigationController::setPreviews(bool previewsValue)
+{
+    if (m_previews == previewsValue) {
+        return;
+    }
+    m_previews = previewsValue;
+    emit listingOptionsChanged();
+    if (!m_currentPath.isEmpty()) {
+        refreshCurrentFolder();
+    }
+}
+
 BackendRequestId NavigationController::navigateTo(const QString &path)
 {
     if (path.isEmpty()) {
@@ -269,6 +354,11 @@ BackendRequestId NavigationController::startList(const QString &path)
     m_model->applyEntries({}, generation);
     ListRequest request;
     request.path = path;
+    request.showHidden = m_showHidden;
+    request.sortField = m_sortField;
+    request.sortAscending = m_sortAscending;
+    request.foldersFirst = m_foldersFirst;
+    request.previews = m_previews;
     const BackendRequestId requestId = m_client->list(request);
     m_pendingRequests.insert(requestId, {generation, path, RequestKind::List});
     m_activeRequest = requestId;
@@ -290,6 +380,10 @@ BackendRequestId NavigationController::startSearch(
     SearchRequest request;
     request.rootPath = root;
     request.query = query;
+    request.showHidden = m_showHidden;
+    request.sortField = m_sortField;
+    request.sortAscending = m_sortAscending;
+    request.foldersFirst = m_foldersFirst;
     const BackendRequestId requestId = m_client->search(request);
     m_pendingRequests.insert(requestId, {generation, root, RequestKind::Search});
     m_activeRequest = requestId;

@@ -22,6 +22,11 @@ class NavigationController final : public QObject
     Q_PROPERTY(bool searchActive READ searchActive NOTIFY searchStateChanged)
     Q_PROPERTY(QString searchQuery READ searchQuery NOTIFY searchStateChanged)
     Q_PROPERTY(bool remoteDirectoryActive READ remoteDirectoryActive NOTIFY remoteStateChanged)
+    Q_PROPERTY(bool showHidden READ showHidden NOTIFY listingOptionsChanged)
+    Q_PROPERTY(QString sortField READ sortField NOTIFY listingOptionsChanged)
+    Q_PROPERTY(bool sortAscending READ sortAscending NOTIFY listingOptionsChanged)
+    Q_PROPERTY(bool foldersFirst READ foldersFirst NOTIFY listingOptionsChanged)
+    Q_PROPERTY(bool previews READ previews NOTIFY listingOptionsChanged)
 
 public:
     NavigationController(
@@ -40,6 +45,17 @@ public:
     bool searchActive() const;
     QString searchQuery() const;
     bool remoteDirectoryActive() const;
+    bool showHidden() const;
+    QString sortField() const;
+    bool sortAscending() const;
+    bool foldersFirst() const;
+    bool previews() const;
+
+    void setShowHidden(bool showHidden);
+    void setSortField(const QString &sortField);
+    void setSortAscending(bool sortAscending);
+    void setFoldersFirst(bool foldersFirst);
+    void setPreviews(bool previews);
 
     Q_INVOKABLE BackendRequestId navigateTo(const QString &path);
     Q_INVOKABLE BackendRequestId submitSearch(const QString &root, const QString &query);
@@ -59,6 +75,7 @@ signals:
     void loadErrorChanged();
     void searchStateChanged();
     void remoteStateChanged();
+    void listingOptionsChanged();
     void navigationFailed(const Astrea::Explorer::Native::Backend::BackendError &error);
 
 private slots:
@@ -124,6 +141,11 @@ private:
     QString m_searchQuery;
     QString m_searchRoot;
     bool m_remoteDirectoryActive = false;
+    bool m_showHidden = false;
+    QString m_sortField {QStringLiteral("name")};
+    bool m_sortAscending = true;
+    bool m_foldersFirst = true;
+    bool m_previews = true;
 };
 
 } // namespace Astrea::Explorer::Native::Backend
