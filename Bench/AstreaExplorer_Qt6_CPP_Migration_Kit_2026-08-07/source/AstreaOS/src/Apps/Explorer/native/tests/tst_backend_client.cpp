@@ -1,6 +1,9 @@
 #include <QCoreApplication>
+#include <QFileInfo>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QTimeZone>
 #include <QtTest>
@@ -90,6 +93,10 @@ private slots:
     void fakeBackendClientEmitsTypedSignalsWithoutProcessDependencies();
     void oneShotTransportMapsNonZeroExitToFailure();
     void oneShotTransportCancelsExactlyOnce();
+    void oneShotTransportCancellationIsAsynchronous();
+    void oneShotTransportKillsAfterTerminateGraceExpires();
+    void oneShotTransportIgnoresLateFinishedAfterCancellation();
+    void oneShotTransportDestructionReleasesActiveProcess();
     void oneShotTransportTimesOutExactlyOnce();
     void oneShotTransportCapsOutput();
 };
@@ -419,6 +426,7 @@ void BackendClientTest::oneShotTransportCancelsExactlyOnce()
 
     QSignalSpy completedSpy(&transport, &BackendTransport::completed);
     QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+    QSignalSpy releasedSpy(&transport, &OneShotCliTransport::requestReleased);
 
     const BackendRequestId requestId = transport.start(
         {QStringLiteral("-c"),
@@ -426,12 +434,124 @@ void BackendClientTest::oneShotTransportCancelsExactlyOnce()
     transport.cancel(requestId);
 
     QTRY_COMPARE(failedSpy.count(), 1);
+    QTRY_COMPARE(releasedSpy.count(), 1);
     QCOMPARE(completedSpy.count(), 0);
 
     const BackendTransportError error =
         failedSpy.takeFirst().at(1).value<BackendTransportError>();
     QCOMPARE(error.requestId, requestId);
     QCOMPARE(error.code, QStringLiteral("cancelled"));
+}
+
+void BackendClientTest::oneShotTransportCancellationIsAsynchronous()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QVERIFY2(!python.isEmpty(), "python3 must be available for transport tests");
+
+    OneShotCliTransportOptions options;
+    options.backendProgram = python;
+    options.timeoutMs = 5000;
+    options.terminationGraceMs = 100;
+    OneShotCliTransport transport(options);
+
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+    QSignalSpy terminateSpy(&transport, &OneShotCliTransport::processTerminateRequested);
+    QSignalSpy killSpy(&transport, &OneShotCliTransport::processKillRequested);
+    QSignalSpy releasedSpy(&transport, &OneShotCliTransport::requestReleased);
+
+    const BackendRequestId requestId = transport.start(
+        {QStringLiteral("-c"),
+         QStringLiteral("import time; print('late', flush=True); time.sleep(10)")});
+    transport.cancel(requestId);
+    transport.cancel(requestId);
+
+    QCOMPARE(failedSpy.count(), 1);
+    QCOMPARE(completedSpy.count(), 0);
+    QTRY_COMPARE(terminateSpy.count(), 1);
+    QCOMPARE(killSpy.count(), 0);
+    QTRY_COMPARE(releasedSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 1);
+    QCOMPARE(completedSpy.count(), 0);
+}
+
+void BackendClientTest::oneShotTransportKillsAfterTerminateGraceExpires()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QVERIFY2(!python.isEmpty(), "python3 must be available for transport tests");
+
+    OneShotCliTransportOptions options;
+    options.backendProgram = python;
+    options.timeoutMs = 5000;
+    options.terminationGraceMs = 25;
+    OneShotCliTransport transport(options);
+    QTemporaryDir readyDir;
+    QVERIFY(readyDir.isValid());
+    const QString readyPath = readyDir.filePath(QStringLiteral("ready"));
+
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+    QSignalSpy terminateSpy(&transport, &OneShotCliTransport::processTerminateRequested);
+    QSignalSpy killSpy(&transport, &OneShotCliTransport::processKillRequested);
+    QSignalSpy releasedSpy(&transport, &OneShotCliTransport::requestReleased);
+
+    const BackendRequestId requestId = transport.start(
+        {QStringLiteral("-c"),
+         QStringLiteral(
+             "import signal, sys, time; "
+             "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM}); "
+             "open(sys.argv[1], 'w').close(); time.sleep(10)"),
+         readyPath});
+    QTRY_VERIFY(QFileInfo::exists(readyPath));
+    transport.cancel(requestId);
+
+    QCOMPARE(failedSpy.count(), 1);
+    QTRY_COMPARE(terminateSpy.count(), 1);
+    QTRY_COMPARE(killSpy.count(), 1);
+    QTRY_COMPARE(releasedSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 1);
+}
+
+void BackendClientTest::oneShotTransportIgnoresLateFinishedAfterCancellation()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QVERIFY2(!python.isEmpty(), "python3 must be available for transport tests");
+
+    OneShotCliTransportOptions options;
+    options.backendProgram = python;
+    options.timeoutMs = 5000;
+    options.terminationGraceMs = 100;
+    OneShotCliTransport transport(options);
+
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+    QSignalSpy releasedSpy(&transport, &OneShotCliTransport::requestReleased);
+
+    const BackendRequestId requestId = transport.start(
+        {QStringLiteral("-c"), QStringLiteral("import time; time.sleep(10)")});
+    transport.cancel(requestId);
+
+    QTRY_COMPARE(failedSpy.count(), 1);
+    QTRY_COMPARE(releasedSpy.count(), 1);
+    QCOMPARE(completedSpy.count(), 0);
+    QCOMPARE(failedSpy.count(), 1);
+}
+
+void BackendClientTest::oneShotTransportDestructionReleasesActiveProcess()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QVERIFY2(!python.isEmpty(), "python3 must be available for transport tests");
+
+    OneShotCliTransportOptions options;
+    options.backendProgram = python;
+    options.timeoutMs = 5000;
+    options.terminationGraceMs = 25;
+    auto *transport = new OneShotCliTransport(options);
+    QPointer<OneShotCliTransport> guard(transport);
+
+    transport->start({QStringLiteral("-c"), QStringLiteral("import time; time.sleep(10)")});
+    transport->deleteLater();
+
+    QTRY_VERIFY(guard.isNull());
 }
 
 void BackendClientTest::oneShotTransportTimesOutExactlyOnce()

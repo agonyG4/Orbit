@@ -13,6 +13,7 @@ struct OneShotCliTransportOptions
 {
     QString backendProgram;
     int timeoutMs = 10000;
+    int terminationGraceMs = 250;
     int maxStdoutBytes = 1024 * 1024;
     int maxStderrBytes = 128 * 1024;
 };
@@ -30,7 +31,18 @@ public:
     BackendRequestId start(const QStringList &arguments) override;
     void cancel(BackendRequestId requestId) override;
 
+signals:
+    void processTerminateRequested(BackendRequestId requestId);
+    void processKillRequested(BackendRequestId requestId);
+    void requestReleased(BackendRequestId requestId);
+
 private:
+    enum class Lifecycle
+    {
+        Running,
+        Cancelling,
+    };
+
     struct ActiveRequest
     {
         QStringList arguments;
@@ -38,6 +50,9 @@ private:
         QByteArray stderrData;
         QProcess *process = nullptr;
         QTimer *timer = nullptr;
+        QTimer *terminationTimer = nullptr;
+        Lifecycle lifecycle = Lifecycle::Running;
+        bool terminalPublished = false;
     };
 
     QString resolveBackendProgram() const;
@@ -49,6 +64,7 @@ private:
         bool normalExit);
     void handleErrorOccurred(BackendRequestId requestId, const QString &message);
     void handleTimeout(BackendRequestId requestId);
+    void handleTerminationGraceExpired(BackendRequestId requestId);
     QByteArray readChunk(QProcess *process,
                          int currentSize,
                          int limit,
@@ -57,7 +73,8 @@ private:
     void failOutputLimit(BackendRequestId requestId, const char *streamName);
     void completeSuccess(BackendRequestId requestId, const QByteArray &payload);
     void completeFailure(BackendRequestId requestId, const BackendTransportError &error);
-    void terminateProcess(QProcess *process) const;
+    void beginCancellation(BackendRequestId requestId);
+    void releaseRequest(BackendRequestId requestId);
     ActiveRequest *activeRequest(BackendRequestId requestId);
 
     OneShotCliTransportOptions m_options;

@@ -49,7 +49,26 @@ OneShotCliTransport::~OneShotCliTransport()
 {
     const QList<BackendRequestId> activeIds = m_activeRequests.keys();
     for (const BackendRequestId requestId : activeIds) {
-        cancel(requestId);
+        ActiveRequest *request = activeRequest(requestId);
+        if (request == nullptr) {
+            continue;
+        }
+
+        if (request->process != nullptr
+            && request->process->state() != QProcess::NotRunning) {
+            QProcess *process = request->process;
+            process->disconnect(this);
+            process->setParent(nullptr);
+            QObject::connect(
+                process,
+                &QProcess::finished,
+                process,
+                [process](int, QProcess::ExitStatus) { process->deleteLater(); });
+            process->terminate();
+            process->kill();
+            request->process = nullptr;
+        }
+        releaseRequest(requestId);
     }
 }
 
@@ -61,7 +80,9 @@ BackendRequestId OneShotCliTransport::start(const QStringList &arguments)
     request.arguments = arguments;
     request.process = new QProcess(this);
     request.timer = new QTimer(this);
+    request.terminationTimer = new QTimer(this);
     request.timer->setSingleShot(true);
+    request.terminationTimer->setSingleShot(true);
 
     m_activeRequests.insert(requestId, request);
     ActiveRequest *active = activeRequest(requestId);
@@ -104,6 +125,11 @@ BackendRequestId OneShotCliTransport::start(const QStringList &arguments)
         &QTimer::timeout,
         this,
         [this, requestId]() { handleTimeout(requestId); });
+    connect(
+        active->terminationTimer,
+        &QTimer::timeout,
+        this,
+        [this, requestId]() { handleTerminationGraceExpired(requestId); });
 
     active->process->start();
     active->timer->start(m_options.timeoutMs);
@@ -113,8 +139,7 @@ BackendRequestId OneShotCliTransport::start(const QStringList &arguments)
 
 void OneShotCliTransport::cancel(BackendRequestId requestId)
 {
-    ActiveRequest *request = activeRequest(requestId);
-    if (request == nullptr) {
+    if (activeRequest(requestId) == nullptr) {
         return;
     }
 
@@ -191,6 +216,11 @@ void OneShotCliTransport::handleFinished(
         return;
     }
 
+    if (request->lifecycle == Lifecycle::Cancelling) {
+        releaseRequest(requestId);
+        return;
+    }
+
     if (request->process != nullptr) {
         const QByteArray stdoutChunk = readChunk(
             request->process,
@@ -249,6 +279,10 @@ void OneShotCliTransport::handleErrorOccurred(
         return;
     }
 
+    if (request->lifecycle == Lifecycle::Cancelling) {
+        return;
+    }
+
     BackendTransportError error;
     error.code = QStringLiteral("process_error");
     error.message = message;
@@ -271,6 +305,23 @@ void OneShotCliTransport::handleTimeout(BackendRequestId requestId)
     error.requestId = requestId;
     error.stderrData = request->stderrData;
     completeFailure(requestId, error);
+}
+
+void OneShotCliTransport::handleTerminationGraceExpired(BackendRequestId requestId)
+{
+    ActiveRequest *request = activeRequest(requestId);
+    if (request == nullptr || request->lifecycle != Lifecycle::Cancelling) {
+        return;
+    }
+
+    if (request->process == nullptr
+        || request->process->state() == QProcess::NotRunning) {
+        releaseRequest(requestId);
+        return;
+    }
+
+    emit processKillRequested(requestId);
+    request->process->kill();
 }
 
 QByteArray OneShotCliTransport::readChunk(
@@ -342,15 +393,14 @@ void OneShotCliTransport::completeSuccess(
     BackendRequestId requestId,
     const QByteArray &payload)
 {
+    ActiveRequest *request = activeRequest(requestId);
+    if (request == nullptr || request->terminalPublished) {
+        return;
+    }
+
+    request->terminalPublished = true;
     const QByteArray stablePayload = payload;
-    ActiveRequest request = m_activeRequests.take(requestId);
-    if (request.timer != nullptr) {
-        request.timer->stop();
-        request.timer->deleteLater();
-    }
-    if (request.process != nullptr) {
-        request.process->deleteLater();
-    }
+    releaseRequest(requestId);
     emitCompleted(requestId, stablePayload);
 }
 
@@ -358,29 +408,62 @@ void OneShotCliTransport::completeFailure(
     BackendRequestId requestId,
     const BackendTransportError &error)
 {
+    ActiveRequest *request = activeRequest(requestId);
+    if (request == nullptr) {
+        return;
+    }
+
+    if (!request->terminalPublished) {
+        request->terminalPublished = true;
+        emitFailed(requestId, error);
+    }
+    beginCancellation(requestId);
+}
+
+void OneShotCliTransport::beginCancellation(BackendRequestId requestId)
+{
+    ActiveRequest *request = activeRequest(requestId);
+    if (request == nullptr || request->lifecycle == Lifecycle::Cancelling) {
+        return;
+    }
+
+    request->lifecycle = Lifecycle::Cancelling;
+    if (request->timer != nullptr) {
+        request->timer->stop();
+    }
+
+    if (request->process == nullptr
+        || request->process->state() == QProcess::NotRunning) {
+        releaseRequest(requestId);
+        return;
+    }
+
+    emit processTerminateRequested(requestId);
+    request->process->terminate();
+
+    if (request->terminationTimer == nullptr || m_options.terminationGraceMs <= 0) {
+        handleTerminationGraceExpired(requestId);
+        return;
+    }
+
+    request->terminationTimer->start(m_options.terminationGraceMs);
+}
+
+void OneShotCliTransport::releaseRequest(BackendRequestId requestId)
+{
     ActiveRequest request = m_activeRequests.take(requestId);
     if (request.timer != nullptr) {
         request.timer->stop();
         request.timer->deleteLater();
     }
+    if (request.terminationTimer != nullptr) {
+        request.terminationTimer->stop();
+        request.terminationTimer->deleteLater();
+    }
     if (request.process != nullptr) {
-        terminateProcess(request.process);
         request.process->deleteLater();
     }
-    emitFailed(requestId, error);
-}
-
-void OneShotCliTransport::terminateProcess(QProcess *process) const
-{
-    if (process == nullptr || process->state() == QProcess::NotRunning) {
-        return;
-    }
-
-    process->terminate();
-    if (!process->waitForFinished(250)) {
-        process->kill();
-        process->waitForFinished(250);
-    }
+    emit requestReleased(requestId);
 }
 
 OneShotCliTransport::ActiveRequest *OneShotCliTransport::activeRequest(
