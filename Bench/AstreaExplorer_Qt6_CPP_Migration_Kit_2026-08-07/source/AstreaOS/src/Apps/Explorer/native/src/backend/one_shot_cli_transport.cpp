@@ -97,7 +97,7 @@ BackendRequestId OneShotCliTransport::start(const QStringList &arguments)
         &QProcess::finished,
         this,
         [this, requestId](int exitCode, QProcess::ExitStatus exitStatus) {
-            handleFinished(requestId, exitCode, exitStatus);
+            handleFinished(requestId, exitCode, exitStatus == QProcess::NormalExit);
         });
     connect(
         active->timer,
@@ -154,12 +154,14 @@ void OneShotCliTransport::handleStdoutReady(BackendRequestId requestId)
         return;
     }
 
-    request->stdoutData.append(request->process->readAllStandardOutput());
-    enforceCap(
-        requestId,
-        request->stdoutData,
+    const QByteArray chunk = readChunk(
+        request->process,
+        request->stdoutData.size(),
         m_options.maxStdoutBytes,
-        "stdout");
+        false);
+    if (!appendBounded(request->stdoutData, chunk, m_options.maxStdoutBytes)) {
+        failOutputLimit(requestId, "stdout");
+    }
 }
 
 void OneShotCliTransport::handleStderrReady(BackendRequestId requestId)
@@ -169,18 +171,20 @@ void OneShotCliTransport::handleStderrReady(BackendRequestId requestId)
         return;
     }
 
-    request->stderrData.append(request->process->readAllStandardError());
-    enforceCap(
-        requestId,
-        request->stderrData,
+    const QByteArray chunk = readChunk(
+        request->process,
+        request->stderrData.size(),
         m_options.maxStderrBytes,
-        "stderr");
+        true);
+    if (!appendBounded(request->stderrData, chunk, m_options.maxStderrBytes)) {
+        failOutputLimit(requestId, "stderr");
+    }
 }
 
 void OneShotCliTransport::handleFinished(
     BackendRequestId requestId,
     int exitCode,
-    QProcess::ExitStatus exitStatus)
+    bool normalExit)
 {
     ActiveRequest *request = activeRequest(requestId);
     if (request == nullptr) {
@@ -188,33 +192,28 @@ void OneShotCliTransport::handleFinished(
     }
 
     if (request->process != nullptr) {
-        request->stdoutData.append(request->process->readAllStandardOutput());
-        request->stderrData.append(request->process->readAllStandardError());
+        const QByteArray stdoutChunk = readChunk(
+            request->process,
+            request->stdoutData.size(),
+            m_options.maxStdoutBytes,
+            false);
+        if (!appendBounded(request->stdoutData, stdoutChunk, m_options.maxStdoutBytes)) {
+            failOutputLimit(requestId, "stdout");
+            return;
+        }
+
+        const QByteArray stderrChunk = readChunk(
+            request->process,
+            request->stderrData.size(),
+            m_options.maxStderrBytes,
+            true);
+        if (!appendBounded(request->stderrData, stderrChunk, m_options.maxStderrBytes)) {
+            failOutputLimit(requestId, "stderr");
+            return;
+        }
     }
 
-    if (request->stdoutData.size() > m_options.maxStdoutBytes) {
-        BackendTransportError error;
-        error.code = QStringLiteral("output_limit_exceeded");
-        error.message = QStringLiteral("stdout exceeded configured limit");
-        error.requestId = requestId;
-        error.exitCode = exitCode;
-        error.stderrData = request->stderrData;
-        completeFailure(requestId, error);
-        return;
-    }
-
-    if (request->stderrData.size() > m_options.maxStderrBytes) {
-        BackendTransportError error;
-        error.code = QStringLiteral("output_limit_exceeded");
-        error.message = QStringLiteral("stderr exceeded configured limit");
-        error.requestId = requestId;
-        error.exitCode = exitCode;
-        error.stderrData = request->stderrData;
-        completeFailure(requestId, error);
-        return;
-    }
-
-    if (exitStatus != QProcess::NormalExit) {
+    if (!normalExit) {
         BackendTransportError error;
         error.code = QStringLiteral("process_crashed");
         error.message = QStringLiteral("backend process crashed");
@@ -274,23 +273,68 @@ void OneShotCliTransport::handleTimeout(BackendRequestId requestId)
     completeFailure(requestId, error);
 }
 
-void OneShotCliTransport::enforceCap(
-    BackendRequestId requestId,
-    QByteArray &buffer,
+QByteArray OneShotCliTransport::readChunk(
+    QProcess *process,
+    int currentSize,
     int limit,
+    bool standardError) const
+{
+    if (process == nullptr) {
+        return {};
+    }
+
+    if (limit <= 0) {
+        return standardError ? process->readAllStandardError()
+                             : process->readAllStandardOutput();
+    }
+
+    const qint64 remaining = qMax(0, limit - currentSize);
+    process->setReadChannel(standardError ? QProcess::StandardError
+                                          : QProcess::StandardOutput);
+    return process->read(remaining + 1);
+}
+
+bool OneShotCliTransport::appendBounded(
+    QByteArray &buffer,
+    const QByteArray &chunk,
+    int limit) const
+{
+    if (limit <= 0) {
+        buffer.append(chunk);
+        return true;
+    }
+
+    const qint64 remaining = qMax(0, limit - buffer.size());
+    if (chunk.size() > remaining) {
+        if (remaining > 0) {
+            buffer.append(chunk.constData(), remaining);
+        }
+        return false;
+    }
+
+    buffer.append(chunk);
+    return true;
+}
+
+void OneShotCliTransport::failOutputLimit(
+    BackendRequestId requestId,
     const char *streamName)
 {
-    if (limit <= 0 || buffer.size() <= limit) {
+    ActiveRequest *request = activeRequest(requestId);
+    if (request == nullptr) {
         return;
     }
 
     BackendTransportError error;
     error.code = QStringLiteral("output_limit_exceeded");
-    error.message = QStringLiteral("%1 exceeded configured limit (%2 > %3 bytes)")
-                        .arg(QString::fromLatin1(streamName))
-                        .arg(buffer.size())
-                        .arg(limit);
+    error.message = QStringLiteral("%1 exceeded configured limit")
+                        .arg(QString::fromLatin1(streamName));
     error.requestId = requestId;
+    if (m_options.maxStderrBytes > 0) {
+        error.stderrData = request->stderrData.left(m_options.maxStderrBytes);
+    } else {
+        error.stderrData = request->stderrData;
+    }
     completeFailure(requestId, error);
 }
 

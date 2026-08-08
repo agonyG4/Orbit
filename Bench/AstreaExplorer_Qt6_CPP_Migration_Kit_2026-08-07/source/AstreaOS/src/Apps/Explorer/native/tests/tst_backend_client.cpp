@@ -54,6 +54,26 @@ public:
     QVector<BackendRequestId> cancelledRequests;
 };
 
+class SynchronousTransport final : public BackendTransport
+{
+    Q_OBJECT
+
+public:
+    BackendRequestId start(const QStringList &) override
+    {
+        const BackendRequestId requestId = allocateRequestId();
+        emitCompleted(requestId, QByteArrayLiteral("[]"));
+        return requestId;
+    }
+
+    void cancel(BackendRequestId requestId) override
+    {
+        cancelledRequests.append(requestId);
+    }
+
+    QVector<BackendRequestId> cancelledRequests;
+};
+
 class BackendClientTest final : public QObject
 {
     Q_OBJECT
@@ -63,11 +83,13 @@ private slots:
     void decodesRoleCompatibleListPayload();
     void rejectsMalformedJsonPayload();
     void forwardsLegacyCliArgumentsForListAndSearch();
+    void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
     void forwardsTransportFailuresExactlyOnce();
     void fakeBackendClientEmitsTypedSignalsWithoutProcessDependencies();
     void oneShotTransportMapsNonZeroExitToFailure();
     void oneShotTransportCancelsExactlyOnce();
+    void oneShotTransportTimesOutExactlyOnce();
     void oneShotTransportCapsOutput();
 };
 
@@ -205,6 +227,28 @@ void BackendClientTest::forwardsLegacyCliArgumentsForListAndSearch()
              QStringLiteral("date"),
              QStringLiteral("0"),
              QStringLiteral("1")}));
+}
+
+void BackendClientTest::acceptsSynchronousTransportCompletion()
+{
+    SynchronousTransport transport;
+    RustBackendClient client(&transport);
+
+    QSignalSpy readySpy(&client, &IRustBackendClient::listReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    ListRequest request;
+    request.path = QStringLiteral("/tmp/example");
+    request.sortField = QStringLiteral("name");
+    request.sortAscending = true;
+    request.foldersFirst = true;
+    request.previews = true;
+
+    const BackendRequestId requestId = client.list(request);
+
+    QTRY_COMPARE(readySpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(readySpy.takeFirst().at(0).value<BackendRequestId>(), requestId);
 }
 
 void BackendClientTest::ignoresDuplicateTerminalEvents()
@@ -347,6 +391,36 @@ void BackendClientTest::oneShotTransportCancelsExactlyOnce()
         failedSpy.takeFirst().at(1).value<BackendTransportError>();
     QCOMPARE(error.requestId, requestId);
     QCOMPARE(error.code, QStringLiteral("cancelled"));
+}
+
+void BackendClientTest::oneShotTransportTimesOutExactlyOnce()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    QVERIFY2(!python.isEmpty(), "python3 must be available for transport tests");
+
+    OneShotCliTransportOptions options;
+    options.backendProgram = python;
+    options.timeoutMs = 50;
+    options.maxStdoutBytes = 4096;
+    options.maxStderrBytes = 4096;
+    OneShotCliTransport transport(options);
+
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+
+    const BackendRequestId requestId = transport.start(
+        {QStringLiteral("-c"),
+         QStringLiteral("import time; time.sleep(2)")});
+
+    QTRY_COMPARE(failedSpy.count(), 1);
+    QCOMPARE(completedSpy.count(), 0);
+
+    const QList<QVariant> signalArguments = failedSpy.takeFirst();
+    QCOMPARE(signalArguments.at(0).value<BackendRequestId>(), requestId);
+    const BackendTransportError error =
+        signalArguments.at(1).value<BackendTransportError>();
+    QCOMPARE(error.requestId, requestId);
+    QCOMPARE(error.code, QStringLiteral("timeout"));
 }
 
 void BackendClientTest::oneShotTransportCapsOutput()

@@ -4,6 +4,8 @@
 
 #include "backend/backend_transport.h"
 
+class QJsonObject;
+
 namespace Astrea::Explorer::Native::Backend {
 
 class IRustBackendClient : public QObject

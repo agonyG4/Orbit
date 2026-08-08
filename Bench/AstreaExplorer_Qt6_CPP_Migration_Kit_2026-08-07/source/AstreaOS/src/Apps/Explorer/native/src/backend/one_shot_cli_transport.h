@@ -1,11 +1,10 @@
 #pragma once
 
 #include <QHash>
-#include <QPointer>
-#include <QProcess>
 
 #include "backend/backend_transport.h"
 
+class QProcess;
 class QTimer;
 
 namespace Astrea::Explorer::Native::Backend {
@@ -37,8 +36,8 @@ private:
         QStringList arguments;
         QByteArray stdoutData;
         QByteArray stderrData;
-        QPointer<QProcess> process;
-        QPointer<QTimer> timer;
+        QProcess *process = nullptr;
+        QTimer *timer = nullptr;
     };
 
     QString resolveBackendProgram() const;
@@ -47,14 +46,15 @@ private:
     void handleFinished(
         BackendRequestId requestId,
         int exitCode,
-        QProcess::ExitStatus exitStatus);
+        bool normalExit);
     void handleErrorOccurred(BackendRequestId requestId, const QString &message);
     void handleTimeout(BackendRequestId requestId);
-    void enforceCap(
-        BackendRequestId requestId,
-        QByteArray &buffer,
-        int limit,
-        const char *streamName);
+    QByteArray readChunk(QProcess *process,
+                         int currentSize,
+                         int limit,
+                         bool standardError) const;
+    bool appendBounded(QByteArray &buffer, const QByteArray &chunk, int limit) const;
+    void failOutputLimit(BackendRequestId requestId, const char *streamName);
     void completeSuccess(BackendRequestId requestId, const QByteArray &payload);
     void completeFailure(BackendRequestId requestId, const BackendTransportError &error);
     void terminateProcess(QProcess *process) const;

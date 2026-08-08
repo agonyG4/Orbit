@@ -61,7 +61,8 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
             } else {
                 emit searchReady(requestId, entries);
             }
-        });
+        },
+        Qt::QueuedConnection);
     connect(
         m_transport,
         &BackendTransport::failed,
@@ -78,7 +79,8 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
             error.message = transportError.message;
             error.requestId = requestId;
             emit failed(error);
-        });
+        },
+        Qt::QueuedConnection);
 }
 
 BackendRequestId RustBackendClient::list(const ListRequest &request)
