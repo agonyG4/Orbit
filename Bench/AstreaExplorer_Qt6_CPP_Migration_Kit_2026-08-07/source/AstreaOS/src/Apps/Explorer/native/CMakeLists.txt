@@ -97,6 +97,10 @@ add_library(astrea_explorer_native_navigation STATIC
     src/services/directory_watch_service.cpp
     src/controllers/navigation_controller.h
     src/controllers/navigation_controller.cpp
+    src/controllers/selection_controller.h
+    src/controllers/selection_controller.cpp
+    src/controllers/app_state_facade.h
+    src/controllers/app_state_facade.cpp
 )
 
 target_include_directories(astrea_explorer_native_navigation PUBLIC
@@ -106,6 +110,10 @@ target_include_directories(astrea_explorer_native_navigation PUBLIC
 target_link_libraries(astrea_explorer_native_navigation PUBLIC
     Qt6::Core
     astrea_explorer_native_backend
+)
+
+target_link_libraries(astrea-explorer PRIVATE
+    astrea_explorer_native_navigation
 )
 
 qt_add_executable(tst_navigation_controller
@@ -123,5 +131,22 @@ target_link_libraries(tst_navigation_controller PRIVATE
 )
 
 add_test(NAME navigation_controller COMMAND tst_navigation_controller)
+
+qt_add_executable(tst_selection_controller
+    tests/tst_selection_controller.cpp
+)
+
+target_include_directories(tst_selection_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_selection_controller PRIVATE
+    Qt6::Core
+    Qt6::Qml
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME selection_controller COMMAND tst_selection_controller)
 
 add_subdirectory(tests)

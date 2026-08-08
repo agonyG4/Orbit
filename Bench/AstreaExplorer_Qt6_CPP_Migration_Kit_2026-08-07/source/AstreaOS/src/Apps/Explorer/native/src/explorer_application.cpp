@@ -2,9 +2,20 @@
 
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QQmlEngine>
 #include <QQmlApplicationEngine>
 #include <QString>
 #include <QVariant>
+
+#include <QtQml/qqml.h>
+
+#include "backend/one_shot_cli_transport.h"
+#include "backend/rust_backend_client.h"
+#include "controllers/app_state_facade.h"
+#include "controllers/navigation_controller.h"
+#include "controllers/selection_controller.h"
+#include "models/directory_model.h"
+#include "services/directory_watch_service.h"
 
 namespace {
 constexpr auto kApplicationName = "Explorer";
@@ -21,6 +32,29 @@ int ExplorerApplication::run(int argc, char **argv)
     QCoreApplication::setApplicationName(QString::fromLatin1(kApplicationName));
     QCoreApplication::setOrganizationName(QString::fromLatin1(kOrganizationName));
     QCoreApplication::setOrganizationDomain(QString::fromLatin1(kOrganizationDomain));
+
+    using namespace Astrea::Explorer::Native::Backend;
+    OneShotCliTransport transport({}, &application);
+    RustBackendClient backendClient(&transport, &application);
+    DirectoryModel directoryModel(&application);
+    DirectoryWatchService directoryWatcher(&application);
+    NavigationController navigation(
+        &backendClient,
+        &directoryModel,
+        &directoryWatcher,
+        &application);
+    SelectionController selection(&directoryModel, &application);
+    AppStateFacade appState(
+        &navigation,
+        &selection,
+        &directoryModel,
+        &application);
+    qmlRegisterSingletonInstance<AppStateFacade>(
+        kBootstrapModuleUri,
+        1,
+        0,
+        "AppState",
+        &appState);
 
     QQmlApplicationEngine engine;
 
