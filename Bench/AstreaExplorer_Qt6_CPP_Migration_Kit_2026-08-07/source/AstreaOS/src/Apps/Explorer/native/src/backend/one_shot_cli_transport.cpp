@@ -289,9 +289,9 @@ QByteArray OneShotCliTransport::readChunk(
     }
 
     const qint64 remaining = qMax(0, limit - currentSize);
-    process->setReadChannel(standardError ? QProcess::StandardError
-                                          : QProcess::StandardOutput);
-    return process->read(remaining + 1);
+    const QByteArray available = standardError ? process->readAllStandardError()
+                                               : process->readAllStandardOutput();
+    return available.left(remaining + 1);
 }
 
 bool OneShotCliTransport::appendBounded(
@@ -342,6 +342,7 @@ void OneShotCliTransport::completeSuccess(
     BackendRequestId requestId,
     const QByteArray &payload)
 {
+    const QByteArray stablePayload = payload;
     ActiveRequest request = m_activeRequests.take(requestId);
     if (request.timer != nullptr) {
         request.timer->stop();
@@ -350,7 +351,7 @@ void OneShotCliTransport::completeSuccess(
     if (request.process != nullptr) {
         request.process->deleteLater();
     }
-    emitCompleted(requestId, payload);
+    emitCompleted(requestId, stablePayload);
 }
 
 void OneShotCliTransport::completeFailure(
