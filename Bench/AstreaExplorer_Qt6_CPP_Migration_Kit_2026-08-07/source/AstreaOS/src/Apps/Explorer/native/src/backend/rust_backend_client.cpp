@@ -48,6 +48,31 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
             const RequestKind kind = pending->kind;
             m_pendingRequests.erase(pending);
 
+            if (kind == RequestKind::Devices) {
+                BackendError error;
+                const QVector<DeviceEntry> devices = decodeDevices(requestId, payload, &error);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    emit devicesReady(requestId, devices);
+                }
+                return;
+            }
+
+            if (kind == RequestKind::DeviceOperation) {
+                BackendError error;
+                const DeviceOperationResult result = decodeDeviceOperation(
+                    requestId,
+                    payload,
+                    &error);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    emit deviceOperationReady(requestId, result);
+                }
+                return;
+            }
+
             BackendError error;
             const QVector<DirectoryEntry> entries =
                 decodeEntries(requestId, payload, &error);
@@ -94,6 +119,37 @@ BackendRequestId RustBackendClient::search(const SearchRequest &request)
 {
     const BackendRequestId requestId = m_transport->start(searchArguments(request));
     m_pendingRequests.insert(requestId, PendingRequest {RequestKind::Search});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::devices()
+{
+    const BackendRequestId requestId = m_transport->start({QStringLiteral("devices")});
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::Devices});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::mount(const QString &devicePath)
+{
+    const BackendRequestId requestId = m_transport->start(
+        {QStringLiteral("mount"), devicePath});
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::DeviceOperation});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::unmount(const QString &devicePath)
+{
+    const BackendRequestId requestId = m_transport->start(
+        {QStringLiteral("unmount"), devicePath});
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::DeviceOperation});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::remount(const QString &devicePath)
+{
+    const BackendRequestId requestId = m_transport->start(
+        {QStringLiteral("remount"), devicePath});
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::DeviceOperation});
     return requestId;
 }
 
@@ -184,6 +240,120 @@ QVector<DirectoryEntry> RustBackendClient::decodeEntries(
     }
 
     return entries;
+}
+
+QVector<DeviceEntry> RustBackendClient::decodeDevices(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error) const
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                parseError.error == QJsonParseError::NoError
+                    ? QStringLiteral("top-level JSON must be an array")
+                    : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+        }
+        return {};
+    }
+
+    QVector<DeviceEntry> devices;
+    devices.reserve(document.array().size());
+    for (const QJsonValue &value : document.array()) {
+        if (!value.isObject()) {
+            if (error != nullptr) {
+                *error = makeDecodeError(requestId, QStringLiteral("array entries must be objects"));
+            }
+            return {};
+        }
+
+        const QJsonObject object = value.toObject();
+        auto requireString = [&](const QString &key, QString *target) -> bool {
+            const QJsonValue field = object.value(key);
+            if (!field.isString()) {
+                if (error != nullptr) {
+                    *error = makeDecodeError(
+                        requestId,
+                        jsonValueError(key, QStringLiteral("a string")));
+                }
+                return false;
+            }
+            *target = field.toString();
+            return true;
+        };
+        auto requireBool = [&](const QString &key, bool *target) -> bool {
+            const QJsonValue field = object.value(key);
+            if (!field.isBool()) {
+                if (error != nullptr) {
+                    *error = makeDecodeError(
+                        requestId,
+                        jsonValueError(key, QStringLiteral("a boolean")));
+                }
+                return false;
+            }
+            *target = field.toBool();
+            return true;
+        };
+
+        DeviceEntry device;
+        if (!requireString(QStringLiteral("id"), &device.id)
+            || !requireString(QStringLiteral("devicePath"), &device.devicePath)
+            || !requireString(QStringLiteral("title"), &device.title)
+            || !requireString(QStringLiteral("subtitle"), &device.subtitle)
+            || !requireString(QStringLiteral("mountPath"), &device.mountPath)
+            || !requireString(QStringLiteral("desiredMountPath"), &device.desiredMountPath)
+            || !requireBool(QStringLiteral("mounted"), &device.mounted)
+            || !requireBool(QStringLiteral("canMount"), &device.canMount)
+            || !requireBool(QStringLiteral("canUnmount"), &device.canUnmount)
+            || !requireBool(QStringLiteral("canRemount"), &device.canRemount)
+            || !requireBool(QStringLiteral("removable"), &device.removable)
+            || !requireString(QStringLiteral("icon"), &device.icon)) {
+            return {};
+        }
+        devices.append(device);
+    }
+    return devices;
+}
+
+DeviceOperationResult RustBackendClient::decodeDeviceOperation(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error) const
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                parseError.error == QJsonParseError::NoError
+                    ? QStringLiteral("top-level JSON must be an object")
+                    : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+        }
+        return {};
+    }
+
+    const QJsonObject object = document.object();
+    const QJsonValue okValue = object.value(QStringLiteral("ok"));
+    const QJsonValue mountPathValue = object.value(QStringLiteral("mountPath"));
+    const QJsonValue messageValue = object.value(QStringLiteral("message"));
+    if (!okValue.isBool() || !mountPathValue.isString() || !messageValue.isString()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("device operation fields have incompatible types"));
+        }
+        return {};
+    }
+
+    DeviceOperationResult result;
+    result.ok = okValue.toBool();
+    result.mountPath = mountPathValue.toString();
+    result.message = messageValue.toString();
+    return result;
 }
 
 DirectoryEntry RustBackendClient::decodeEntry(

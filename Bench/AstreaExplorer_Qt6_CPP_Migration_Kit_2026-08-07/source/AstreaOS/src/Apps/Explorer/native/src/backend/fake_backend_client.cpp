@@ -19,6 +19,30 @@ BackendRequestId FakeRustBackendClient::search(const SearchRequest &request)
     return nextRequestId();
 }
 
+BackendRequestId FakeRustBackendClient::devices()
+{
+    m_deviceRequests.append({QStringLiteral("devices")});
+    return nextRequestId();
+}
+
+BackendRequestId FakeRustBackendClient::mount(const QString &devicePath)
+{
+    m_deviceRequests.append({QStringLiteral("mount"), devicePath});
+    return nextRequestId();
+}
+
+BackendRequestId FakeRustBackendClient::unmount(const QString &devicePath)
+{
+    m_deviceRequests.append({QStringLiteral("unmount"), devicePath});
+    return nextRequestId();
+}
+
+BackendRequestId FakeRustBackendClient::remount(const QString &devicePath)
+{
+    m_deviceRequests.append({QStringLiteral("remount"), devicePath});
+    return nextRequestId();
+}
+
 void FakeRustBackendClient::cancel(BackendRequestId requestId)
 {
     m_cancelledRequests.append(requestId);
@@ -36,6 +60,20 @@ void FakeRustBackendClient::completeSearch(
     const QVector<DirectoryEntry> &entries)
 {
     emit searchReady(requestId, entries);
+}
+
+void FakeRustBackendClient::completeDevices(
+    BackendRequestId requestId,
+    const QVector<DeviceEntry> &devices)
+{
+    emit devicesReady(requestId, devices);
+}
+
+void FakeRustBackendClient::completeDeviceOperation(
+    BackendRequestId requestId,
+    const DeviceOperationResult &result)
+{
+    emit deviceOperationReady(requestId, result);
 }
 
 void FakeRustBackendClient::failRequest(
@@ -58,6 +96,11 @@ const QVector<ListRequest> &FakeRustBackendClient::listRequests() const
 const QVector<SearchRequest> &FakeRustBackendClient::searchRequests() const
 {
     return m_searchRequests;
+}
+
+const QVector<QStringList> &FakeRustBackendClient::deviceRequests() const
+{
+    return m_deviceRequests;
 }
 
 const QVector<BackendRequestId> &FakeRustBackendClient::cancelledRequests() const

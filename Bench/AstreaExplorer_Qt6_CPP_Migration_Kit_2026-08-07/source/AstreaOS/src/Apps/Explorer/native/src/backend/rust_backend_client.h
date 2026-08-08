@@ -18,6 +18,10 @@ public:
 
     virtual BackendRequestId list(const ListRequest &request) = 0;
     virtual BackendRequestId search(const SearchRequest &request) = 0;
+    virtual BackendRequestId devices() = 0;
+    virtual BackendRequestId mount(const QString &devicePath) = 0;
+    virtual BackendRequestId unmount(const QString &devicePath) = 0;
+    virtual BackendRequestId remount(const QString &devicePath) = 0;
 
 public slots:
     virtual void cancel(BackendRequestId requestId) = 0;
@@ -29,6 +33,12 @@ signals:
     void searchReady(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const QVector<Astrea::Explorer::Native::Backend::DirectoryEntry> &entries);
+    void devicesReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const QVector<Astrea::Explorer::Native::Backend::DeviceEntry> &devices);
+    void deviceOperationReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::DeviceOperationResult &result);
     void failed(const Astrea::Explorer::Native::Backend::BackendError &error);
 };
 
@@ -41,6 +51,10 @@ public:
 
     BackendRequestId list(const ListRequest &request) override;
     BackendRequestId search(const SearchRequest &request) override;
+    BackendRequestId devices() override;
+    BackendRequestId mount(const QString &devicePath) override;
+    BackendRequestId unmount(const QString &devicePath) override;
+    BackendRequestId remount(const QString &devicePath) override;
 
 public slots:
     void cancel(BackendRequestId requestId) override;
@@ -50,6 +64,8 @@ private:
     {
         List,
         Search,
+        Devices,
+        DeviceOperation,
     };
 
     struct PendingRequest
@@ -60,6 +76,14 @@ private:
     QStringList listArguments(const ListRequest &request) const;
     QStringList searchArguments(const SearchRequest &request) const;
     QVector<DirectoryEntry> decodeEntries(
+        BackendRequestId requestId,
+        const QByteArray &payload,
+        BackendError *error) const;
+    QVector<DeviceEntry> decodeDevices(
+        BackendRequestId requestId,
+        const QByteArray &payload,
+        BackendError *error) const;
+    DeviceOperationResult decodeDeviceOperation(
         BackendRequestId requestId,
         const QByteArray &payload,
         BackendError *error) const;

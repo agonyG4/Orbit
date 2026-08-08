@@ -30,6 +30,29 @@ struct SearchRequest
     bool foldersFirst = true;
 };
 
+struct DeviceEntry
+{
+    QString id;
+    QString devicePath;
+    QString title;
+    QString subtitle;
+    QString mountPath;
+    QString desiredMountPath;
+    bool mounted = false;
+    bool canMount = false;
+    bool canUnmount = false;
+    bool canRemount = false;
+    bool removable = false;
+    QString icon;
+};
+
+struct DeviceOperationResult
+{
+    bool ok = false;
+    QString mountPath;
+    QString message;
+};
+
 struct DirectoryEntry
 {
     QString fileName;
@@ -71,3 +94,6 @@ Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::BackendError)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::BackendTransportError)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DirectoryEntry)
 Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::DirectoryEntry>)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceEntry)
+Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::DeviceEntry>)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceOperationResult)

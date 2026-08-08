@@ -83,6 +83,7 @@ private slots:
     void decodesRoleCompatibleListPayload();
     void rejectsMalformedJsonPayload();
     void forwardsLegacyCliArgumentsForListAndSearch();
+    void decodesDevicesAndForwardsDeviceOperations();
     void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
     void forwardsTransportFailuresExactlyOnce();
@@ -227,6 +228,46 @@ void BackendClientTest::forwardsLegacyCliArgumentsForListAndSearch()
              QStringLiteral("date"),
              QStringLiteral("0"),
              QStringLiteral("1")}));
+}
+
+void BackendClientTest::decodesDevicesAndForwardsDeviceOperations()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+
+    QSignalSpy devicesSpy(&client, &IRustBackendClient::devicesReady);
+    QSignalSpy operationSpy(&client, &IRustBackendClient::deviceOperationReady);
+
+    const BackendRequestId devicesId = client.devices();
+    QCOMPARE(transport.startedRequests.constLast().arguments, QStringList({QStringLiteral("devices")}));
+    transport.succeed(
+        devicesId,
+        QByteArrayLiteral(
+            "[{\"id\":\"path:/dev/sdb1\",\"devicePath\":\"/dev/sdb1\","
+            "\"title\":\"USB\",\"subtitle\":\"32 GB · FAT32\","
+            "\"mountPath\":\"/run/media/user/USB\",\"desiredMountPath\":\"\","
+            "\"mounted\":true,\"canMount\":false,\"canUnmount\":true,"
+            "\"canRemount\":false,\"removable\":true,\"icon\":\"drive-removable-media\"}]"));
+
+    QTRY_COMPARE(devicesSpy.count(), 1);
+    const QVector<DeviceEntry> devices = devicesSpy.takeFirst().at(1).value<QVector<DeviceEntry>>();
+    QCOMPARE(devices.size(), 1);
+    QCOMPARE(devices.constFirst().id, QStringLiteral("path:/dev/sdb1"));
+    QCOMPARE(devices.constFirst().mounted, true);
+    QCOMPARE(devices.constFirst().mountPath, QStringLiteral("/run/media/user/USB"));
+
+    const BackendRequestId mountId = client.mount(QStringLiteral("/dev/sdb1"));
+    QCOMPARE(transport.startedRequests.constLast().arguments,
+             QStringList({QStringLiteral("mount"), QStringLiteral("/dev/sdb1")}));
+    transport.succeed(
+        mountId,
+        QByteArrayLiteral("{\"ok\":true,\"mountPath\":\"/run/media/user/USB\",\"message\":\"mounted\"}"));
+    QTRY_COMPARE(operationSpy.count(), 1);
+    const DeviceOperationResult result = operationSpy.takeFirst().at(1)
+                                             .value<DeviceOperationResult>();
+    QCOMPARE(result.ok, true);
+    QCOMPARE(result.mountPath, QStringLiteral("/run/media/user/USB"));
+    QCOMPARE(result.message, QStringLiteral("mounted"));
 }
 
 void BackendClientTest::acceptsSynchronousTransportCompletion()

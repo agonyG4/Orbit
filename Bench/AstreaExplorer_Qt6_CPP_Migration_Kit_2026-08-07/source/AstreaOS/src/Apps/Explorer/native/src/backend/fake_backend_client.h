@@ -15,6 +15,10 @@ public:
 
     BackendRequestId list(const ListRequest &request) override;
     BackendRequestId search(const SearchRequest &request) override;
+    BackendRequestId devices() override;
+    BackendRequestId mount(const QString &devicePath) override;
+    BackendRequestId unmount(const QString &devicePath) override;
+    BackendRequestId remount(const QString &devicePath) override;
 
 public slots:
     void cancel(BackendRequestId requestId) override;
@@ -22,10 +26,15 @@ public slots:
 public:
     void completeList(BackendRequestId requestId, const QVector<DirectoryEntry> &entries);
     void completeSearch(BackendRequestId requestId, const QVector<DirectoryEntry> &entries);
+    void completeDevices(BackendRequestId requestId, const QVector<DeviceEntry> &devices);
+    void completeDeviceOperation(
+        BackendRequestId requestId,
+        const DeviceOperationResult &result);
     void failRequest(BackendRequestId requestId, const QString &code, const QString &message);
 
     const QVector<ListRequest> &listRequests() const;
     const QVector<SearchRequest> &searchRequests() const;
+    const QVector<QStringList> &deviceRequests() const;
     const QVector<BackendRequestId> &cancelledRequests() const;
 
 private:
@@ -34,6 +43,7 @@ private:
     BackendRequestId m_nextRequestId = 1;
     QVector<ListRequest> m_listRequests;
     QVector<SearchRequest> m_searchRequests;
+    QVector<QStringList> m_deviceRequests;
     QVector<BackendRequestId> m_cancelledRequests;
 };
 
