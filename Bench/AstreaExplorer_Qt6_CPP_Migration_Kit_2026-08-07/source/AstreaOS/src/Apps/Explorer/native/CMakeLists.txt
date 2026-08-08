@@ -22,6 +22,8 @@ add_library(astrea_explorer_native_backend STATIC
     src/backend/rust_backend_client.cpp
     src/backend/fake_backend_client.h
     src/backend/fake_backend_client.cpp
+    src/models/directory_model.h
+    src/models/directory_model.cpp
 )
 
 target_include_directories(astrea_explorer_native_backend PUBLIC
@@ -73,5 +75,21 @@ target_link_libraries(tst_backend_client PRIVATE
 )
 
 add_test(NAME backend_client COMMAND tst_backend_client)
+
+qt_add_executable(tst_directory_model
+    tests/tst_directory_model.cpp
+)
+
+target_include_directories(tst_directory_model PRIVATE
+    src
+)
+
+target_link_libraries(tst_directory_model PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_backend
+)
+
+add_test(NAME directory_model COMMAND tst_directory_model)
 
 add_subdirectory(tests)

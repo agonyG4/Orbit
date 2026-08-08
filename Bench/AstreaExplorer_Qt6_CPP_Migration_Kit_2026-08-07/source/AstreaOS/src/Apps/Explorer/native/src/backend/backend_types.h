@@ -45,6 +45,8 @@ struct DirectoryEntry
     bool fileRemote = false;
     bool fileMetadataLimited = false;
     QString fileFilesystem;
+    qint64 lastAccessed = 0;
+    QString recentSource;
 };
 
 struct BackendError
