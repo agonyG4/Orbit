@@ -338,6 +338,32 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QVERIFY(publicModel != nullptr);
     QTRY_COMPARE(publicModel->property("count").toInt(), 1);
 
+    QVariantMap recentItem;
+    recentItem.insert(QStringLiteral("fileName"), QStringLiteral("Recent application"));
+    recentItem.insert(
+        QStringLiteral("filePath"),
+        QStringLiteral("/public-fixture/org.example.Recent.desktop"));
+    recentItem.insert(QStringLiteral("fileKind"), QStringLiteral("Aplicativo"));
+    recentItem.insert(QStringLiteral("fileIconName"), QStringLiteral("recent-application"));
+    recentItem.insert(QStringLiteral("lastAccessed"), 9876);
+    recentItem.insert(QStringLiteral("fileModified"), 9876);
+    recentItem.insert(QStringLiteral("recentSource"), QStringLiteral("launch"));
+    QVERIFY(facade.replaceFileModel(QVariantList {recentItem}));
+    QTRY_COMPARE(publicModel->property("count").toInt(), 1);
+    QVariantMap visibleRecent;
+    QVERIFY(QMetaObject::invokeMethod(
+        publicModel,
+        "get",
+        Q_RETURN_ARG(QVariantMap, visibleRecent),
+        Q_ARG(int, 0)));
+    QCOMPARE(
+        visibleRecent.value(QStringLiteral("fileName")).toString(),
+        QStringLiteral("Recent application"));
+    QCOMPARE(
+        visibleRecent.value(QStringLiteral("fileIconName")).toString(),
+        QStringLiteral("recent-application"));
+    QCOMPARE(visibleRecent.value(QStringLiteral("lastAccessed")).toLongLong(), 9876);
+
     QVariantMap existing;
     existing.insert(QStringLiteral("fileName"), QStringLiteral("public.txt"));
     existing.insert(QStringLiteral("filePath"), QStringLiteral("/public-fixture/public.txt"));

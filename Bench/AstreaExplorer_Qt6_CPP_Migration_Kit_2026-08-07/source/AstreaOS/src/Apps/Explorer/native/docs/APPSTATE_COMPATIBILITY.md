@@ -48,6 +48,12 @@ reconciliation, listing/preview/view/zoom settings, sidebar favorite state,
 dialog filter state, resolver-rooted runtime paths, and copy/cut clipboard
 state including system clipboard publication through `ClipboardService`.
 
+The Recent qualification covers the projection boundary only: desktop and file
+entries are normalized by `RecentController`, exposed through the existing
+`DirectoryModel` roles, and ordered by access timestamp. Recent persistence
+and recording remain transitional QML behavior guarded by explicit save/load
+generations until a native persistence owner is introduced in a later phase.
+
 Legacy/transitional domains are paste conflict behavior, archive and file
 operation flows, trash/delete/restore, previews and thumbnail warming, recent
 item persistence/recording, devices and network dialogs, portal fallback,
@@ -58,6 +64,24 @@ as a group whenever native navigation is authoritative.
 The legacy navigation module remains in the source tree for fallback/reference
 purposes, but its initialization and directory/search/watch `Process` objects
 are guarded whenever the native bridge is active.
+
+## Future candidates
+
+These are candidates for later, separately qualified migrations; none are part
+of this phase:
+
+- native Recent persistence/recording and durable snapshot coordination;
+- paste/conflict and the remaining file-operation, archive, AppImage, and
+  trash workflows;
+- preview rendering, thumbnail warming, and device/network services;
+- portal fallback and open-with/launch menus;
+- helper-backed actions, toolbar suggestions, and scroll-state persistence.
+
+The qualification does not add a second state architecture or migrate any new
+QML `Process` domain. It verifies the current compatibility boundary with
+controlled process completions, including late save completions and stale load
+snapshots, so those future candidates can be migrated against a documented
+contract.
 
 `DirectoryModel` keeps the legacy role names (`fileName`, `filePath`,
 `fileUrl`, `fileIsDir`, `fileExecutable`, `fileHidden`, `fileSize`,

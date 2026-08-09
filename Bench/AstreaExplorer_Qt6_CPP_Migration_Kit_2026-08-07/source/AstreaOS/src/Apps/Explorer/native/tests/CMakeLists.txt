@@ -53,6 +53,22 @@ target_compile_definitions(tst_app_state_compatibility PRIVATE
 
 add_test(NAME app_state_compatibility COMMAND tst_app_state_compatibility)
 
+qt_add_executable(tst_recent_persistence
+    tst_recent_persistence.cpp
+)
+
+target_link_libraries(tst_recent_persistence PRIVATE
+    Qt6::Core
+    Qt6::Qml
+    Qt6::Test
+)
+
+target_compile_definitions(tst_recent_persistence PRIVATE
+    ASTREA_EXPLORER_RUNTIME_ROOT="${ASTREA_EXPLORER_RUNTIME_ROOT}"
+)
+
+add_test(NAME recent_persistence COMMAND tst_recent_persistence)
+
 qt_add_executable(tst_qml_warning_lifetime
     tst_qml_warning_lifetime.cpp
 )
