@@ -180,6 +180,15 @@ bool NavigationController::previews() const
     return m_previews;
 }
 
+void NavigationController::setSearchQuery(const QString &query)
+{
+    if (m_searchQuery == query) {
+        return;
+    }
+    m_searchQuery = query;
+    emit searchStateChanged();
+}
+
 void NavigationController::setShowHidden(bool showHiddenValue)
 {
     if (m_showHidden == showHiddenValue) {

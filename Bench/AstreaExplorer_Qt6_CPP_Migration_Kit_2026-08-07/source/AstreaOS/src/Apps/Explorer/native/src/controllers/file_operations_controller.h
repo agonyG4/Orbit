@@ -6,6 +6,7 @@
 
 namespace Astrea::Explorer::Native::Services {
 class FileOperationService;
+class ClipboardService;
 }
 
 namespace Astrea::Explorer::Native::Backend {
@@ -32,6 +33,7 @@ class FileOperationsController final : public QObject
 public:
     explicit FileOperationsController(
         Services::FileOperationService *service,
+        Services::ClipboardService *clipboardService = nullptr,
         QObject *parent = nullptr);
 
     QStringList clipboardFiles() const;
@@ -89,6 +91,7 @@ private:
         const QString &conflictPolicy) const;
 
     Services::FileOperationService *m_service = nullptr;
+    Services::ClipboardService *m_clipboardService = nullptr;
     QStringList m_selection;
     QStringList m_clipboardFiles;
     QString m_clipboardMode {QStringLiteral("copy")};

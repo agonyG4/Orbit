@@ -3,15 +3,18 @@
 #include <algorithm>
 #include <QFileInfo>
 
+#include "services/clipboard_service.h"
 #include "services/file_operation_service.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
 FileOperationsController::FileOperationsController(
     Services::FileOperationService *service,
+    Services::ClipboardService *clipboardService,
     QObject *parent)
     : QObject(parent)
     , m_service(service)
+    , m_clipboardService(clipboardService)
 {
     Q_ASSERT(m_service != nullptr);
     connect(
@@ -120,6 +123,9 @@ void FileOperationsController::copySelection()
 {
     m_clipboardFiles = m_selection;
     m_clipboardMode = QStringLiteral("copy");
+    if (m_clipboardService != nullptr) {
+        m_clipboardService->publishFilePaths(m_clipboardFiles);
+    }
     emit clipboardChanged();
 }
 
@@ -127,6 +133,9 @@ void FileOperationsController::cutSelection()
 {
     m_clipboardFiles = m_selection;
     m_clipboardMode = QStringLiteral("cut");
+    if (m_clipboardService != nullptr) {
+        m_clipboardService->publishFilePaths(m_clipboardFiles);
+    }
     emit clipboardChanged();
 }
 

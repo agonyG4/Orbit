@@ -43,6 +43,7 @@ AppStateFacade::AppStateFacade(
     m_navigation->setSortField(m_settings.sortField);
     m_navigation->setSortAscending(m_settings.sortAscending);
     m_navigation->setFoldersFirst(m_settings.foldersFirst);
+    m_navigation->setPreviews(m_settings.showPreview);
 
     connect(
         m_navigation,
@@ -609,6 +610,7 @@ void AppStateFacade::setShowPreview(bool showPreviewValue)
     }
     m_settings.showPreview = showPreviewValue;
     persistSettings();
+    m_navigation->setPreviews(showPreviewValue);
     emit showPreviewChanged();
 }
 
@@ -771,10 +773,7 @@ void AppStateFacade::setDialogFilePatterns(const QStringList &patterns)
 
 void AppStateFacade::setSearchQuery(const QString &query)
 {
-    if (query == m_navigation->searchQuery()) {
-        return;
-    }
-    m_navigation->submitSearch(m_navigation->currentPath(), query);
+    m_navigation->setSearchQuery(query);
 }
 
 void AppStateFacade::setSelectedFile(const QString &name)

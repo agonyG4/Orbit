@@ -5,24 +5,25 @@ state and fallback paths in place until a native replacement has behavior
 parity. The native executable now owns the core navigation, directory model,
 selection, settings, backend transport, and directory watcher graph; the
 remaining entries below are not silently removed or reimplemented as a second
-state machine.
+state machine. Copy/cut state and system clipboard publication are also native;
+paste and the remaining file-operation flows stay transitional.
 
 ## Migration categories
 
 | Candidate | Current responsibility | Native replacement / owner | Phase 3 status |
 | --- | --- | --- | --- |
-| `state/NavigationState.qml` (`Process` at lines 561, 599, 655) | directory listing, search, and helper-based directory watching | `NavigationController`, `DirectoryModel`, `DirectoryWatchService`, `RustBackendClient` | Native core wired; legacy QML retained for fallback |
-| `state/SelectionState.qml` | selected names, range selection, and model refresh reconciliation | `SelectionController` | Native core wired; QML state retained |
-| `state/FileOperationsState.qml` (`Process` at lines 742, 795, 865, 926, 965, 1009, 1024, 1037, 1049, 1064, 1078) | copy/move, archive, clipboard probing, delete/restore/trash, AppImage, wallpaper | `FileOperationsController`, `FileOperationService`, `ClipboardService`; archive/trash/AppImage/wallpaper parity still requires service coverage | Transitional; do not remove |
-| `state/DeviceNetworkState.qml` (`Process` at lines 194, 207, 227, 251) | network probing/mount and device operations | `DeviceController` for typed backend device operations; network portal behavior remains QML/desktop integration | Transitional; native controller exists but is not yet the sole QML owner |
-| `state/PreviewState.qml` (`Process` at lines 767, 837, 870, 879, 888, 916) | thumbnail warming, shell/executable/Windows launching, preview refresh | `PreviewController`, `LaunchService`, `OpenWithController` | Transitional; preview/launch parity gate remains open |
-| `state/RecentState.qml` (`Process` at lines 145, 182) | recent item load/save through the helper | `RecentController` plus a future native persistence service | Transitional; legacy helper retained |
-| `PortalDialog.qml` (`Process` at line 77) | portal dialog fallback and result delivery | `PortalController` | Transitional; legacy portal entry remains available |
-| `components/common/FileContextMenu.qml` (`Process` at lines 386, 623, 783, 792) | archive capability probe, file properties, create-folder, rename | file-operation/filesystem service coverage to be added incrementally | Transitional; behavior retained |
-| `components/common/OpenWithMenu.qml` (`Process` at lines 350, 390, 396) | application discovery, default association, launch | `OpenWithController`, `LaunchService` | Transitional; native controller is available but QML still owns the menu flow |
-| `components/layout/Sidebar.qml` (`Process` at lines 441, 658) | desktop shortcut and filesystem property actions | filesystem/shortcut service | Transitional; helper path is resolver-rooted |
-| `components/layout/Toolbar.qml` (`Process` at line 954) | search suggestions | navigation/search suggestion service | Transitional; no native parity owner yet |
-| `AppState.qml` | aggregate aliases, settings persistence, sidebar favorites, startup sequencing | `AppStateFacade`, `SettingsService`, focused controllers | Core properties are projected; legacy-only aliases and startup timers remain documented |
+| `state/NavigationState.qml` (`Process` at lines 561, 599, 655) | legacy directory listing, search, and helper-based directory watching | `NavigationController`, `DirectoryModel`, `DirectoryWatchService`, `RustBackendClient` | `NATIVE_AUTHORITATIVE`; retained as guarded transitional reference |
+| `state/SelectionState.qml` | legacy selected names, range selection, and model refresh reconciliation | `SelectionController` | `NATIVE_AUTHORITATIVE`; QML state retained as transitional reference |
+| `state/FileOperationsState.qml` (`Process` at lines 742, 795, 865, 926, 965, 1009, 1024, 1037, 1049, 1064, 1078) | paste/conflicts, archive, clipboard probing, delete/restore/trash, AppImage, wallpaper | `FileOperationsController`, `FileOperationService`, `ClipboardService` | Copy/cut and system clipboard are `NATIVE_AUTHORITATIVE`; paste and remaining flows are `LEGACY_TRANSITIONAL` |
+| `state/DeviceNetworkState.qml` (`Process` at lines 194, 207, 227, 251) | network probing/mount and device operations | `DeviceController` for typed backend device operations; network portal behavior remains QML/desktop integration | `LEGACY_TRANSITIONAL`; native controller is not yet the sole QML owner |
+| `state/PreviewState.qml` (`Process` at lines 767, 837, 870, 879, 888, 916) | thumbnail warming, shell/executable/Windows launching, preview refresh | `PreviewController`, `LaunchService`, `OpenWithController` | `LEGACY_TRANSITIONAL`; preview/launch parity gate remains open |
+| `state/RecentState.qml` (`Process` at lines 145, 182) | recent item load/save through the helper | `RecentController` plus a future native persistence service | `LEGACY_TRANSITIONAL`; legacy helper retained |
+| `PortalDialog.qml` (`Process` at line 77) | portal dialog fallback and result delivery | `PortalController` | `LEGACY_TRANSITIONAL`; legacy portal entry remains available |
+| `components/common/FileContextMenu.qml` (`Process` at lines 386, 623, 783, 792) | archive capability probe, file properties, create-folder, rename | file-operation/filesystem service coverage to be added incrementally | `LEGACY_TRANSITIONAL`; behavior retained |
+| `components/common/OpenWithMenu.qml` (`Process` at lines 350, 390, 396) | application discovery, default association, launch | `OpenWithController`, `LaunchService` | `LEGACY_TRANSITIONAL`; native controller is available but QML still owns the menu flow |
+| `components/layout/Sidebar.qml` (`Process` at lines 441, 658) | desktop shortcut and filesystem property actions | filesystem/shortcut service | `LEGACY_TRANSITIONAL`; helper path is resolver-rooted |
+| `components/layout/Toolbar.qml` (`Process` at line 954) | search suggestions | navigation/search suggestion service | `NOT_YET_MIGRATED`; no native parity owner yet |
+| `AppState.qml` | public compatibility contract, native projections, and legacy-only startup/operation flows | `AppStateFacade`, `SettingsService`, focused controllers | `NATIVE_AUTHORITATIVE` for delegated domains; legacy-only aliases and timers remain transitional |
 
 ## Quickshell I/O and backend command sites
 

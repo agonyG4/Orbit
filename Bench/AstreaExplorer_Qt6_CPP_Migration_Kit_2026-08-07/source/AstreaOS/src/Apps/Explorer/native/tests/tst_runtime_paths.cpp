@@ -15,16 +15,29 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
 {
     const QDir runtime(root);
     QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/components/common")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/components/layout")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/components/views")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/state")));
     QVERIFY(runtime.mkpath(QStringLiteral("Core/components")));
     QVERIFY(runtime.mkpath(QStringLiteral("Features/Files")));
     QVERIFY(runtime.mkpath(QStringLiteral("System/i18n")));
     QVERIFY(runtime.mkpath(QStringLiteral("Quickshell")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Quickshell/components")));
+
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaComponents")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaFiles")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaI18n")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/QuickshellComponents")));
 
     const QStringList requiredFiles {
         QStringLiteral("Apps/Explorer/Main.qml"),
         QStringLiteral("Apps/Explorer/qmldir"),
         QStringLiteral("Apps/Explorer/Theme.qml"),
+        QStringLiteral("Apps/Explorer/AppState.qml"),
+        QStringLiteral("Apps/Explorer/state/NavigationState.qml"),
         QStringLiteral("Core/components/Theme.qml"),
+        QStringLiteral("Features/Files/DragDropSupport.js"),
         QStringLiteral("System/i18n/I18n.qml"),
     };
     for (const QString &relativePath : requiredFiles) {

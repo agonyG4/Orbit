@@ -57,6 +57,7 @@ public:
     bool foldersFirst() const;
     bool previews() const;
 
+    void setSearchQuery(const QString &query);
     void setShowHidden(bool showHidden);
     void setSortField(const QString &sortField);
     void setSortAscending(bool sortAscending);

@@ -39,6 +39,7 @@ constexpr auto kOrganizationName = "agony";
 constexpr auto kOrganizationDomain = "local";
 constexpr auto kBootstrapModuleUri = "Astrea.Explorer.Native";
 constexpr auto kBootstrapTypeName = "NativeBootstrap";
+constexpr auto kNativeAppStateTypeName = "NativeAppState";
 constexpr auto kSelfTestArgument = "--self-test";
 constexpr auto kBootstrapArgument = "--bootstrap";
 }
@@ -86,7 +87,10 @@ int ExplorerApplication::run(int argc, char **argv)
         runtimePaths.launcherProgram,
         runtimePaths.windowsRunnerProgram);
     FileOperationService fileOperationService(&backendClient, &application);
-    FileOperationsController fileOperations(&fileOperationService, &application);
+    FileOperationsController fileOperations(
+        &fileOperationService,
+        &clipboard,
+        &application);
     DeviceController devices(
         &backendClient,
         &application,
@@ -112,11 +116,10 @@ int ExplorerApplication::run(int argc, char **argv)
         kBootstrapModuleUri,
         1,
         0,
-        "AppState",
+        kNativeAppStateTypeName,
         &appState);
 
     QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty(QStringLiteral("AppState"), &appState);
 
     const bool loaded = useBootstrap
         ? loadBootstrap(engine)
@@ -126,10 +129,15 @@ int ExplorerApplication::run(int argc, char **argv)
     }
 
     if (navigation.currentPath().isEmpty()) {
+        const QString requestedStartPath = environment
+            .value(QStringLiteral("ASTREA_EXPLORER_START_PATH"))
+            .trimmed();
         navigation.navigateTo(
-            initialSettings.currentPath.isEmpty()
-                ? QDir::homePath()
-                : initialSettings.currentPath);
+            !requestedStartPath.isEmpty()
+                ? requestedStartPath
+                : (initialSettings.currentPath.isEmpty()
+                       ? QDir::homePath()
+                       : initialSettings.currentPath));
     }
 
     if (application.arguments().contains(QString::fromLatin1(kSelfTestArgument))) {
@@ -147,14 +155,14 @@ bool ExplorerApplication::loadExplorerQml(
         engine.addImportPath(importPath);
     }
 
-    QStringList warnings;
+    m_runtimeWarnings.clear();
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::warnings,
         &engine,
-        [&warnings](const QList<QQmlError> &errors) {
+        [this](const QList<QQmlError> &errors) {
             for (const QQmlError &error : errors) {
-                warnings.append(error.toString());
+                m_runtimeWarnings.append(error.toString());
                 qWarning().noquote() << error.toString();
             }
         });
@@ -167,11 +175,11 @@ bool ExplorerApplication::loadExplorerQml(
     if (engine.rootObjects().isEmpty()) {
         QTextStream(stderr) << "Explorer QML produced no root object" << Qt::endl;
     }
-    for (const QString &warning : warnings) {
+    for (const QString &warning : m_runtimeWarnings) {
         QTextStream(stderr) << warning << Qt::endl;
     }
 
-    return !engine.rootObjects().isEmpty() && warnings.isEmpty();
+    return !engine.rootObjects().isEmpty() && m_runtimeWarnings.isEmpty();
 }
 
 bool ExplorerApplication::loadBootstrap(QQmlApplicationEngine &engine) const

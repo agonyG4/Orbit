@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QStringList>
+
 class QQmlApplicationEngine;
 
 namespace Astrea::Explorer::Native::Runtime {
@@ -17,4 +19,6 @@ private:
         const Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths &paths) const;
     bool loadBootstrap(QQmlApplicationEngine &engine) const;
     int runSelfTest(QQmlApplicationEngine &engine) const;
+
+    mutable QStringList m_runtimeWarnings;
 };

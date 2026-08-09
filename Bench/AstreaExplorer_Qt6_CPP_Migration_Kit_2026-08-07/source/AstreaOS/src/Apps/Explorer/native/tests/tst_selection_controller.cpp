@@ -162,7 +162,7 @@ void SelectionControllerTest::exposesFacadeToQmlEngine()
         "Astrea.Explorer.Native.Test",
         1,
         0,
-        "AppState",
+        "NativeAppState",
         &facade);
     QQmlEngine engine;
     QQmlComponent component(&engine);
@@ -171,8 +171,8 @@ void SelectionControllerTest::exposesFacadeToQmlEngine()
             "import QtQml\n"
             "import Astrea.Explorer.Native.Test\n"
             "QtObject {\n"
-            "    property bool modelAvailable: AppState.fileModel !== null\n"
-            "    property string selected: AppState.selectedFile\n"
+            "    property bool modelAvailable: NativeAppState.fileModel !== null\n"
+            "    property string selected: NativeAppState.selectedFile\n"
             "}"),
         QUrl(QStringLiteral("qrc:/selection-facade-smoke.qml")));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));

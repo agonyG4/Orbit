@@ -12,17 +12,33 @@ const QStringList kRequiredFiles {
     QStringLiteral("Apps/Explorer/Main.qml"),
     QStringLiteral("Apps/Explorer/qmldir"),
     QStringLiteral("Apps/Explorer/Theme.qml"),
+    QStringLiteral("Apps/Explorer/AppState.qml"),
+    QStringLiteral("Apps/Explorer/state/NavigationState.qml"),
     QStringLiteral("Core/components/Theme.qml"),
+    QStringLiteral("Features/Files/DragDropSupport.js"),
     QStringLiteral("System/i18n/I18n.qml"),
 };
 
 const QStringList kRequiredDirectories {
     QStringLiteral("Apps"),
+    QStringLiteral("Apps/Explorer"),
+    QStringLiteral("Apps/Explorer/components"),
+    QStringLiteral("Apps/Explorer/components/common"),
+    QStringLiteral("Apps/Explorer/components/layout"),
+    QStringLiteral("Apps/Explorer/components/views"),
+    QStringLiteral("Apps/Explorer/state"),
+    QStringLiteral("Apps/Explorer/AstreaComponents"),
+    QStringLiteral("Apps/Explorer/AstreaFiles"),
+    QStringLiteral("Apps/Explorer/AstreaI18n"),
+    QStringLiteral("Apps/Explorer/QuickshellComponents"),
     QStringLiteral("Core"),
+    QStringLiteral("Core/components"),
     QStringLiteral("Features"),
     QStringLiteral("Features/Files"),
     QStringLiteral("System"),
+    QStringLiteral("System/i18n"),
     QStringLiteral("Quickshell"),
+    QStringLiteral("Quickshell/components"),
 };
 
 QString absoluteCleanPath(const QString &path)

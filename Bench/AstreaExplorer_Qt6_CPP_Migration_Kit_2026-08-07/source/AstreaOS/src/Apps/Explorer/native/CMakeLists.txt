@@ -60,6 +60,7 @@ target_link_libraries(astrea_explorer_native_operations PUBLIC
     Qt6::Core
     astrea_explorer_native_backend
     astrea_explorer_native_launch
+    astrea_explorer_native_clipboard
 )
 
 target_include_directories(astrea_explorer_native_backend PUBLIC
@@ -216,6 +217,7 @@ target_link_libraries(astrea-explorer PRIVATE
     astrea_explorer_native_navigation
     astrea_explorer_native_settings
     astrea_explorer_native_operations
+    astrea_explorer_native_clipboard
 )
 
 qt_add_executable(tst_file_operations_controller
@@ -228,6 +230,7 @@ target_include_directories(tst_file_operations_controller PRIVATE
 
 target_link_libraries(tst_file_operations_controller PRIVATE
     Qt6::Core
+    Qt6::Gui
     Qt6::Test
     astrea_explorer_native_operations
 )

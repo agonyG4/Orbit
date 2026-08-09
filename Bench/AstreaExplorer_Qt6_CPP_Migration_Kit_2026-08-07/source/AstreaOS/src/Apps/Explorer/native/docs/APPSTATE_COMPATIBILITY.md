@@ -1,10 +1,10 @@
 # Explorer `AppState` Compatibility Boundary
 
-The native `AppStateFacade` is the application-state projection registered by
-the Qt runtime. It owns only state already represented by native controllers:
-navigation/history/tabs, the directory model, loading/error state, selection,
-directory refresh, and persisted listing/preview settings. The QML property
-names are preserved where the native owner has a matching contract.
+`AppState.qml` remains the only public Explorer contract. The Qt runtime
+registers the native projection only as `NativeAppState` under
+`Astrea.Explorer.Native 1.0`; there is no native `AppState` registration or
+context property. The wrapper delegates only domains already represented by
+native controllers and keeps legacy implementations for the rest.
 
 ## Native facade surface
 
@@ -26,6 +26,23 @@ Qt tests:
 | `sidebarFavorites`, `sidebarHiddenDefaultFavorites`, `sidebarFavoritesRevision`, default favorite helpers | `SettingsService` JSON projection |
 | `increaseZoom`, `decreaseZoom`, `resetZoom`, `setZoom` | `SettingsService` zoom setting |
 | `DirectoryModel.count`, `DirectoryModel.get(index)` | `DirectoryModel` QML compatibility projection |
+
+## Ownership at this phase
+
+Native-authoritative domains are navigation/history/tabs/search, directory
+listing/model/loading/error state, directory watching, selection and model
+refresh reconciliation, listing/preview/view/zoom settings, sidebar favorite
+state, dialog filter state, resolver-rooted runtime paths, and copy/cut
+clipboard state including system clipboard publication through
+`ClipboardService`.
+
+Legacy/transitional domains are paste conflict behavior, archive and file
+operation flows, trash/delete/restore, previews and thumbnail warming, recent
+item persistence, devices and network dialogs, portal fallback, open-with and
+launch menus, helper-backed sidebar actions, and toolbar search suggestions.
+The legacy navigation module remains in the source tree for fallback/reference
+purposes, but its initialization and directory/search/watch `Process` objects
+are guarded whenever the native bridge is active.
 
 `DirectoryModel` keeps the legacy role names (`fileName`, `filePath`,
 `fileUrl`, `fileIsDir`, `fileExecutable`, `fileHidden`, `fileSize`,
@@ -50,12 +67,12 @@ groups are:
 
 | Transitional group | Members / responsibility | Replacement candidate |
 | --- | --- | --- |
-| clipboard and file operations | `clipboardFiles`, `clipboardMode`, `copySelected`, `cutSelected`, `pasteFiles`, `pasteConflict*`, `fileOperation*`, `deleteSelected`, `restoreSelected`, `emptyTrash` | `FileOperationsController`, `FileOperationService`, `ClipboardService` |
+| clipboard and file operations | `clipboardFiles`, `clipboardMode`, `copySelected`, `cutSelected` are native-backed; `pasteFiles`, `pasteConflict*`, `fileOperation*`, `deleteSelected`, `restoreSelected`, `emptyTrash` remain legacy-backed | `FileOperationsController`, `FileOperationService`, `ClipboardService` |
 | archive/AppImage/wallpaper | `archive*`, `startArchiveExtraction`, `startFolderCompression`, `installAppImage`, `setAsWallpaper`, `wallpaperApplyRunning` | typed filesystem/archive/application services |
 | devices and network | `deviceModel`, `deviceError`, `requestMountDevice`, `requestUnmountDevice`, `requestRemountDevice`, `toggleDeviceAutoMount`, `network*`, `connectToNetwork`, `openNetworkBrowser` | `DeviceController` and a native network/portal service |
 | preview and launch | `fileIconName`, `isPreviewableFile`, `portalIconSource`, `sidebarIconSource`, `formatSize`, `formatDate`, `itemColor`, `openItem`, `requestThumbnailWarm`, `scheduleVisibleThumbnailWarm`, zoom helpers | `PreviewController`, `LaunchService`, `OpenWithController` |
-| recents and favorites | `isRecentPath`, `recentVirtualPath`, `rememberScrollPosition`, `sidebarFavorites`, `sidebarFavoritesRevision`, `visibleDefaultSidebarFavorites`, `pinSidebarFavorite`, `removeSidebarFavorite`, `isSidebarFavorite` | `RecentController`, settings-backed favorites service |
-| dialogs and compatibility paths | `dialogActive`, `dialogMode`, `dialogFilePatterns`, `isPortalDialog`, `helperPath`, `networkRootPath`, `trashFilesPath`, `homePath` | native dialog/portal and resolver-root projections |
+| recents and scroll state | `isRecentPath`, `recentVirtualPath`, `rememberScrollPosition` | `RecentController` plus a future native persistence service |
+| portal fallback and helper-backed actions | portal dialog fallback, `helperPath`, and helper-backed launch/sidebar actions | `PortalController`, filesystem/launch services |
 
 This boundary prevents the facade from becoming a second monolithic QML state
 machine. The legacy singleton and launcher remain available as fallback while
