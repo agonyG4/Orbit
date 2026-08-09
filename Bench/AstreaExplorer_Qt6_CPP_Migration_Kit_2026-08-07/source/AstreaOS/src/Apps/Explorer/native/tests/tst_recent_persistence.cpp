@@ -97,6 +97,7 @@ class TestRecentApp final : public QObject
     Q_PROPERTY(QObject *fileModel READ fileModel CONSTANT)
     Q_PROPERTY(QString currentPath READ currentPath WRITE setCurrentPath)
     Q_PROPERTY(bool dialogActive READ dialogActive CONSTANT)
+    Q_PROPERTY(int refreshCount READ refreshCount CONSTANT)
 
 public:
     explicit TestRecentApp(TestFileModel *fileModel, QObject *parent = nullptr)
@@ -110,8 +111,9 @@ public:
     QString currentPath() const { return m_currentPath; }
     void setCurrentPath(const QString &path) { m_currentPath = path; }
     bool dialogActive() const { return false; }
+    int refreshCount() const { return m_refreshCount; }
 
-    Q_INVOKABLE bool isRecentPath(const QString &) const { return false; }
+    Q_INVOKABLE bool isRecentPath(const QString &path) const { return path == m_currentPath; }
     Q_INVOKABLE bool isTrashPath(const QString &) const { return false; }
     Q_INVOKABLE QString fileUrlForPath(const QString &path) const
     {
@@ -185,9 +187,11 @@ class RecentPersistenceTest final : public QObject
     Q_OBJECT
 
 private slots:
-    void saveGenerationsRejectLateOlderCompletion();
+    void recordAccessSerializesAThenBAndRefreshesOnce();
+    void rapidRecordAccessKeepsNewestAThenBThenC();
+    void failedSaveWithPendingNewerStateDoesNotRefresh();
     void staleLoadCannotReplaceNewerInMemoryItems();
-    void postLoadEventLoopKeepsGenerationGuardActive();
+    void postLoadEventLoopRefreshesRecentProjection();
 };
 
 QObject *createRecentState(
@@ -210,20 +214,28 @@ QObject *createRecentState(
     });
 }
 
-void RecentPersistenceTest::saveGenerationsRejectLateOlderCompletion()
+bool recordAccess(QObject *state, const QString &path)
+{
+    return QMetaObject::invokeMethod(
+        state,
+        "recordAccess",
+        Q_ARG(QVariant, path),
+        Q_ARG(QVariant, false),
+        Q_ARG(QVariant, QUrl::fromLocalFile(path).toString()));
+}
+
+void RecentPersistenceTest::recordAccessSerializesAThenBAndRefreshesOnce()
 {
     QTemporaryDir stubs;
     TestFileModel fileModel;
     TestRecentApp app(&fileModel);
+    app.setCurrentPath(QStringLiteral("recent://"));
     QQmlEngine engine;
     QObject *state = createRecentState(&stubs, &app, &engine);
     QVERIFY(state != nullptr);
     const auto cleanup = qScopeGuard([state]() { delete state; });
 
-    const QVariantMap itemA = recentItem(QStringLiteral("/recent/A.txt"), 100);
-    const QVariantMap itemB = recentItem(QStringLiteral("/recent/B.txt"), 200);
-    state->setProperty("items", QVariantList {itemA});
-    QVERIFY(QMetaObject::invokeMethod(state, "persist"));
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/A.txt")));
     QCOMPARE(state->property("persistenceGeneration").toInt(), 1);
     QCOMPARE(state->property("saveGeneration").toInt(), 1);
 
@@ -232,29 +244,80 @@ void RecentPersistenceTest::saveGenerationsRejectLateOlderCompletion()
     QCOMPARE(processCommands(saveProcess).size(), 1);
     QCOMPARE(savedItems(saveProcess, 0).value(QStringLiteral("filePath")).toString(),
              QStringLiteral("/recent/A.txt"));
+    QCOMPARE(app.refreshCount(), 0);
 
-    state->setProperty("items", QVariantList {itemB});
-    QVERIFY(QMetaObject::invokeMethod(state, "persist"));
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/B.txt")));
     QCOMPARE(state->property("persistenceGeneration").toInt(), 2);
     QCOMPARE(state->property("saveGeneration").toInt(), 1);
+    QCOMPARE(processCommands(saveProcess).size(), 1);
+    QCOMPARE(app.refreshCount(), 0);
 
-    QVERIFY(QMetaObject::invokeMethod(state, "startSave"));
+    QVERIFY(completeProcess(saveProcess, 0));
     QCOMPARE(state->property("saveGeneration").toInt(), 2);
     QCOMPARE(processCommands(saveProcess).size(), 2);
     QCOMPARE(savedItems(saveProcess, 1).value(QStringLiteral("filePath")).toString(),
              QStringLiteral("/recent/B.txt"));
+    QCOMPARE(app.refreshCount(), 0);
 
     QVERIFY(completeProcess(saveProcess, 0));
-    QCOMPARE(state->property("saveGeneration").toInt(), 2);
     QCOMPARE(state->property("items").toList().constFirst().toMap().value(
                  QStringLiteral("filePath")).toString(), QStringLiteral("/recent/B.txt"));
+    QCOMPARE(app.refreshCount(), 1);
+    QCOMPARE(processCommands(saveProcess).size(), 2);
+}
 
-    state->setProperty("saveGeneration", 1);
+void RecentPersistenceTest::rapidRecordAccessKeepsNewestAThenBThenC()
+{
+    QTemporaryDir stubs;
+    TestFileModel fileModel;
+    TestRecentApp app(&fileModel);
+    app.setCurrentPath(QStringLiteral("recent://"));
+    QQmlEngine engine;
+    QObject *state = createRecentState(&stubs, &app, &engine);
+    QVERIFY(state != nullptr);
+    const auto cleanup = qScopeGuard([state]() { delete state; });
+
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/A.txt")));
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/B.txt")));
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/C.txt")));
+    QObject *saveProcess = propertyObject(state, "saveProc");
+    QVERIFY(saveProcess != nullptr);
+    QCOMPARE(processCommands(saveProcess).size(), 1);
+    QCOMPARE(savedItems(saveProcess, 0).value(QStringLiteral("filePath")).toString(),
+             QStringLiteral("/recent/A.txt"));
+
     QVERIFY(completeProcess(saveProcess, 0));
-    QCOMPARE(state->property("saveGeneration").toInt(), 2);
-    QCOMPARE(processCommands(saveProcess).size(), 3);
-    QCOMPARE(savedItems(saveProcess, 2).value(QStringLiteral("filePath")).toString(),
-             QStringLiteral("/recent/B.txt"));
+    QCOMPARE(processCommands(saveProcess).size(), 2);
+    QCOMPARE(savedItems(saveProcess, 1).value(QStringLiteral("filePath")).toString(),
+             QStringLiteral("/recent/C.txt"));
+    QCOMPARE(state->property("items").toList().constFirst().toMap().value(
+                 QStringLiteral("filePath")).toString(), QStringLiteral("/recent/C.txt"));
+    QVERIFY(completeProcess(saveProcess, 0));
+    QCOMPARE(app.refreshCount(), 1);
+}
+
+void RecentPersistenceTest::failedSaveWithPendingNewerStateDoesNotRefresh()
+{
+    QTemporaryDir stubs;
+    TestFileModel fileModel;
+    TestRecentApp app(&fileModel);
+    app.setCurrentPath(QStringLiteral("recent://"));
+    QQmlEngine engine;
+    QObject *state = createRecentState(&stubs, &app, &engine);
+    QVERIFY(state != nullptr);
+    const auto cleanup = qScopeGuard([state]() { delete state; });
+
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/A.txt")));
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/B.txt")));
+    QObject *saveProcess = propertyObject(state, "saveProc");
+    QVERIFY(saveProcess != nullptr);
+    QVERIFY(completeProcess(saveProcess, 1));
+    QCOMPARE(processCommands(saveProcess).size(), 2);
+    QCOMPARE(app.refreshCount(), 0);
+    QVERIFY(completeProcess(saveProcess, 1));
+    QCOMPARE(app.refreshCount(), 0);
+    QCOMPARE(state->property("items").toList().constFirst().toMap().value(
+                 QStringLiteral("filePath")).toString(), QStringLiteral("/recent/B.txt"));
 }
 
 void RecentPersistenceTest::staleLoadCannotReplaceNewerInMemoryItems()
@@ -262,63 +325,59 @@ void RecentPersistenceTest::staleLoadCannotReplaceNewerInMemoryItems()
     QTemporaryDir stubs;
     TestFileModel fileModel;
     TestRecentApp app(&fileModel);
+    app.setCurrentPath(QStringLiteral("recent://"));
     QQmlEngine engine;
     QObject *state = createRecentState(&stubs, &app, &engine);
     QVERIFY(state != nullptr);
     const auto cleanup = qScopeGuard([state]() { delete state; });
 
-    const QVariantMap itemA = recentItem(QStringLiteral("/recent/A.txt"), 100);
-    const QVariantMap itemB = recentItem(QStringLiteral("/recent/B.txt"), 200);
-    state->setProperty("items", QVariantList {itemA});
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/A.txt")));
     QVERIFY(QMetaObject::invokeMethod(state, "load"));
-    QCOMPARE(state->property("loadGeneration").toInt(), 0);
+    QCOMPARE(state->property("loadGeneration").toInt(), 1);
 
-    state->setProperty("items", QVariantList {itemB});
-    QVERIFY(QMetaObject::invokeMethod(state, "persist"));
-    QCOMPARE(state->property("persistenceGeneration").toInt(), 1);
+    QVERIFY(recordAccess(state, QStringLiteral("/recent/B.txt")));
+    QCOMPARE(state->property("persistenceGeneration").toInt(), 2);
 
     QObject *loadProcess = propertyObject(state, "loadProc");
     QVERIFY(loadProcess != nullptr);
     const QByteArray staleSnapshot = QJsonDocument::fromVariant(
-        QVariantList {itemA}).toJson(QJsonDocument::Compact);
+        QVariantList {recentItem(QStringLiteral("/recent/A.txt"), 100)}).toJson(QJsonDocument::Compact);
     QVERIFY(completeProcess(loadProcess, 0, QString::fromUtf8(staleSnapshot)));
 
     const QVariantList items = state->property("items").toList();
-    QCOMPARE(items.size(), 1);
+    QCOMPARE(items.size(), 2);
     QCOMPARE(items.constFirst().toMap().value(QStringLiteral("filePath")).toString(),
              QStringLiteral("/recent/B.txt"));
+    QCOMPARE(app.refreshCount(), 0);
 }
 
-void RecentPersistenceTest::postLoadEventLoopKeepsGenerationGuardActive()
+void RecentPersistenceTest::postLoadEventLoopRefreshesRecentProjection()
 {
     QTemporaryDir stubs;
     TestFileModel fileModel;
     TestRecentApp app(&fileModel);
+    app.setCurrentPath(QStringLiteral("recent://"));
     QQmlEngine engine;
     QObject *state = createRecentState(&stubs, &app, &engine);
     QVERIFY(state != nullptr);
     const auto cleanup = qScopeGuard([state]() { delete state; });
 
-    const QVariantMap itemA = recentItem(QStringLiteral("/recent/A.txt"), 100);
-    const QVariantMap itemB = recentItem(QStringLiteral("/recent/B.txt"), 200);
-    state->setProperty("items", QVariantList {itemA});
     QVERIFY(QMetaObject::invokeMethod(state, "load"));
-    state->setProperty("items", QVariantList {itemB});
-    QVERIFY(QMetaObject::invokeMethod(state, "persist"));
+    QCOMPARE(state->property("loadGeneration").toInt(), 0);
 
     QObject *loadProcess = propertyObject(state, "loadProc");
     QVERIFY(loadProcess != nullptr);
-    const QByteArray staleSnapshot = QJsonDocument::fromVariant(
-        QVariantList {itemA}).toJson(QJsonDocument::Compact);
-    QTimer::singleShot(0, loadProcess, [loadProcess, staleSnapshot]() {
-        completeProcess(loadProcess, 0, QString::fromUtf8(staleSnapshot));
+    const QByteArray snapshot = QJsonDocument::fromVariant(
+        QVariantList {recentItem(QStringLiteral("/recent/A.txt"), 100)}).toJson(QJsonDocument::Compact);
+    QTimer::singleShot(0, loadProcess, [loadProcess, snapshot]() {
+        completeProcess(loadProcess, 0, QString::fromUtf8(snapshot));
     });
 
-    QTRY_COMPARE(state->property("persistenceGeneration").toInt(), 1);
+    QTRY_COMPARE(app.refreshCount(), 1);
     const QVariantList items = state->property("items").toList();
     QCOMPARE(items.size(), 1);
     QCOMPARE(items.constFirst().toMap().value(QStringLiteral("filePath")).toString(),
-             QStringLiteral("/recent/B.txt"));
+             QStringLiteral("/recent/A.txt"));
 }
 
 QTEST_GUILESS_MAIN(RecentPersistenceTest)

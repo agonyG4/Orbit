@@ -53,6 +53,17 @@ entries are normalized by `RecentController`, exposed through the existing
 `DirectoryModel` roles, and ordered by access timestamp. Recent persistence
 and recording remain transitional QML behavior guarded by explicit save/load
 generations until a native persistence owner is introduced in a later phase.
+Launch-history entries with missing, malformed, or zero timestamps preserve a
+valid target and fall back to its filesystem modification time, matching the
+legacy Python helper; valid positive timestamps remain authoritative. Invalid
+launch identities and missing launch/XBEL targets remain filtered. Finder is
+different by contract: the legacy Finder loader preserves valid serialized
+entries after their targets disappear, so the native projection preserves
+their serialized identity and metadata while still rejecting empty paths.
+Recent source loading remains synchronous but bounded: launch history is read
+newest-first only until the configured unique-path limit, and desktop paths are
+cached for the duration of each load to avoid repeated application-catalog
+scans. No new worker, process listing, or timer synchronization was added.
 
 Legacy/transitional domains are paste conflict behavior, archive and file
 operation flows, trash/delete/restore, previews and thumbnail warming, recent

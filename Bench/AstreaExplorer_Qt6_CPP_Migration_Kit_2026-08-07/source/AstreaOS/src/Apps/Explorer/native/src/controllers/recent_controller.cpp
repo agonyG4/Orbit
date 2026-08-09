@@ -12,18 +12,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
-#include <QRegularExpression>
+#include <QSet>
 #include <QUrl>
 #include <QXmlStreamReader>
 
 namespace Astrea::Explorer::Native::Backend {
 
 namespace {
-
-QString absolutePath(const QString &path)
-{
-    return QFileInfo(path).absoluteFilePath();
-}
 
 qint64 objectInteger(const QJsonObject &object, const QString &key, qint64 fallback)
 {
@@ -45,7 +40,7 @@ bool objectBoolean(const QJsonObject &object, const QString &key, bool fallback)
 QVector<DirectoryEntry> RecentController::load(const RecentSourcePaths &paths) const
 {
     QVector<RecentRecord> records = loadFinder(paths.finderPath);
-    records += loadLaunchHistory(paths.launchHistoryPath);
+    records += loadLaunchHistory(paths.launchHistoryPath, paths.limit);
     records += loadXbel(paths.xbelPath);
     return merge(records, paths.limit);
 }
@@ -144,7 +139,39 @@ RecentRecord RecentController::recordFromObject(
         source,
         object.value(QStringLiteral("fileKind")).toString());
     if (record.entry.filePath.isEmpty()) {
-        return record;
+        const QFileInfo info(path);
+        if (path.trimmed().isEmpty()) {
+            return record;
+        }
+
+        // Finder's legacy loader preserves serialized entries even after the
+        // target disappears. Keep the identity and serialized metadata while
+        // still rejecting records with no usable path.
+        record.entry.filePath = info.absoluteFilePath();
+        record.entry.fileName = info.fileName().isEmpty() ? path : info.fileName();
+        record.entry.fileUrl = QUrl::fromLocalFile(record.entry.filePath);
+        record.entry.fileIsDir = objectBoolean(
+            object,
+            QStringLiteral("fileIsDir"),
+            false);
+        record.entry.fileExecutable = objectBoolean(
+            object,
+            QStringLiteral("fileExecutable"),
+            false);
+        record.entry.fileHidden = objectBoolean(
+            object,
+            QStringLiteral("fileHidden"),
+            record.entry.fileName.startsWith(QLatin1Char('.')));
+        record.entry.fileSize = objectInteger(
+            object,
+            QStringLiteral("fileSize"),
+            -1);
+        record.entry.fileKind = object.value(QStringLiteral("fileKind")).toString();
+        record.lastAccessed = objectInteger(object, QStringLiteral("lastAccessed"), 0);
+        record.entry.fileModified = record.lastAccessed > 0
+            ? QDateTime::fromMSecsSinceEpoch(record.lastAccessed)
+            : QDateTime();
+        record.source = source;
     }
 
     record.entry.fileName = object.value(QStringLiteral("fileName"))
@@ -178,7 +205,8 @@ RecentRecord RecentController::recordFromDesktop(
     const QString &desktopId,
     const QJsonArray &argv,
     qint64 lastAccessed,
-    const QString &source)
+    const QString &source,
+    QHash<QString, QString> *desktopPathCache)
 {
     QString desktopPath;
     for (const QJsonValue &value : argv) {
@@ -192,8 +220,16 @@ RecentRecord RecentController::recordFromDesktop(
         }
     }
 
-    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(
-        desktopPath.isEmpty() ? desktopId : desktopPath);
+    const QString lookup = desktopPath.isEmpty() ? desktopId : desktopPath;
+    OpenWithApplication application;
+    if (desktopPathCache != nullptr && desktopPathCache->contains(lookup)) {
+        application = OpenWithController::resolveDesktopEntry(desktopPathCache->value(lookup));
+    } else {
+        application = OpenWithController::resolveDesktopEntry(lookup);
+        if (desktopPathCache != nullptr && !application.desktopFile.isEmpty()) {
+            desktopPathCache->insert(lookup, application.desktopFile);
+        }
+    }
     if (application.desktopFile.isEmpty()) {
         return {};
     }
@@ -259,9 +295,9 @@ QVector<RecentRecord> RecentController::loadFinder(const QString &path)
     return records;
 }
 
-QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
+QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path, int limit)
 {
-    if (path.trimmed().isEmpty()) {
+    if (path.trimmed().isEmpty() || limit <= 0) {
         return {};
     }
     QFile file(path);
@@ -270,6 +306,8 @@ QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
     }
 
     QVector<RecentRecord> records;
+    QSet<QString> seenPaths;
+    QHash<QString, QString> desktopPathCache;
     const QList<QByteArray> lines = file.readAll().split('\n');
     for (auto it = lines.crbegin(); it != lines.crend(); ++it) {
         const QByteArray line = it->trimmed();
@@ -289,21 +327,24 @@ QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
             continue;
         }
         const qint64 timestamp = objectInteger(object, QStringLiteral("timestamp_ms"), 0);
-        if (timestamp <= 0) {
-            continue;
-        }
         const RecentRecord record = kind == QStringLiteral("desktop")
             ? recordFromDesktop(
                   object.value(QStringLiteral("target")).toString(),
                   object.value(QStringLiteral("argv")).toArray(),
                   timestamp,
-                  QStringLiteral("launch"))
+                  QStringLiteral("launch"),
+                  &desktopPathCache)
             : recordFromPath(
                   object.value(QStringLiteral("target")).toString(),
                   timestamp,
                   QStringLiteral("launch"));
-        if (!record.entry.filePath.isEmpty()) {
-            records.append(record);
+        if (record.entry.filePath.isEmpty() || seenPaths.contains(record.entry.filePath)) {
+            continue;
+        }
+        records.append(record);
+        seenPaths.insert(record.entry.filePath);
+        if (seenPaths.size() >= limit) {
+            break;
         }
     }
     return records;
