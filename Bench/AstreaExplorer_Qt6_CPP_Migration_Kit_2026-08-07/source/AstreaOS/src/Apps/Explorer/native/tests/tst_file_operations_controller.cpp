@@ -17,6 +17,8 @@ class FileOperationsControllerTest final : public QObject
 
 private slots:
     void copyAndCutExposeClipboardState();
+    void emptySelectionPreservesClipboardState();
+    void repeatedCutIsOrderInsensitiveAndClearsClipboard();
     void pasteDelegatesTypedRequestAndPublishesProgress();
     void cancelDelegatesToBackendAndClearsBusyState();
 };
@@ -39,6 +41,51 @@ void FileOperationsControllerTest::copyAndCutExposeClipboardState()
     controller.cutSelection();
     QCOMPARE(controller.clipboardMode(), QStringLiteral("cut"));
     QVERIFY(controller.isCutPending(QStringLiteral("one.txt")));
+}
+
+void FileOperationsControllerTest::emptySelectionPreservesClipboardState()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    ClipboardService clipboard(QGuiApplication::clipboard());
+    FileOperationsController controller(&service, &clipboard);
+
+    const QStringList paths {QStringLiteral("/tmp/keep.txt")};
+    controller.setSelection(paths);
+    controller.copySelection();
+    const QStringList clipboardBefore = controller.clipboardFiles();
+    const QString modeBefore = controller.clipboardMode();
+    const QList<QUrl> urlsBefore = QGuiApplication::clipboard()->mimeData()->urls();
+
+    controller.setSelection({});
+    controller.copySelection();
+    controller.cutSelection();
+
+    QCOMPARE(controller.clipboardFiles(), clipboardBefore);
+    QCOMPARE(controller.clipboardMode(), modeBefore);
+    QCOMPARE(QGuiApplication::clipboard()->mimeData()->urls(), urlsBefore);
+}
+
+void FileOperationsControllerTest::repeatedCutIsOrderInsensitiveAndClearsClipboard()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    ClipboardService clipboard(QGuiApplication::clipboard());
+    FileOperationsController controller(&service, &clipboard);
+
+    const QString first = QStringLiteral("/tmp/first.txt");
+    const QString second = QStringLiteral("/tmp/second.txt");
+    controller.setSelection({first, second});
+    controller.cutSelection();
+    QVERIFY(!QGuiApplication::clipboard()->mimeData()->urls().isEmpty());
+
+    controller.setSelection({second, first});
+    controller.cutSelection();
+
+    QVERIFY(controller.clipboardFiles().isEmpty());
+    QCOMPARE(controller.clipboardMode(), QString());
+    const QMimeData *mimeData = QGuiApplication::clipboard()->mimeData();
+    QVERIFY(mimeData == nullptr || mimeData->urls().isEmpty());
 }
 
 void FileOperationsControllerTest::pasteDelegatesTypedRequestAndPublishesProgress()

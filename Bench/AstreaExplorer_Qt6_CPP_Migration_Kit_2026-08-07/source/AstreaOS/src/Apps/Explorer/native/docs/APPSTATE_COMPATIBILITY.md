@@ -4,10 +4,12 @@
 registers the native projection only as `NativeAppState` under
 `Astrea.Explorer.Native 1.0`; there is no native `AppState` registration or
 context property. The public QML file does not import the native module
-unconditionally: the native executable sets `ASTREA_EXPLORER_NATIVE_RUNTIME`
-and the file loads `compatibility/NativeAppStateAdapter.qml` only in that
-runtime. Without the marker, it loads the legacy adapter and never resolves
-`Astrea.Explorer.Native`, which preserves Quickshell/portal fallback loading.
+unconditionally: the native executable sets the process-local
+engine-owned `astreaNativeAppStateAvailable` capability after registering the
+facade, and the file loads `compatibility/NativeAppStateAdapter.qml` only when
+that capability is true and the adapter is ready. Without the capability,
+it loads the legacy adapter and never resolves `Astrea.Explorer.Native`, which
+preserves Quickshell/portal fallback loading.
 The wrapper delegates only domains already represented by native controllers
 and keeps legacy implementations for the rest.
 
@@ -33,7 +35,7 @@ Qt tests:
 | `DirectoryModel.count`, `DirectoryModel.get(index)` | `DirectoryModel` QML compatibility projection |
 
 The compatibility methods `replaceFileModel`, `updateFileModelMetadata`, and
-`removePathsFromFileModel` are also native-bound when the marker is active.
+`removePathsFromFileModel` are also native-bound when the capability is active.
 They use the current navigation generation, emit targeted model signals, and
 let `SelectionController` reconcile selected paths after updates/removals.
 
@@ -60,9 +62,10 @@ are guarded whenever the native bridge is active.
 `DirectoryModel` keeps the legacy role names (`fileName`, `filePath`,
 `fileUrl`, `fileIsDir`, `fileExecutable`, `fileHidden`, `fileSize`,
 `fileModified`, `fileKind`, `filePreviewUrl`, `fileRemote`,
-`fileMetadataLimited`, `fileFilesystem`, `lastAccessed`, and `recentSource`).
-Selection is reconciled by stable path when the model resets, emits row
-removals, or receives targeted metadata changes.
+`fileMetadataLimited`, `fileFilesystem`, `lastAccessed`, `recentSource`, and
+the native recent-app `fileIconName` role). Selection is reconciled by stable
+path when the model resets, emits row removals, or receives targeted metadata
+changes.
 
 ## Inventory method
 

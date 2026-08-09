@@ -56,6 +56,7 @@ DirectoryEntry entryFromVariant(const QVariantMap &item)
     entry.fileFilesystem = item.value(QStringLiteral("fileFilesystem")).toString();
     entry.lastAccessed = item.value(QStringLiteral("lastAccessed")).toLongLong();
     entry.recentSource = item.value(QStringLiteral("recentSource")).toString();
+    entry.fileIconName = item.value(QStringLiteral("fileIconName")).toString();
     return entry;
 }
 
@@ -163,6 +164,13 @@ void assignMetadata(
             assign(DirectoryModel::RecentSourceRole);
         }
     }
+    if (item.contains(QStringLiteral("fileIconName"))) {
+        const QString value = item.value(QStringLiteral("fileIconName")).toString();
+        if (entry->fileIconName != value) {
+            entry->fileIconName = value;
+            assign(DirectoryModel::FileIconNameRole);
+        }
+    }
 }
 
 } // namespace
@@ -224,6 +232,8 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         return entry.lastAccessed;
     case RecentSourceRole:
         return entry.recentSource;
+    case FileIconNameRole:
+        return entry.fileIconName;
     default:
         return {};
     }
@@ -247,6 +257,7 @@ QHash<int, QByteArray> DirectoryModel::roleNames() const
         {FileFilesystemRole, QByteArrayLiteral("fileFilesystem")},
         {LastAccessedRole, QByteArrayLiteral("lastAccessed")},
         {RecentSourceRole, QByteArrayLiteral("recentSource")},
+        {FileIconNameRole, QByteArrayLiteral("fileIconName")},
     };
 }
 

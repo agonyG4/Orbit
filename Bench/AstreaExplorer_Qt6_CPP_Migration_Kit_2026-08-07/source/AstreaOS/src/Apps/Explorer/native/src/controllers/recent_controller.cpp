@@ -1,4 +1,5 @@
 #include "controllers/recent_controller.h"
+#include "controllers/open_with_controller.h"
 
 #include <algorithm>
 #include <utility>
@@ -83,6 +84,11 @@ QVector<DirectoryEntry> RecentController::merge(
     for (int i = 0; i < unique.size() && i < limit; ++i) {
         DirectoryEntry entry = unique.at(i).entry;
         entry.lastAccessed = unique.at(i).lastAccessed;
+        if (entry.lastAccessed > 0) {
+            // `fileModified` is the existing Recent UI contract. It is an
+            // access timestamp here, not the filesystem mtime.
+            entry.fileModified = QDateTime::fromMSecsSinceEpoch(entry.lastAccessed);
+        }
         entry.recentSource = unique.at(i).source;
         result.append(std::move(entry));
     }
@@ -111,7 +117,6 @@ RecentRecord RecentController::recordFromPath(
         && (info.permissions() & (QFile::ExeOwner | QFile::ExeGroup | QFile::ExeOther));
     record.entry.fileHidden = record.entry.fileName.startsWith(QLatin1Char('.'));
     record.entry.fileSize = isDirectory ? 0 : info.size();
-    record.entry.fileModified = info.lastModified();
     record.entry.fileKind = kind.isEmpty()
         ? (isDirectory
                ? QStringLiteral("Pasta")
@@ -123,6 +128,7 @@ RecentRecord RecentController::recordFromPath(
     record.lastAccessed = lastAccessed > 0
         ? lastAccessed
         : info.lastModified().toMSecsSinceEpoch();
+    record.entry.fileModified = QDateTime::fromMSecsSinceEpoch(record.lastAccessed);
     record.source = source;
     return record;
 }
@@ -159,18 +165,51 @@ RecentRecord RecentController::recordFromObject(
             QStringLiteral("fileSize"),
             record.entry.fileSize);
     }
-    const qint64 modified = objectInteger(
-        object,
-        QStringLiteral("fileModified"),
-        record.entry.fileModified.toMSecsSinceEpoch());
-    if (modified > 0) {
-        record.entry.fileModified = QDateTime::fromMSecsSinceEpoch(modified);
-    }
     const QString preview = object.value(QStringLiteral("filePreviewUrl")).toString();
     if (!preview.isEmpty()) {
         record.entry.filePreviewUrl = QUrl(preview);
     }
+    record.entry.fileIconName = object.value(QStringLiteral("fileIconName")).toString();
     record.source = object.value(QStringLiteral("recentSource")).toString(source);
+    return record;
+}
+
+RecentRecord RecentController::recordFromDesktop(
+    const QString &desktopId,
+    const QJsonArray &argv,
+    qint64 lastAccessed,
+    const QString &source)
+{
+    QString desktopPath;
+    for (const QJsonValue &value : argv) {
+        const QString argument = value.toString();
+        if (!argument.endsWith(QStringLiteral(".desktop"))) {
+            continue;
+        }
+        if (QFileInfo(argument).isFile()) {
+            desktopPath = argument;
+            break;
+        }
+    }
+
+    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(
+        desktopPath.isEmpty() ? desktopId : desktopPath);
+    if (application.desktopFile.isEmpty()) {
+        return {};
+    }
+
+    RecentRecord record = recordFromPath(
+        application.desktopFile,
+        lastAccessed,
+        source,
+        QStringLiteral("Aplicativo"));
+    if (record.entry.filePath.isEmpty()) {
+        return {};
+    }
+    record.entry.fileName = application.name;
+    record.entry.fileExecutable = true;
+    record.entry.filePreviewUrl = QUrl();
+    record.entry.fileIconName = application.icon;
     return record;
 }
 
@@ -198,6 +237,9 @@ qint64 RecentController::parseTimestamp(const QString &value)
 
 QVector<RecentRecord> RecentController::loadFinder(const QString &path)
 {
+    if (path.trimmed().isEmpty()) {
+        return {};
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return {};
@@ -219,6 +261,9 @@ QVector<RecentRecord> RecentController::loadFinder(const QString &path)
 
 QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
 {
+    if (path.trimmed().isEmpty()) {
+        return {};
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return {};
@@ -239,14 +284,24 @@ QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
         if (object.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
             continue;
         }
-        if (object.value(QStringLiteral("kind")).toString() != QStringLiteral("file")) {
+        const QString kind = object.value(QStringLiteral("kind")).toString();
+        if (kind != QStringLiteral("file") && kind != QStringLiteral("desktop")) {
             continue;
         }
         const qint64 timestamp = objectInteger(object, QStringLiteral("timestamp_ms"), 0);
-        const RecentRecord record = recordFromPath(
-            object.value(QStringLiteral("target")).toString(),
-            timestamp,
-            QStringLiteral("launch"));
+        if (timestamp <= 0) {
+            continue;
+        }
+        const RecentRecord record = kind == QStringLiteral("desktop")
+            ? recordFromDesktop(
+                  object.value(QStringLiteral("target")).toString(),
+                  object.value(QStringLiteral("argv")).toArray(),
+                  timestamp,
+                  QStringLiteral("launch"))
+            : recordFromPath(
+                  object.value(QStringLiteral("target")).toString(),
+                  timestamp,
+                  QStringLiteral("launch"));
         if (!record.entry.filePath.isEmpty()) {
             records.append(record);
         }
@@ -256,6 +311,9 @@ QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path)
 
 QVector<RecentRecord> RecentController::loadXbel(const QString &path)
 {
+    if (path.trimmed().isEmpty()) {
+        return {};
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return {};

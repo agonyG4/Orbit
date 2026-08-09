@@ -2,6 +2,7 @@
 
 #include <QVector>
 #include <QJsonObject>
+#include <QJsonArray>
 
 #include "backend/backend_types.h"
 
@@ -38,6 +39,11 @@ private:
         const QString &kind = QString());
     static RecentRecord recordFromObject(
         const QJsonObject &object,
+        const QString &source);
+    static RecentRecord recordFromDesktop(
+        const QString &desktopId,
+        const QJsonArray &argv,
+        qint64 lastAccessed,
         const QString &source);
     static bool isPreviewablePath(const QString &path, bool isDirectory);
     static qint64 parseTimestamp(const QString &value);

@@ -1,11 +1,11 @@
 #include <QFile>
 #include <QDir>
 #include <QQmlComponent>
+#include <QQmlContext>
 #include <QQmlEngine>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
-#include <QVariant>
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
@@ -37,18 +37,18 @@ bool writeFile(const QString &path, const QByteArray &contents)
     return file.write(contents) == contents.size();
 }
 
-bool createQmlDependencyStubs(const QString &root, bool nativeRuntime = false)
+bool createQmlDependencyStubs(const QString &root, bool inheritedMarker = false)
 {
     const QDir directory(root);
     if (!directory.mkpath(QStringLiteral("Quickshell/Io"))) {
         return false;
     }
 
-    const QByteArray marker = nativeRuntime ? QByteArrayLiteral("1") : QByteArray();
+    const QByteArray marker = inheritedMarker ? QByteArrayLiteral("1") : QByteArray();
     const QByteArray quickshellQml = QByteArrayLiteral(
         "pragma Singleton\n"
         "import QtQml 2.15\n"
-        "QtObject { function env(name) { return name === \"ASTREA_EXPLORER_NATIVE_RUNTIME\" ? \"")
+        "QtObject { function env(name) { return name === \"ASTREA_EXPLORER_INHERITED_MARKER\" ? \"")
         + marker
         + QByteArrayLiteral("\" : \"\" } }\n");
 
@@ -146,6 +146,9 @@ void AppStateCompatibilityTest::publicQmlSingletonDelegatesToNativeIdentity()
     QVERIFY(applicationCpp.contains(QStringLiteral("NativeAppState")));
     QVERIFY(!applicationCpp.contains(QStringLiteral("setContextProperty(QStringLiteral(\"AppState\")")));
     QVERIFY(!applicationCpp.contains(QStringLiteral("\"AppState\",\n        &appState")));
+    const QString oldMarker = QStringLiteral("ASTREA_EXPLORER_") + QStringLiteral("NATIVE_RUNTIME");
+    QVERIFY(!appStateQml.contains(oldMarker));
+    QVERIFY(!applicationCpp.contains(oldMarker));
 }
 
 void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeRegistration()
@@ -154,12 +157,13 @@ void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeReg
     QVERIFY(stubs.isValid());
     QVERIFY(createQmlDependencyStubs(stubs.path()));
 
-    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-
+    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_INHERITED_MARKER");
+    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_INHERITED_MARKER");
+    qputenv("ASTREA_EXPLORER_INHERITED_MARKER", QByteArrayLiteral("1"));
     QQmlEngine engine;
     engine.addImportPath(stubs.path());
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("astreaNativeAppStateAvailable"), false);
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
@@ -183,9 +187,9 @@ void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeReg
     delete root;
 
     if (hadMarker) {
-        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
+        qputenv("ASTREA_EXPLORER_INHERITED_MARKER", previousMarker);
     } else {
-        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+        qunsetenv("ASTREA_EXPLORER_INHERITED_MARKER");
     }
 }
 
@@ -194,10 +198,6 @@ void AppStateCompatibilityTest::portalAndFileDialogPathsResolveThroughPublicAppS
     QTemporaryDir stubs;
     QVERIFY(stubs.isValid());
     QVERIFY(createQmlDependencyStubs(stubs.path()));
-
-    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
 
     QQmlEngine engine;
     engine.addImportPath(stubs.path());
@@ -210,11 +210,6 @@ void AppStateCompatibilityTest::portalAndFileDialogPathsResolveThroughPublicAppS
         QUrl::fromLocalFile(runtimeRoot + QStringLiteral("PortalDialog.qml")));
     QVERIFY2(portalDialog.isReady(), qPrintable(portalDialog.errorString()));
 
-    if (hadMarker) {
-        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
-    } else {
-        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    }
 }
 
 void AppStateCompatibilityTest::qmlAndNativeStatePropagateThroughNativeIdentity()
@@ -300,14 +295,13 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
         "NativeAppState",
         &facade);
 
-    QQmlEngine engine;
     QTemporaryDir stubs;
     QVERIFY(stubs.isValid());
-    QVERIFY(createQmlDependencyStubs(stubs.path(), true));
+    QVERIFY(createQmlDependencyStubs(stubs.path()));
+    QQmlEngine engine;
     engine.addImportPath(stubs.path());
-    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", QByteArrayLiteral("1"));
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("astreaNativeAppStateAvailable"), true);
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
@@ -366,11 +360,6 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QTRY_VERIFY(root->property("showHidden").toBool());
 
     delete root;
-    if (hadMarker) {
-        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
-    } else {
-        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
-    }
 }
 
 QTEST_MAIN(AppStateCompatibilityTest)

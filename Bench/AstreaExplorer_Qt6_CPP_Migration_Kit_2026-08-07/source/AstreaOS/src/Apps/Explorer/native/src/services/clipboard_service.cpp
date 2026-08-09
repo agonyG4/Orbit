@@ -66,6 +66,15 @@ bool ClipboardService::publishImage(const QImage &image) const
     return publish(imageMimeData(image));
 }
 
+bool ClipboardService::clear() const
+{
+    if (m_clipboard == nullptr) {
+        return false;
+    }
+    m_clipboard->clear(QClipboard::Clipboard);
+    return true;
+}
+
 bool ClipboardService::publish(std::unique_ptr<QMimeData> mimeData) const
 {
     if (m_clipboard == nullptr || mimeData == nullptr) {

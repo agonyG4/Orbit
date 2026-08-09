@@ -121,6 +121,9 @@ void FileOperationsController::setSelection(const QStringList &paths)
 
 void FileOperationsController::copySelection()
 {
+    if (m_selection.isEmpty()) {
+        return;
+    }
     m_clipboardFiles = m_selection;
     m_clipboardMode = QStringLiteral("copy");
     if (m_clipboardService != nullptr) {
@@ -131,6 +134,24 @@ void FileOperationsController::copySelection()
 
 void FileOperationsController::cutSelection()
 {
+    if (m_selection.isEmpty()) {
+        return;
+    }
+
+    QStringList sortedSelection = m_selection;
+    QStringList sortedClipboard = m_clipboardFiles;
+    std::sort(sortedSelection.begin(), sortedSelection.end());
+    std::sort(sortedClipboard.begin(), sortedClipboard.end());
+    if (m_clipboardMode == QStringLiteral("cut") && sortedSelection == sortedClipboard) {
+        m_clipboardFiles.clear();
+        m_clipboardMode.clear();
+        if (m_clipboardService != nullptr) {
+            m_clipboardService->clear();
+        }
+        emit clipboardChanged();
+        return;
+    }
+
     m_clipboardFiles = m_selection;
     m_clipboardMode = QStringLiteral("cut");
     if (m_clipboardService != nullptr) {

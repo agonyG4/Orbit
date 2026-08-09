@@ -36,6 +36,8 @@ public:
     bool busy() const;
     QString error() const;
 
+    static OpenWithApplication resolveDesktopEntry(const QString &desktopId);
+
     void setApplications(const QVector<OpenWithApplication> &applications);
     Q_INVOKABLE void discover(const QString &path);
     Q_INVOKABLE void selectApplication(const QString &id);

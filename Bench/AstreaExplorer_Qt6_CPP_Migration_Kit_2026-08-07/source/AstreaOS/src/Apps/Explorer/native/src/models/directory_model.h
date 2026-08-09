@@ -33,6 +33,7 @@ public:
         FileFilesystemRole,
         LastAccessedRole,
         RecentSourceRole,
+        FileIconNameRole,
     };
     Q_ENUM(Role)
 

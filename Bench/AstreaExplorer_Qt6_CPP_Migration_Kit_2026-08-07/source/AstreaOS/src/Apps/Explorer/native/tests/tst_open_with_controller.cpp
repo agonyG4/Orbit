@@ -1,3 +1,7 @@
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include "controllers/open_with_controller.h"
@@ -10,6 +14,7 @@ class OpenWithControllerTest final : public QObject
 
 private slots:
     void exposesTypedApplicationCatalogAndSelection();
+    void resolvesDesktopEntryForRecentHistory();
 };
 
 void OpenWithControllerTest::exposesTypedApplicationCatalogAndSelection()
@@ -28,6 +33,29 @@ void OpenWithControllerTest::exposesTypedApplicationCatalogAndSelection()
     controller.selectApplication(QStringLiteral("org.example.Viewer"));
     QCOMPARE(controller.selectedApplicationId(), QStringLiteral("org.example.Viewer"));
     QCOMPARE(controller.selectedApplication().name, QStringLiteral("Viewer"));
+}
+
+void OpenWithControllerTest::resolvesDesktopEntryForRecentHistory()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString desktopFile = QDir(directory.path()).filePath(QStringLiteral("example.desktop"));
+    QFile file(desktopFile);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QVERIFY(file.write(QByteArrayLiteral(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Example Application\n"
+        "Icon=example-icon\n"
+        "Exec=example\n")) > 0);
+    file.close();
+
+    const OpenWithApplication application =
+        OpenWithController::resolveDesktopEntry(desktopFile);
+    QCOMPARE(application.id, QStringLiteral("example"));
+    QCOMPARE(application.name, QStringLiteral("Example Application"));
+    QCOMPARE(application.icon, QStringLiteral("example-icon"));
+    QCOMPARE(application.desktopFile, QFileInfo(desktopFile).absoluteFilePath());
 }
 
 QTEST_GUILESS_MAIN(OpenWithControllerTest)

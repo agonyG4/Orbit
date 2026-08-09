@@ -107,6 +107,7 @@ struct DirectoryEntry
     QString fileFilesystem;
     qint64 lastAccessed = 0;
     QString recentSource;
+    QString fileIconName;
 };
 
 struct BackendError

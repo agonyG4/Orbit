@@ -10,8 +10,6 @@
 #include <QTextStream>
 #include <QUrl>
 #include <QString>
-#include <QVariant>
-
 #include <QDebug>
 
 #include <QtQml/qqml.h>
@@ -69,10 +67,6 @@ int ExplorerApplication::run(int argc, char **argv)
     if (runtimePaths.valid && !environment.contains(QStringLiteral("ASTREA_ROOT"))) {
         qputenv("ASTREA_ROOT", runtimePaths.root.toUtf8());
     }
-    if (runtimePaths.valid && !useBootstrap) {
-        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", QByteArrayLiteral("1"));
-    }
-
     using namespace Astrea::Explorer::Native::Backend;
     using namespace Astrea::Explorer::Native::Services;
     OneShotCliTransportOptions transportOptions;
@@ -134,6 +128,9 @@ int ExplorerApplication::run(int argc, char **argv)
         &appState);
 
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("astreaNativeAppStateAvailable"),
+        runtimePaths.valid && !useBootstrap);
 
     const bool loaded = useBootstrap
         ? loadBootstrap(engine)

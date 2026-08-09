@@ -1,5 +1,4 @@
 pragma Singleton
-import Quickshell
 import QtQuick 2.15
 import QtQml 2.15
 import "state" as StateModules
@@ -7,14 +6,20 @@ import "state" as StateModules
 QtObject {
     id: state
 
-    // The native executable sets this marker before loading QML. Legacy
-    // runtimes never import the native module and keep the transitional state
-    // modules below as their implementation.
-    readonly property bool nativeRuntimeRequested: Quickshell.env("ASTREA_EXPLORER_NATIVE_RUNTIME") === "1"
-    readonly property QtObject nativeAppState: state.nativeRuntimeRequested && state.nativeAppStateLoader.item
+    // This is process-local and is set only after the native executable has
+    // registered the NativeAppState singleton. Inherited environment state is
+    // deliberately not part of the capability boundary.
+    readonly property bool nativeCapabilityAvailable: Boolean(
+        typeof astreaNativeAppStateAvailable !== "undefined"
+        && astreaNativeAppStateAvailable === true)
+    readonly property bool nativeAdapterReady: state.nativeCapabilityAvailable
+        && state.nativeAppStateLoader.status === Loader.Ready
+        && state.nativeAppStateLoader.item
+        && state.nativeAppStateLoader.item.nativeFacade === true
+    readonly property QtObject nativeAppState: state.nativeAdapterReady
         ? state.nativeAppStateLoader.item
         : state.legacyAppStateAdapter
-    readonly property bool nativeNavigationActive: state.nativeRuntimeRequested
+    readonly property bool nativeNavigationActive: state.nativeAdapterReady
     readonly property bool isPortalDialog: nativeAppState.isPortalDialog
     readonly property string homePath: nativeAppState.homePath
     readonly property string backendPath: nativeAppState.backendPath
@@ -172,7 +177,7 @@ QtObject {
 
     property Loader nativeAppStateLoader: Loader {
         id: nativeAppStateLoader
-        active: state.nativeRuntimeRequested
+        active: state.nativeCapabilityAvailable
         source: "compatibility/NativeAppStateAdapter.qml"
     }
 

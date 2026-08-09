@@ -9,6 +9,40 @@
 
 namespace Astrea::Explorer::Native::Backend {
 
+namespace {
+
+OpenWithApplication readDesktopEntry(const QString &desktopFile)
+{
+    const QFileInfo info(desktopFile);
+    if (!info.isFile()) {
+        return {};
+    }
+
+    QSettings settings(info.absoluteFilePath(), QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("Desktop Entry"));
+    const QString type = settings.value(QStringLiteral("Type")).toString();
+    const QString exec = settings.value(QStringLiteral("Exec")).toString();
+    if (type != QStringLiteral("Application")
+        || exec.isEmpty()
+        || settings.value(QStringLiteral("Hidden"), false).toBool()) {
+        settings.endGroup();
+        return {};
+    }
+
+    const QString id = info.completeBaseName();
+    const OpenWithApplication application {
+        id,
+        settings.value(QStringLiteral("Name"), id).toString(),
+        settings.value(QStringLiteral("Icon")).toString(),
+        info.absoluteFilePath(),
+        false,
+    };
+    settings.endGroup();
+    return application;
+}
+
+} // namespace
+
 OpenWithController::OpenWithController(
     Services::LaunchService *launchService,
     QObject *parent)
@@ -63,6 +97,39 @@ QString OpenWithController::error() const
     return m_error;
 }
 
+OpenWithApplication OpenWithController::resolveDesktopEntry(const QString &desktopId)
+{
+    const QFileInfo candidate(desktopId);
+    if (candidate.isFile()) {
+        return readDesktopEntry(candidate.absoluteFilePath());
+    }
+
+    QString fileName = desktopId.trimmed();
+    if (fileName.isEmpty()) {
+        return {};
+    }
+    if (!fileName.endsWith(QStringLiteral(".desktop"))) {
+        fileName += QStringLiteral(".desktop");
+    }
+
+    const QStringList applicationRoots = QStandardPaths::standardLocations(
+        QStandardPaths::ApplicationsLocation);
+    for (const QString &root : applicationRoots) {
+        if (root.isEmpty()) {
+            continue;
+        }
+        QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
+                              QDirIterator::Subdirectories);
+        while (iterator.hasNext()) {
+            const QString desktopFile = iterator.next();
+            if (QFileInfo(desktopFile).fileName() == fileName) {
+                return readDesktopEntry(desktopFile);
+            }
+        }
+    }
+    return {};
+}
+
 void OpenWithController::setApplications(
     const QVector<OpenWithApplication> &applicationsValue)
 {
@@ -89,10 +156,17 @@ void OpenWithController::discover(const QString &path)
     const QStringList applicationRoots = QStandardPaths::standardLocations(
         QStandardPaths::ApplicationsLocation);
     for (const QString &root : applicationRoots) {
+        if (root.isEmpty()) {
+            continue;
+        }
         QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
                               QDirIterator::Subdirectories);
         while (iterator.hasNext()) {
             const QString desktopFile = iterator.next();
+            const OpenWithApplication application = resolveDesktopEntry(desktopFile);
+            if (application.desktopFile.isEmpty()) {
+                continue;
+            }
             QSettings settings(desktopFile, QSettings::IniFormat);
             settings.beginGroup(QStringLiteral("Desktop Entry"));
             if (settings.value(QStringLiteral("Type")).toString() != QStringLiteral("Application")
@@ -107,12 +181,7 @@ void OpenWithController::discover(const QString &path)
                 settings.endGroup();
                 continue;
             }
-            const QString id = QFileInfo(desktopFile).completeBaseName();
-            discovered.append({id,
-                               settings.value(QStringLiteral("Name"), id).toString(),
-                               settings.value(QStringLiteral("Icon")).toString(),
-                               desktopFile,
-                               false});
+            discovered.append(application);
             settings.endGroup();
         }
     }

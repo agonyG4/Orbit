@@ -17,6 +17,8 @@ class RecentControllerTest final : public QObject
 private slots:
     void mergesNewestRecordAndSortsByAccess();
     void loadsFinderLaunchAndXbelSources();
+    void loadsDesktopLaunchRecordsAndPreservesAccessMetadata();
+    void ignoresInvalidRecentRecordsAndDoesNotNeedBackend();
     void limitsMergedResults();
 };
 
@@ -63,9 +65,15 @@ void RecentControllerTest::loadsFinderLaunchAndXbelSources()
     const QString finderFile = QDir(root).filePath(QStringLiteral("finder.txt"));
     const QString launchFile = QDir(root).filePath(QStringLiteral("launch.txt"));
     const QString xbelFile = QDir(root).filePath(QStringLiteral("xbel.png"));
-    QVERIFY(QFile(finderFile).open(QIODevice::WriteOnly));
-    QVERIFY(QFile(launchFile).open(QIODevice::WriteOnly));
-    QVERIFY(QFile(xbelFile).open(QIODevice::WriteOnly));
+    QFile finderFixture(finderFile);
+    QFile launchFixture(launchFile);
+    QFile xbelFixture(xbelFile);
+    QVERIFY(finderFixture.open(QIODevice::WriteOnly));
+    QVERIFY(launchFixture.open(QIODevice::WriteOnly));
+    QVERIFY(xbelFixture.open(QIODevice::WriteOnly));
+    finderFixture.close();
+    launchFixture.close();
+    xbelFixture.close();
     QFile finder(finderPath);
     QVERIFY(finder.open(QIODevice::WriteOnly));
     const QJsonArray finderItems {
@@ -113,6 +121,109 @@ void RecentControllerTest::loadsFinderLaunchAndXbelSources()
     QCOMPARE(entries.at(2).filePath, finderFile);
     QCOMPARE(entries.at(2).recentSource, QStringLiteral("finder"));
     QVERIFY(!entries.at(0).filePreviewUrl.isEmpty());
+}
+
+void RecentControllerTest::loadsDesktopLaunchRecordsAndPreservesAccessMetadata()
+{
+    RecentController controller;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString desktopFile = QDir(directory.path()).filePath(QStringLiteral("example.desktop"));
+    QFile desktop(desktopFile);
+    QVERIFY(desktop.open(QIODevice::WriteOnly));
+    QVERIFY(desktop.write(QByteArrayLiteral(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Example Application\n"
+        "Icon=example-icon\n"
+        "Exec=example\n")) > 0);
+    desktop.close();
+
+    const QString historyPath = QDir(directory.path()).filePath(QStringLiteral("history.jsonl"));
+    QFile history(historyPath);
+    QVERIFY(history.open(QIODevice::WriteOnly));
+    const QJsonObject record {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("desktop")},
+        {QStringLiteral("target"), QStringLiteral("example")},
+        {QStringLiteral("argv"), QJsonArray {QStringLiteral("gio"), QStringLiteral("launch"), desktopFile}},
+        {QStringLiteral("timestamp_ms"), 456},
+    };
+    QVERIFY(history.write(QJsonDocument(record).toJson(QJsonDocument::Compact) + '\n') > 0);
+    history.close();
+
+    RecentSourcePaths paths;
+    paths.launchHistoryPath = historyPath;
+    const QVector<DirectoryEntry> entries = controller.load(paths);
+
+    QCOMPARE(entries.size(), 1);
+    const DirectoryEntry &entry = entries.constFirst();
+    QCOMPARE(entry.filePath, QFileInfo(desktopFile).absoluteFilePath());
+    QCOMPARE(entry.fileName, QStringLiteral("Example Application"));
+    QCOMPARE(entry.fileKind, QStringLiteral("Aplicativo"));
+    QCOMPARE(entry.fileIconName, QStringLiteral("example-icon"));
+    QCOMPARE(entry.lastAccessed, 456);
+    QCOMPARE(entry.fileModified.toMSecsSinceEpoch(), 456);
+    QCOMPARE(entry.fileUrl, QUrl::fromLocalFile(QFileInfo(desktopFile).absoluteFilePath()));
+    QVERIFY(entry.fileExecutable);
+}
+
+void RecentControllerTest::ignoresInvalidRecentRecordsAndDoesNotNeedBackend()
+{
+    RecentController controller;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString existingPath = QDir(directory.path()).filePath(QStringLiteral("existing.txt"));
+    QFile existing(existingPath);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    existing.close();
+    const QString historyPath = QDir(directory.path()).filePath(QStringLiteral("history.jsonl"));
+    QFile history(historyPath);
+    QVERIFY(history.open(QIODevice::WriteOnly));
+    QVERIFY(history.write(QByteArrayLiteral("not-json\n")) > 0);
+    const QJsonObject missing {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("file")},
+        {QStringLiteral("target"), QDir(directory.path()).filePath(QStringLiteral("missing.txt"))},
+        {QStringLiteral("timestamp_ms"), 900},
+    };
+    const QJsonObject validOld {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("file")},
+        {QStringLiteral("target"), existingPath},
+        {QStringLiteral("timestamp_ms"), 100},
+    };
+    const QJsonObject validNew {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("file")},
+        {QStringLiteral("target"), existingPath},
+        {QStringLiteral("timestamp_ms"), 200},
+    };
+    const QJsonObject malformedTimestamp {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("file")},
+        {QStringLiteral("target"), existingPath},
+        {QStringLiteral("timestamp_ms"), QStringLiteral("not-a-timestamp")},
+    };
+    const QJsonObject missingTimestamp {
+        {QStringLiteral("status"), QStringLiteral("ok")},
+        {QStringLiteral("kind"), QStringLiteral("file")},
+        {QStringLiteral("target"), existingPath},
+    };
+    QVERIFY(history.write(QJsonDocument(missing).toJson(QJsonDocument::Compact) + '\n') > 0);
+    QVERIFY(history.write(QJsonDocument(validOld).toJson(QJsonDocument::Compact) + '\n') > 0);
+    QVERIFY(history.write(QJsonDocument(validNew).toJson(QJsonDocument::Compact) + '\n') > 0);
+    QVERIFY(history.write(QJsonDocument(malformedTimestamp).toJson(QJsonDocument::Compact) + '\n') > 0);
+    QVERIFY(history.write(QJsonDocument(missingTimestamp).toJson(QJsonDocument::Compact) + '\n') > 0);
+    history.close();
+
+    RecentSourcePaths paths;
+    paths.launchHistoryPath = historyPath;
+    const QVector<DirectoryEntry> entries = controller.load(paths);
+
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.constFirst().filePath, QFileInfo(existingPath).absoluteFilePath());
+    QCOMPARE(entries.constFirst().lastAccessed, 200);
 }
 
 void RecentControllerTest::limitsMergedResults()

@@ -37,6 +37,7 @@ DirectoryEntry makeEntry(
     entry.fileSize = 42;
     entry.fileModified = QDateTime::fromMSecsSinceEpoch(1723265945000, QTimeZone::UTC);
     entry.fileKind = isDirectory ? QStringLiteral("Folder") : QStringLiteral("TXT");
+    entry.fileIconName = QStringLiteral("text-x-generic");
     entry.filePreviewUrl = QUrl(QStringLiteral("file:///tmp/preview.png"));
     entry.fileRemote = true;
     entry.fileMetadataLimited = true;
@@ -68,6 +69,7 @@ void DirectoryModelTest::exposesLegacyRolesAndValues()
         QByteArrayLiteral("fileFilesystem"),
         QByteArrayLiteral("lastAccessed"),
         QByteArrayLiteral("recentSource"),
+        QByteArrayLiteral("fileIconName"),
     };
     QCOMPARE(roles.size(), expectedRoles.size());
     for (const QByteArray &roleName : expectedRoles) {
@@ -85,6 +87,7 @@ void DirectoryModelTest::exposesLegacyRolesAndValues()
     QCOMPARE(model.data(index, DirectoryModel::FileSizeRole).toLongLong(), entry.fileSize);
     QCOMPARE(model.data(index, DirectoryModel::FileModifiedRole).toDateTime(), entry.fileModified);
     QCOMPARE(model.data(index, DirectoryModel::FileKindRole).toString(), entry.fileKind);
+    QCOMPARE(model.data(index, DirectoryModel::FileIconNameRole).toString(), entry.fileIconName);
     QCOMPARE(model.data(index, DirectoryModel::FilePreviewUrlRole).toUrl(), entry.filePreviewUrl);
     QCOMPARE(model.data(index, DirectoryModel::FileRemoteRole).toBool(), entry.fileRemote);
     QCOMPARE(

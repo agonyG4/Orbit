@@ -20,6 +20,7 @@ public:
 
     bool publishFilePaths(const QStringList &paths) const;
     bool publishImage(const QImage &image) const;
+    bool clear() const;
 
 private:
     bool publish(std::unique_ptr<QMimeData> mimeData) const;
