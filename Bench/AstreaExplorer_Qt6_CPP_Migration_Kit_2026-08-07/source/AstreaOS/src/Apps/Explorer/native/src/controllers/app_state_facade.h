@@ -199,6 +199,9 @@ public:
     Q_INVOKABLE int tabIndexById(int tabId) const;
     Q_INVOKABLE void moveTab(int fromIndex, int toIndex);
     Q_INVOKABLE BackendRequestId refreshCurrentFolder();
+    Q_INVOKABLE bool replaceFileModel(const QVariantList &items);
+    Q_INVOKABLE int updateFileModelMetadata(const QVariantList &items);
+    Q_INVOKABLE int removePathsFromFileModel(const QStringList &paths);
     Q_INVOKABLE void increaseZoom();
     Q_INVOKABLE void decreaseZoom();
     Q_INVOKABLE void resetZoom();
@@ -301,7 +304,7 @@ signals:
     void deviceStateChanged();
 
 private slots:
-    void handleModelReset();
+    void handleModelChanged();
     void handleListingOptionsChanged();
     void persistCurrentPath();
 

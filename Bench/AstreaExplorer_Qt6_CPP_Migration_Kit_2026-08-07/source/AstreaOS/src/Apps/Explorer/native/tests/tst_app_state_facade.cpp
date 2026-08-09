@@ -23,6 +23,7 @@ private slots:
     void exposesResolverAndDialogCompatibility();
     void propagatesNavigationAndBackendFailure();
     void preservesSelectionAcrossModelRefresh();
+    void delegatesQmlModelMutationsToNativeBoundary();
 };
 
 struct FacadeFixture
@@ -227,6 +228,45 @@ void AppStateFacadeTest::preservesSelectionAcrossModelRefresh()
     fixture.model.setEntries({refreshed, first}, 2);
     QCOMPARE(facade.selectedFile(), QStringLiteral("second.txt"));
     QCOMPARE(facade.selectedFiles(), QStringList {QStringLiteral("second.txt")});
+}
+
+void AppStateFacadeTest::delegatesQmlModelMutationsToNativeBoundary()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model);
+
+    QVariantMap first;
+    first.insert(QStringLiteral("fileName"), QStringLiteral("first.txt"));
+    first.insert(QStringLiteral("filePath"), QStringLiteral("/fixture/first.txt"));
+    first.insert(QStringLiteral("fileKind"), QStringLiteral("TXT"));
+    QVariantMap second;
+    second.insert(QStringLiteral("fileName"), QStringLiteral("second.txt"));
+    second.insert(QStringLiteral("filePath"), QStringLiteral("/fixture/second.txt"));
+    second.insert(QStringLiteral("fileKind"), QStringLiteral("TXT"));
+
+    QSignalSpy revisionSpy(&facade, &AppStateFacade::fileModelRevisionChanged);
+    QVERIFY(facade.replaceFileModel({first, second}));
+    QCOMPARE(fixture.model.count(), 2);
+    facade.selectByName(QStringLiteral("second.txt"));
+
+    QVariantMap update;
+    update.insert(QStringLiteral("filePath"), QStringLiteral("/fixture/first.txt"));
+    update.insert(QStringLiteral("fileKind"), QStringLiteral("IMAGE"));
+    QCOMPARE(facade.updateFileModelMetadata({update}), 1);
+    QCOMPARE(
+        fixture.model.data(fixture.model.index(0, 0), DirectoryModel::FileKindRole).toString(),
+        QStringLiteral("IMAGE"));
+    QVERIFY(revisionSpy.count() >= 2);
+
+    QCOMPARE(
+        facade.removePathsFromFileModel({QStringLiteral("/fixture/second.txt")}),
+        1);
+    QCOMPARE(fixture.model.count(), 1);
+    QVERIFY(facade.selectedFiles().isEmpty());
+    QCOMPARE(facade.selectedFile(), QString());
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

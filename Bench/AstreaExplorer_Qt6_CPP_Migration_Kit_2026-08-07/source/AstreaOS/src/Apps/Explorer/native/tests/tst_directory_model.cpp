@@ -17,6 +17,8 @@ private slots:
     void rejectsStaleGenerations();
     void acceptsSortOrderReplacement();
     void updatesOnlyMatchingPreview();
+    void updatesMetadataWithoutResettingUnrelatedEntries();
+    void removesPathsWithStableRowsAndGenerationChecks();
     void exposesRecentOnlyRoles();
 };
 
@@ -205,6 +207,63 @@ void DirectoryModelTest::updatesOnlyMatchingPreview()
     QCOMPARE(changedSpy.count(), 1);
     QCOMPARE(model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole).toUrl(), oldPreview);
     QCOMPARE(model.data(model.index(1, 0), DirectoryModel::FilePreviewUrlRole).toUrl(), newPreview);
+}
+
+void DirectoryModelTest::updatesMetadataWithoutResettingUnrelatedEntries()
+{
+    DirectoryModel model;
+    DirectoryEntry first = makeEntry(
+        QStringLiteral("first.txt"), QStringLiteral("/tmp/first.txt"));
+    DirectoryEntry second = makeEntry(
+        QStringLiteral("second.txt"), QStringLiteral("/tmp/second.txt"));
+    first.fileKind = QStringLiteral("TXT");
+    second.fileKind = QStringLiteral("TXT");
+    QVERIFY(model.applyEntries({first, second}, 7));
+
+    QSignalSpy changedSpy(&model, &QAbstractItemModel::dataChanged);
+    QVariantMap update;
+    update.insert(QStringLiteral("filePath"), second.filePath);
+    update.insert(QStringLiteral("fileKind"), QStringLiteral("IMAGE"));
+    update.insert(QStringLiteral("fileSize"), 99);
+    update.insert(
+        QStringLiteral("filePreviewUrl"), QStringLiteral("file:///tmp/second-preview.png"));
+
+    QCOMPARE(model.updateMetadata({update}, 7), 1);
+    QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(
+        model.data(model.index(0, 0), DirectoryModel::FileKindRole).toString(),
+        QStringLiteral("TXT"));
+    QCOMPARE(
+        model.data(model.index(1, 0), DirectoryModel::FileKindRole).toString(),
+        QStringLiteral("IMAGE"));
+    QCOMPARE(model.data(model.index(1, 0), DirectoryModel::FileSizeRole).toLongLong(), 99);
+    QCOMPARE(
+        model.data(model.index(1, 0), DirectoryModel::FilePreviewUrlRole).toUrl(),
+        QUrl(QStringLiteral("file:///tmp/second-preview.png")));
+    QVERIFY(changedSpy.constFirst().at(2).value<QVector<int>>().contains(
+        DirectoryModel::FileKindRole));
+    QVERIFY(model.updateMetadata({update}, 6) == 0);
+}
+
+void DirectoryModelTest::removesPathsWithStableRowsAndGenerationChecks()
+{
+    DirectoryModel model;
+    QVERIFY(model.applyEntries(
+        {makeEntry(QStringLiteral("first"), QStringLiteral("/tmp/first")),
+         makeEntry(QStringLiteral("second"), QStringLiteral("/tmp/second")),
+         makeEntry(QStringLiteral("third"), QStringLiteral("/tmp/third"))},
+        4));
+
+    QSignalSpy rowsRemovedSpy(&model, &QAbstractItemModel::rowsRemoved);
+    QSignalSpy countSpy(&model, &DirectoryModel::countChanged);
+    QCOMPARE(
+        model.removePaths({QStringLiteral("/tmp/second"), QStringLiteral("/tmp/missing")}, 4),
+        1);
+    QCOMPARE(model.paths(), QVector<QString>({QStringLiteral("/tmp/first"), QStringLiteral("/tmp/third")}));
+    QCOMPARE(rowsRemovedSpy.count(), 1);
+    QCOMPARE(countSpy.count(), 1);
+    QCOMPARE(model.removePaths({QStringLiteral("/tmp/first")}, 3), 0);
+    QCOMPARE(model.count(), 2);
 }
 
 void DirectoryModelTest::exposesRecentOnlyRoles()

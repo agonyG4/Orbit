@@ -2,14 +2,19 @@ pragma Singleton
 import Quickshell
 import QtQuick 2.15
 import QtQml 2.15
-import Astrea.Explorer.Native 1.0
 import "state" as StateModules
 
 QtObject {
     id: state
 
-    readonly property QtObject nativeAppState: NativeAppState
-    readonly property bool nativeNavigationActive: true
+    // The native executable sets this marker before loading QML. Legacy
+    // runtimes never import the native module and keep the transitional state
+    // modules below as their implementation.
+    readonly property bool nativeRuntimeRequested: Quickshell.env("ASTREA_EXPLORER_NATIVE_RUNTIME") === "1"
+    readonly property QtObject nativeAppState: state.nativeRuntimeRequested && state.nativeAppStateLoader.item
+        ? state.nativeAppStateLoader.item
+        : state.legacyAppStateAdapter
+    readonly property bool nativeNavigationActive: state.nativeRuntimeRequested
     readonly property bool isPortalDialog: nativeAppState.isPortalDialog
     readonly property string homePath: nativeAppState.homePath
     readonly property string backendPath: nativeAppState.backendPath
@@ -161,6 +166,16 @@ QtObject {
         app: state
     }
 
+    property QtObject legacyAppStateAdapter: LegacyAppStateAdapter {
+        app: state
+    }
+
+    property Loader nativeAppStateLoader: Loader {
+        id: nativeAppStateLoader
+        active: state.nativeRuntimeRequested
+        source: "compatibility/NativeAppStateAdapter.qml"
+    }
+
     property Connections nativeStateConnections: Connections {
         target: state.nativeAppState
 
@@ -290,6 +305,8 @@ QtObject {
     }
 
     Component.onCompleted: {
+        if (!state.nativeNavigationActive)
+            navigation.initialize()
         deferredStartupTimer.restart()
     }
 
@@ -331,9 +348,9 @@ QtObject {
     function rebuildBreadcrumbs() { return nativeAppState.breadcrumbParts }
     function refreshCurrentFolder() { return nativeAppState.refreshCurrentFolder() }
     function loadDirectory() { return nativeAppState.refreshCurrentFolder() }
-    function replaceFileModel(items) { return navigationObj.replaceFileModel(items) }
-    function updateFileModelMetadata(items) { return navigationObj.updateFileModelMetadata(items) }
-    function removePathsFromFileModel(paths) { return navigationObj.removePathsFromFileModel(paths) }
+    function replaceFileModel(items) { return nativeAppState.replaceFileModel(items) }
+    function updateFileModelMetadata(items) { return nativeAppState.updateFileModelMetadata(items) }
+    function removePathsFromFileModel(paths) { return nativeAppState.removePathsFromFileModel(paths) }
     function selectedItem() { return nativeAppState.selectedItem() }
     function fileMatchesDialogFilter(fileName, isDir) {
         return nativeAppState.fileMatchesDialogFilter(fileName, isDir)

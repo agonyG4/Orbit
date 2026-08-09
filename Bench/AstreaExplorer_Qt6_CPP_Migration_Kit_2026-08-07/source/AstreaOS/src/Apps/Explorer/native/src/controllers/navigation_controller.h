@@ -5,6 +5,7 @@
 #include <QStringList>
 
 #include "backend/rust_backend_client.h"
+#include "controllers/recent_controller.h"
 #include "models/directory_model.h"
 #include "services/directory_watch_service.h"
 
@@ -63,6 +64,9 @@ public:
     void setSortAscending(bool sortAscending);
     void setFoldersFirst(bool foldersFirst);
     void setPreviews(bool previews);
+    void setRecentController(
+        RecentController *controller,
+        const RecentSourcePaths &sourcePaths = {});
 
     Q_INVOKABLE BackendRequestId navigateTo(const QString &path);
     Q_INVOKABLE BackendRequestId submitSearch(
@@ -81,6 +85,9 @@ public:
     Q_INVOKABLE int tabIndexById(int tabId) const;
     Q_INVOKABLE void moveTab(int fromIndex, int toIndex);
     Q_INVOKABLE BackendRequestId refreshCurrentFolder();
+    Q_INVOKABLE bool replaceFileModel(const QVariantList &items);
+    Q_INVOKABLE int updateFileModelMetadata(const QVariantList &items);
+    Q_INVOKABLE int removePathsFromFileModel(const QStringList &paths);
 
 signals:
     void currentPathChanged();
@@ -163,6 +170,8 @@ private:
     bool m_sortAscending = true;
     bool m_foldersFirst = true;
     bool m_previews = true;
+    RecentController *m_recentController = nullptr;
+    RecentSourcePaths m_recentSourcePaths;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

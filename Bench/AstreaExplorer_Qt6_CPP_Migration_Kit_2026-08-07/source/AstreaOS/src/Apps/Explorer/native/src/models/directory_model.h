@@ -2,6 +2,7 @@
 
 #include <QAbstractListModel>
 #include <QHash>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
 
@@ -50,6 +51,9 @@ public:
         const QString &filePath,
         const QUrl &previewUrl,
         quint64 generation);
+    int updateMetadata(const QVariantList &items, quint64 generation);
+    int removePaths(const QStringList &paths, quint64 generation);
+    static QVector<DirectoryEntry> entriesFromVariantList(const QVariantList &items);
     QVector<QString> paths() const;
 
     quint64 generation() const;

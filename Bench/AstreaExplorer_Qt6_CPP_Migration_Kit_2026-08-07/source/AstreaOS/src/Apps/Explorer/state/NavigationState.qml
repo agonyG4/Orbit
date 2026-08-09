@@ -8,6 +8,7 @@ QtObject {
 
     property QtObject app
     readonly property bool nativeOwned: app && app.nativeNavigationActive
+    readonly property bool legacyProcessExecutionEnabled: !nativeOwned
     property string currentPath: ""
     property var history: []
     property int historyIdx: -1
@@ -32,6 +33,24 @@ QtObject {
     property int fileModelRevision: 0
     property bool fileModelFilling: false
     property string watchedDirectoryPath: ""
+
+    function stopTransitionalProcesses() {
+        dirListProcess.running = false
+        searchProcess.running = false
+        directoryWatchProcess.running = false
+        directoryRefreshDebounce.stop()
+        directoryWatchRestartTimer.stop()
+    }
+
+    onLegacyProcessExecutionEnabledChanged: {
+        if (!legacyProcessExecutionEnabled)
+            stopTransitionalProcesses()
+    }
+
+    Component.onCompleted: {
+        if (!legacyProcessExecutionEnabled)
+            stopTransitionalProcesses()
+    }
 
     function initialize() {
         if (nativeOwned)
@@ -266,7 +285,7 @@ QtObject {
     }
 
     function startDirectoryWatch(path) {
-        if (nativeOwned) {
+        if (!legacyProcessExecutionEnabled) {
             stopDirectoryWatch()
             return
         }
@@ -310,7 +329,7 @@ QtObject {
 
     function submitSearch(query) {
         var trimmed = (query || "").trim()
-        if (nativeOwned) {
+        if (!legacyProcessExecutionEnabled) {
             app.submitSearch(trimmed)
             return
         }
@@ -369,7 +388,7 @@ QtObject {
     }
 
     function loadDirectory() {
-        if (nativeOwned)
+        if (!legacyProcessExecutionEnabled)
             return
         if (!currentPath)
             return

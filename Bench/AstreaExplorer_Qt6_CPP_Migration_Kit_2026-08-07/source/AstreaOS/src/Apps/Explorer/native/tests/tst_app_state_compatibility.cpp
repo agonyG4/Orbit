@@ -1,7 +1,9 @@
 #include <QFile>
+#include <QDir>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QVariant>
 #include <QtTest>
@@ -26,6 +28,84 @@ QString readFile(const QString &path)
     return QString::fromUtf8(file.readAll());
 }
 
+bool writeFile(const QString &path, const QByteArray &contents)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    return file.write(contents) == contents.size();
+}
+
+bool createQmlDependencyStubs(const QString &root, bool nativeRuntime = false)
+{
+    const QDir directory(root);
+    if (!directory.mkpath(QStringLiteral("Quickshell/Io"))) {
+        return false;
+    }
+
+    const QByteArray marker = nativeRuntime ? QByteArrayLiteral("1") : QByteArray();
+    const QByteArray quickshellQml = QByteArrayLiteral(
+        "pragma Singleton\n"
+        "import QtQml 2.15\n"
+        "QtObject { function env(name) { return name === \"ASTREA_EXPLORER_NATIVE_RUNTIME\" ? \"")
+        + marker
+        + QByteArrayLiteral("\" : \"\" } }\n");
+
+    return writeFile(
+               directory.filePath(QStringLiteral("Quickshell/qmldir")),
+               QByteArrayLiteral(
+                   "module Quickshell\n"
+                   "singleton Quickshell 1.0 Quickshell.qml\n"
+                   "FileView 1.0 FileView.qml\n"))
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/Quickshell.qml")),
+               quickshellQml)
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/FileView.qml")),
+               QByteArrayLiteral(
+                   "import QtQml 2.15\n"
+                   "QtObject {\n"
+                   "    property string path: \"\"\n"
+                   "    property bool preload: false\n"
+                   "    property bool blockLoading: false\n"
+                   "    property bool watchChanges: false\n"
+                   "    property bool printErrors: false\n"
+                   "    signal fileChanged()\n"
+                   "}\n"))
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/Io/qmldir")),
+               QByteArrayLiteral(
+                   "module Quickshell.Io\n"
+                   "Process 1.0 Process.qml\n"
+                   "StdioCollector 1.0 StdioCollector.qml\n"
+                   "SplitParser 1.0 SplitParser.qml\n"))
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/Io/Process.qml")),
+               QByteArrayLiteral(
+                   "import QtQml 2.15\n"
+                   "QtObject {\n"
+                   "    property var command: []\n"
+                   "    property bool running: false\n"
+                   "    property bool stdinEnabled: false\n"
+                   "    property QtObject stdout: null\n"
+                   "    property QtObject stderr: null\n"
+                   "    function write(data) {}\n"
+                   "    signal started()\n"
+                   "    signal exited(int exitCode)\n"
+                   "}\n"))
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/Io/StdioCollector.qml")),
+               QByteArrayLiteral(
+                   "import QtQml 2.15\n"
+                   "QtObject { property string text: \"\"; signal streamFinished() }\n"))
+        && writeFile(
+               directory.filePath(QStringLiteral("Quickshell/Io/SplitParser.qml")),
+               QByteArrayLiteral(
+                   "import QtQml 2.15\n"
+                   "QtObject { signal read(string data) }\n"));
+}
+
 DirectoryEntry bridgeEntry(const QString &name, const QString &path)
 {
     DirectoryEntry entry;
@@ -43,6 +123,8 @@ class AppStateCompatibilityTest final : public QObject
 
 private slots:
     void publicQmlSingletonDelegatesToNativeIdentity();
+    void legacyRuntimeLoadsPublicAppStateWithoutNativeRegistration();
+    void portalAndFileDialogPathsResolveThroughPublicAppState();
     void qmlAndNativeStatePropagateThroughNativeIdentity();
     void publicAppStateExposesNativeStateAfterPostLoadEvent();
 };
@@ -53,8 +135,9 @@ void AppStateCompatibilityTest::publicQmlSingletonDelegatesToNativeIdentity()
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     const QString appStateQml = readFile(qmlPath);
     QVERIFY2(!appStateQml.isEmpty(), qPrintable(qmlPath));
-    QVERIFY(appStateQml.contains(QStringLiteral("import Astrea.Explorer.Native 1.0")));
-    QVERIFY(appStateQml.contains(QStringLiteral("NativeAppState")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("import Astrea.Explorer.Native 1.0")));
+    QVERIFY(appStateQml.contains(QStringLiteral("compatibility/NativeAppStateAdapter.qml")));
+    QVERIFY(appStateQml.contains(QStringLiteral("LegacyAppStateAdapter")));
 
     const QString applicationCpp = readFile(
         QStringLiteral(ASTREA_EXPLORER_NATIVE_SOURCE_ROOT)
@@ -63,6 +146,75 @@ void AppStateCompatibilityTest::publicQmlSingletonDelegatesToNativeIdentity()
     QVERIFY(applicationCpp.contains(QStringLiteral("NativeAppState")));
     QVERIFY(!applicationCpp.contains(QStringLiteral("setContextProperty(QStringLiteral(\"AppState\")")));
     QVERIFY(!applicationCpp.contains(QStringLiteral("\"AppState\",\n        &appState")));
+}
+
+void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeRegistration()
+{
+    QTemporaryDir stubs;
+    QVERIFY(stubs.isValid());
+    QVERIFY(createQmlDependencyStubs(stubs.path()));
+
+    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+
+    QQmlEngine engine;
+    engine.addImportPath(stubs.path());
+    const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
+        + QStringLiteral("/Apps/Explorer/AppState.qml");
+    QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject *root = component.create();
+    QVERIFY2(root != nullptr, qPrintable(component.errorString()));
+
+    QCOMPARE(root->property("nativeNavigationActive").toBool(), false);
+    QVERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
+    QObject *navigation = root->property("navigation").value<QObject *>();
+    QVERIFY(navigation != nullptr);
+    QCOMPARE(navigation->property("legacyProcessExecutionEnabled").toBool(), true);
+
+    QTimer::singleShot(0, root, [root]() {
+        QMetaObject::invokeMethod(
+            root,
+            "navigateTo",
+            Q_ARG(QVariant, QVariant(QStringLiteral("/legacy-fixture"))));
+    });
+    QTRY_COMPARE(root->property("currentPath").toString(), QStringLiteral("/legacy-fixture"));
+    delete root;
+
+    if (hadMarker) {
+        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
+    } else {
+        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    }
+}
+
+void AppStateCompatibilityTest::portalAndFileDialogPathsResolveThroughPublicAppState()
+{
+    QTemporaryDir stubs;
+    QVERIFY(stubs.isValid());
+    QVERIFY(createQmlDependencyStubs(stubs.path()));
+
+    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+
+    QQmlEngine engine;
+    engine.addImportPath(stubs.path());
+    const QString runtimeRoot = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
+        + QStringLiteral("/Apps/Explorer/");
+    QQmlComponent fileDialog(&engine, QUrl::fromLocalFile(runtimeRoot + QStringLiteral("FileDialog.qml")));
+    QVERIFY2(fileDialog.isReady(), qPrintable(fileDialog.errorString()));
+    QQmlComponent portalDialog(
+        &engine,
+        QUrl::fromLocalFile(runtimeRoot + QStringLiteral("PortalDialog.qml")));
+    QVERIFY2(portalDialog.isReady(), qPrintable(portalDialog.errorString()));
+
+    if (hadMarker) {
+        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
+    } else {
+        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    }
 }
 
 void AppStateCompatibilityTest::qmlAndNativeStatePropagateThroughNativeIdentity()
@@ -149,20 +301,31 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
         &facade);
 
     QQmlEngine engine;
+    QTemporaryDir stubs;
+    QVERIFY(stubs.isValid());
+    QVERIFY(createQmlDependencyStubs(stubs.path(), true));
+    engine.addImportPath(stubs.path());
+    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", QByteArrayLiteral("1"));
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
     if (!component.isReady()) {
         const QString error = component.errorString();
-        if (error.contains(QStringLiteral("Quickshell"), Qt::CaseInsensitive)
-            || error.contains(QStringLiteral("quickshell-ioplugin"), Qt::CaseInsensitive)) {
-            QSKIP(qPrintable(QStringLiteral("Full Explorer QML dependencies are unavailable: %1").arg(error)));
-        }
         QVERIFY2(false, qPrintable(error));
     }
 
     QObject *root = component.create();
     QVERIFY2(root != nullptr, qPrintable(component.errorString()));
+
+    QTRY_VERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
+    QTRY_COMPARE(
+        root->property("nativeAppState").value<QObject *>()->property("nativeFacade").toBool(),
+        true);
+    QObject *nativeNavigation = root->property("navigation").value<QObject *>();
+    QVERIFY(nativeNavigation != nullptr);
+    QCOMPARE(nativeNavigation->property("legacyProcessExecutionEnabled").toBool(), false);
 
     QTimer::singleShot(0, root, [root]() {
         QMetaObject::invokeMethod(
@@ -181,6 +344,21 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QVERIFY(publicModel != nullptr);
     QTRY_COMPARE(publicModel->property("count").toInt(), 1);
 
+    QVariantMap existing;
+    existing.insert(QStringLiteral("fileName"), QStringLiteral("public.txt"));
+    existing.insert(QStringLiteral("filePath"), QStringLiteral("/public-fixture/public.txt"));
+    existing.insert(QStringLiteral("fileKind"), QStringLiteral("TXT"));
+    QVariantMap replacement;
+    replacement.insert(QStringLiteral("fileName"), QStringLiteral("replacement.txt"));
+    replacement.insert(QStringLiteral("filePath"), QStringLiteral("/public-fixture/replacement.txt"));
+    replacement.insert(QStringLiteral("fileKind"), QStringLiteral("TXT"));
+    QVERIFY(QMetaObject::invokeMethod(
+        root,
+        "replaceFileModel",
+        Q_ARG(QVariant, QVariant(QVariantList {existing, replacement}))));
+    QTRY_COMPARE(publicModel->property("count").toInt(), 2);
+    QVERIFY(root->property("fileModelRevision").toInt() > 0);
+
     facade.selectByName(QStringLiteral("public.txt"));
     QTRY_COMPARE(root->property("selectedFile").toString(), QStringLiteral("public.txt"));
 
@@ -188,6 +366,11 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QTRY_VERIFY(root->property("showHidden").toBool());
 
     delete root;
+    if (hadMarker) {
+        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", previousMarker);
+    } else {
+        qunsetenv("ASTREA_EXPLORER_NATIVE_RUNTIME");
+    }
 }
 
 QTEST_MAIN(AppStateCompatibilityTest)

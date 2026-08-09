@@ -24,6 +24,7 @@
 #include "controllers/navigation_controller.h"
 #include "controllers/open_with_controller.h"
 #include "controllers/portal_controller.h"
+#include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "models/directory_model.h"
 #include "runtime/explorer_runtime_paths.h"
@@ -68,6 +69,9 @@ int ExplorerApplication::run(int argc, char **argv)
     if (runtimePaths.valid && !environment.contains(QStringLiteral("ASTREA_ROOT"))) {
         qputenv("ASTREA_ROOT", runtimePaths.root.toUtf8());
     }
+    if (runtimePaths.valid && !useBootstrap) {
+        qputenv("ASTREA_EXPLORER_NATIVE_RUNTIME", QByteArrayLiteral("1"));
+    }
 
     using namespace Astrea::Explorer::Native::Backend;
     using namespace Astrea::Explorer::Native::Services;
@@ -102,6 +106,16 @@ int ExplorerApplication::run(int argc, char **argv)
         &directoryModel,
         &directoryWatcher,
         &application);
+    RecentController recentController;
+    RecentSourcePaths recentSources;
+    recentSources.finderPath = QDir(QDir::homePath()).filePath(
+        QStringLiteral(".local/state/Astrea/finder-recents.json"));
+    recentSources.launchHistoryPath = QDir(QDir::homePath()).filePath(
+        QStringLiteral(".local/state/Astrea/launch/history.jsonl"));
+    recentSources.xbelPath = QDir(QDir::homePath()).filePath(
+        QStringLiteral(".local/share/recently-used.xbel"));
+    recentSources.limit = 60;
+    navigation.setRecentController(&recentController, recentSources);
     SelectionController selection(&directoryModel, &application);
     AppStateFacade appState(
         &navigation,

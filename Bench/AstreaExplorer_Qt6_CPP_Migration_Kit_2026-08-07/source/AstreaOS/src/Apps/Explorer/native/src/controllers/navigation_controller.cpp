@@ -1,5 +1,6 @@
 #include "controllers/navigation_controller.h"
 
+#include <QDir>
 #include <QVariantMap>
 #include <QUrl>
 
@@ -249,6 +250,14 @@ void NavigationController::setPreviews(bool previewsValue)
     }
 }
 
+void NavigationController::setRecentController(
+    RecentController *controller,
+    const RecentSourcePaths &sourcePaths)
+{
+    m_recentController = controller;
+    m_recentSourcePaths = sourcePaths;
+}
+
 BackendRequestId NavigationController::navigateTo(const QString &path)
 {
     if (path.isEmpty()) {
@@ -473,6 +482,23 @@ BackendRequestId NavigationController::refreshCurrentFolder()
     return startList(m_currentPath);
 }
 
+bool NavigationController::replaceFileModel(const QVariantList &items)
+{
+    return m_model->applyEntries(
+        DirectoryModel::entriesFromVariantList(items),
+        m_generation);
+}
+
+int NavigationController::updateFileModelMetadata(const QVariantList &items)
+{
+    return m_model->updateMetadata(items, m_generation);
+}
+
+int NavigationController::removePathsFromFileModel(const QStringList &paths)
+{
+    return m_model->removePaths(paths, m_generation);
+}
+
 BackendRequestId NavigationController::startList(const QString &path)
 {
     const quint64 generation = ++m_generation;
@@ -483,6 +509,21 @@ BackendRequestId NavigationController::startList(const QString &path)
     updateWatcher();
 
     m_model->applyEntries({}, generation);
+    if (path == QStringLiteral("recent://")) {
+        if (m_recentController == nullptr) {
+            setLoading(false);
+            setLoadError(QStringLiteral("Recent controller unavailable"));
+            return 0;
+        }
+
+        const QVector<DirectoryEntry> entries = m_recentController->load(m_recentSourcePaths);
+        updateRemoteState(entries);
+        m_model->applyEntries(entries, generation);
+        setLoading(false);
+        setLoadError(QString());
+        return 0;
+    }
+
     ListRequest request;
     request.path = path;
     request.showHidden = m_showHidden;
@@ -567,7 +608,10 @@ void NavigationController::restoreTab(const Tab &tab)
 
 void NavigationController::updateWatcher()
 {
-    if (m_remoteDirectoryActive || m_searchActive || m_currentPath.isEmpty()) {
+    if (m_remoteDirectoryActive
+        || m_searchActive
+        || m_currentPath.isEmpty()
+        || m_currentPath == QStringLiteral("recent://")) {
         m_watcher->clear();
         return;
     }
@@ -594,19 +638,59 @@ void NavigationController::updateRemoteState(const QVector<DirectoryEntry> &entr
 
 bool NavigationController::isRemotePath(const QString &path)
 {
-    if (path.startsWith(QStringLiteral("recent://"))) {
+    const QString cleanPath = [&path]() {
+        QString result = path;
+        while (result.size() > 1 && result.endsWith(QLatin1Char('/'))) {
+            result.chop(1);
+        }
+        return result;
+    }();
+
+    if (cleanPath == QStringLiteral("recent://")) {
         return false;
     }
 
-    const QUrl url(path);
+    const auto hasPathPrefix = [&cleanPath](const QString &prefix) {
+        QString cleanPrefix = prefix.trimmed();
+        while (cleanPrefix.size() > 1 && cleanPrefix.endsWith(QLatin1Char('/'))) {
+            cleanPrefix.chop(1);
+        }
+        if (cleanPrefix.isEmpty()) {
+            return false;
+        }
+        return cleanPrefix == QStringLiteral("/")
+            ? cleanPath.startsWith(QLatin1Char('/'))
+            : cleanPath == cleanPrefix || cleanPath.startsWith(cleanPrefix + QLatin1Char('/'));
+    };
+
+    const QUrl url(cleanPath);
     if (!url.scheme().isEmpty() && url.scheme() != QStringLiteral("file")) {
         return true;
     }
-    if (path.contains(QStringLiteral("/gvfs/"), Qt::CaseInsensitive)) {
+    if (cleanPath.contains(QStringLiteral("/gvfs/"), Qt::CaseInsensitive)) {
         return true;
     }
 
-    const QStringList components = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const QString runtimeDirectory = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const QString networkRoot = QDir(
+        runtimeDirectory.isEmpty()
+            ? QStringLiteral("/run/user/%1").arg(qEnvironmentVariable("UID"))
+            : runtimeDirectory)
+        .filePath(QStringLiteral("gvfs"));
+    if (hasPathPrefix(networkRoot)) {
+        return true;
+    }
+
+    const QStringList remotePrefixes = qEnvironmentVariable(
+        "ASTREA_EXPLORER_REMOTE_PREFIXES")
+        .split(QLatin1Char(':'), Qt::SkipEmptyParts);
+    for (const QString &prefix : remotePrefixes) {
+        if (hasPathPrefix(prefix)) {
+            return true;
+        }
+    }
+
+    const QStringList components = cleanPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     for (const QString &component : components) {
         if (component.compare(QStringLiteral("rclone"), Qt::CaseInsensitive) == 0
             || component.startsWith(QStringLiteral("rclone-"), Qt::CaseInsensitive)

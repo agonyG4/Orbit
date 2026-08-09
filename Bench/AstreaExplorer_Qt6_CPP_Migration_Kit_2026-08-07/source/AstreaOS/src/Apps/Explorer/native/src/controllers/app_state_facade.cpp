@@ -115,7 +115,17 @@ AppStateFacade::AppStateFacade(
         m_model,
         &QAbstractItemModel::modelReset,
         this,
-        &AppStateFacade::handleModelReset);
+        &AppStateFacade::handleModelChanged);
+    connect(
+        m_model,
+        &QAbstractItemModel::dataChanged,
+        this,
+        [this]() { handleModelChanged(); });
+    connect(
+        m_model,
+        &QAbstractItemModel::rowsRemoved,
+        this,
+        [this]() { handleModelChanged(); });
 
     connect(
         m_selection,
@@ -865,6 +875,21 @@ BackendRequestId AppStateFacade::refreshCurrentFolder()
     return m_navigation->refreshCurrentFolder();
 }
 
+bool AppStateFacade::replaceFileModel(const QVariantList &items)
+{
+    return m_navigation->replaceFileModel(items);
+}
+
+int AppStateFacade::updateFileModelMetadata(const QVariantList &items)
+{
+    return m_navigation->updateFileModelMetadata(items);
+}
+
+int AppStateFacade::removePathsFromFileModel(const QStringList &paths)
+{
+    return m_navigation->removePathsFromFileModel(paths);
+}
+
 QVariant AppStateFacade::selectedItem() const
 {
     const QString selectedName = m_selection->selectedFile();
@@ -1221,7 +1246,7 @@ void AppStateFacade::handleSelection(
         preserveCurrentSelection);
 }
 
-void AppStateFacade::handleModelReset()
+void AppStateFacade::handleModelChanged()
 {
     ++m_fileModelRevision;
     emit fileModelRevisionChanged();

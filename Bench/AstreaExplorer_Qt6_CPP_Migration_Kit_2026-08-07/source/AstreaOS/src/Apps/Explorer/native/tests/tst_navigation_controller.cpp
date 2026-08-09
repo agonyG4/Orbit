@@ -1,9 +1,11 @@
+#include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
 #include "controllers/navigation_controller.h"
+#include "controllers/recent_controller.h"
 #include "models/directory_model.h"
 #include "services/directory_watch_service.h"
 
@@ -20,6 +22,8 @@ private slots:
     void reportsInaccessiblePath();
     void debouncesLocalWatcherChanges();
     void suppressesWatcherForRemotePath();
+    void loadsRecentPathWithoutBackendListingAndPreservesHistory();
+    void honorsConfiguredRemotePrefixesAtPathBoundaries();
     void forwardsListingOptionsToBackend();
 };
 
@@ -198,6 +202,97 @@ void NavigationControllerTest::suppressesWatcherForRemotePath()
     QCOMPARE(watcher.watchedPath(), QString());
     client.completeList(requestId, {});
     QCOMPARE(watcher.watchedPath(), QString());
+}
+
+void NavigationControllerTest::loadsRecentPathWithoutBackendListingAndPreservesHistory()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString recentFile = directory.filePath(QStringLiteral("recent.txt"));
+    QFile fixtureFile(recentFile);
+    QVERIFY(fixtureFile.open(QIODevice::WriteOnly));
+    fixtureFile.write("recent fixture");
+    fixtureFile.close();
+
+    const QString finderPath = directory.filePath(QStringLiteral("finder-recents.json"));
+    QFile finder(finderPath);
+    QVERIFY(finder.open(QIODevice::WriteOnly));
+    finder.write(QStringLiteral(
+        "[{\"filePath\":\"%1\",\"lastAccessed\":1723265945000}]\n")
+                     .arg(recentFile)
+                     .toUtf8());
+    finder.close();
+
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    RecentController recent;
+    NavigationController navigation(&client, &model, &watcher);
+    RecentSourcePaths sources;
+    sources.finderPath = finderPath;
+    sources.limit = 60;
+    navigation.setRecentController(&recent, sources);
+
+    QCOMPARE(navigation.navigateTo(QStringLiteral("recent://")), BackendRequestId(0));
+    QCOMPARE(client.listRequests().size(), 0);
+    QCOMPARE(navigation.loading(), false);
+    QCOMPARE(navigation.loadError(), QString());
+    QCOMPARE(navigation.currentPath(), QStringLiteral("recent://"));
+    QCOMPARE(navigation.history(), QStringList({QStringLiteral("recent://")}));
+    QCOMPARE(watcher.watchedPath(), QString());
+    QCOMPARE(model.count(), 1);
+    QCOMPARE(model.data(model.index(0, 0), DirectoryModel::FilePathRole).toString(), recentFile);
+
+    QCOMPARE(navigation.refreshCurrentFolder(), BackendRequestId(0));
+    QCOMPARE(client.listRequests().size(), 0);
+
+    const BackendRequestId homeRequest = navigation.navigateTo(QStringLiteral("/home"));
+    QCOMPARE(homeRequest, BackendRequestId(1));
+    navigation.goBack();
+    QCOMPARE(navigation.currentPath(), QStringLiteral("recent://"));
+    QCOMPARE(navigation.historyIndex(), 0);
+    QCOMPARE(navigation.loading(), false);
+    QCOMPARE(model.count(), 1);
+    QCOMPARE(client.listRequests().size(), 1);
+    navigation.goForward();
+    QCOMPARE(navigation.currentPath(), QStringLiteral("/home"));
+    QCOMPARE(navigation.historyIndex(), 1);
+}
+
+void NavigationControllerTest::honorsConfiguredRemotePrefixesAtPathBoundaries()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString prefix = directory.filePath(QStringLiteral("remote"));
+    const QString child = QDir(prefix).filePath(QStringLiteral("child"));
+    const QString sibling = directory.filePath(QStringLiteral("remote2"));
+    QVERIFY(QDir().mkpath(child));
+    QVERIFY(QDir().mkpath(sibling));
+
+    const bool hadValue = qEnvironmentVariableIsSet("ASTREA_EXPLORER_REMOTE_PREFIXES");
+    const QByteArray previous = qgetenv("ASTREA_EXPLORER_REMOTE_PREFIXES");
+    qputenv("ASTREA_EXPLORER_REMOTE_PREFIXES", (prefix + ":" + prefix + "/").toUtf8());
+
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+    const BackendRequestId remoteRequest = navigation.navigateTo(child);
+    QVERIFY(remoteRequest != 0);
+    QVERIFY(navigation.remoteDirectoryActive());
+    QCOMPARE(watcher.watchedPath(), QString());
+    client.completeList(remoteRequest, {});
+
+    const BackendRequestId siblingRequest = navigation.navigateTo(sibling);
+    QVERIFY(siblingRequest != 0);
+    QVERIFY(!navigation.remoteDirectoryActive());
+    QCOMPARE(watcher.watchedPath(), sibling);
+
+    if (hadValue) {
+        qputenv("ASTREA_EXPLORER_REMOTE_PREFIXES", previous);
+    } else {
+        qunsetenv("ASTREA_EXPLORER_REMOTE_PREFIXES");
+    }
 }
 
 QTEST_MAIN(NavigationControllerTest)
