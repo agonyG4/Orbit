@@ -22,6 +22,7 @@ public:
     virtual BackendRequestId mount(const QString &devicePath) = 0;
     virtual BackendRequestId unmount(const QString &devicePath) = 0;
     virtual BackendRequestId remount(const QString &devicePath) = 0;
+    virtual BackendRequestId fileOperation(const FileOperationRequest &request) = 0;
 
 public slots:
     virtual void cancel(BackendRequestId requestId) = 0;
@@ -39,6 +40,12 @@ signals:
     void deviceOperationReady(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const Astrea::Explorer::Native::Backend::DeviceOperationResult &result);
+    void fileOperationProgress(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::FileOperationProgress &progress);
+    void fileOperationReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::FileOperationResult &result);
     void failed(const Astrea::Explorer::Native::Backend::BackendError &error);
 };
 
@@ -55,6 +62,7 @@ public:
     BackendRequestId mount(const QString &devicePath) override;
     BackendRequestId unmount(const QString &devicePath) override;
     BackendRequestId remount(const QString &devicePath) override;
+    BackendRequestId fileOperation(const FileOperationRequest &request) override;
 
 public slots:
     void cancel(BackendRequestId requestId) override;
@@ -66,6 +74,7 @@ private:
         Search,
         Devices,
         DeviceOperation,
+        FileOperation,
     };
 
     struct PendingRequest
@@ -75,6 +84,7 @@ private:
 
     QStringList listArguments(const ListRequest &request) const;
     QStringList searchArguments(const SearchRequest &request) const;
+    QStringList fileOperationArguments(const FileOperationRequest &request) const;
     QVector<DirectoryEntry> decodeEntries(
         BackendRequestId requestId,
         const QByteArray &payload,
@@ -87,6 +97,11 @@ private:
         BackendRequestId requestId,
         const QByteArray &payload,
         BackendError *error) const;
+    FileOperationResult decodeFileOperation(
+        BackendRequestId requestId,
+        const QByteArray &payload,
+        BackendError *error,
+        QVector<FileOperationProgress> *progresses) const;
     DirectoryEntry decodeEntry(const QJsonObject &object, BackendError *error) const;
     BackendError makeDecodeError(
         BackendRequestId requestId,

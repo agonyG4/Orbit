@@ -87,6 +87,7 @@ private slots:
     void rejectsMalformedJsonPayload();
     void forwardsLegacyCliArgumentsForListAndSearch();
     void decodesDevicesAndForwardsDeviceOperations();
+    void decodesFileOperationProgressAndResult();
     void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
     void forwardsTransportFailuresExactlyOnce();
@@ -275,6 +276,54 @@ void BackendClientTest::decodesDevicesAndForwardsDeviceOperations()
     QCOMPARE(result.ok, true);
     QCOMPARE(result.mountPath, QStringLiteral("/run/media/user/USB"));
     QCOMPARE(result.message, QStringLiteral("mounted"));
+}
+
+void BackendClientTest::decodesFileOperationProgressAndResult()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+
+    QSignalSpy progressSpy(&client, &IRustBackendClient::fileOperationProgress);
+    QSignalSpy readySpy(&client, &IRustBackendClient::fileOperationReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    FileOperationRequest request;
+    request.mode = QStringLiteral("copy");
+    request.destination = QStringLiteral("/tmp/destination");
+    request.conflictPolicy = QStringLiteral("keep-both");
+    request.progressMode = QStringLiteral("items");
+    request.sources = {QStringLiteral("/tmp/source.txt")};
+
+    const BackendRequestId requestId = client.fileOperation(request);
+    QCOMPARE(
+        transport.startedRequests.constLast().arguments,
+        QStringList({QStringLiteral("file-op"), QStringLiteral("--json-events"),
+                      QStringLiteral("copy"), QStringLiteral("/tmp/destination"),
+                      QStringLiteral("keep-both"), QStringLiteral("--progress"),
+                      QStringLiteral("items"), QStringLiteral("/tmp/source.txt")}));
+
+    transport.succeed(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"start\",\"mode\":\"copy\",\"destination\":\"/tmp/destination\",\"total\":1}\n"
+            "{\"event\":\"progress\",\"mode\":\"copy\",\"done\":1,\"total\":1,\"percent\":100,\"path\":\"/tmp/source.txt\",\"name\":\"source.txt\"}\n"
+            "{\"event\":\"done\",\"mode\":\"copy\",\"destination\":\"/tmp/destination\",\"done\":1,\"total\":1,\"percent\":100}\n"));
+
+    QTRY_COMPARE(progressSpy.count(), 1);
+    QTRY_COMPARE(readySpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    const FileOperationProgress progress =
+        progressSpy.takeFirst().at(1).value<FileOperationProgress>();
+    QCOMPARE(progress.requestId, requestId);
+    QCOMPARE(progress.fileName, QStringLiteral("source.txt"));
+    QCOMPARE(progress.percent, 100);
+    const FileOperationResult result =
+        readySpy.takeFirst().at(1).value<FileOperationResult>();
+    QCOMPARE(result.requestId, requestId);
+    QCOMPARE(result.ok, true);
+    QCOMPARE(result.destination, QStringLiteral("/tmp/destination"));
+    QCOMPARE(result.doneCount, 1);
+    QCOMPARE(result.totalCount, 1);
 }
 
 void BackendClientTest::acceptsSynchronousTransportCompletion()

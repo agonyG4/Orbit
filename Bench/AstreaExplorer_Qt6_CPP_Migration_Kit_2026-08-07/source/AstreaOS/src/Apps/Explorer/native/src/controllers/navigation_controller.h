@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QVariantList>
 #include <QStringList>
 
 #include "backend/rust_backend_client.h"
@@ -15,11 +16,13 @@ class NavigationController final : public QObject
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QStringList history READ history NOTIFY historyChanged)
     Q_PROPERTY(int historyIndex READ historyIndex NOTIFY historyChanged)
+    Q_PROPERTY(QVariantList tabs READ tabs NOTIFY tabsChanged)
     Q_PROPERTY(int tabCount READ tabCount NOTIFY tabsChanged)
     Q_PROPERTY(int activeTabIndex READ activeTabIndex NOTIFY activeTabIndexChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(QString loadError READ loadError NOTIFY loadErrorChanged)
     Q_PROPERTY(bool searchActive READ searchActive NOTIFY searchStateChanged)
+    Q_PROPERTY(bool searchVisible READ searchVisible NOTIFY searchStateChanged)
     Q_PROPERTY(QString searchQuery READ searchQuery NOTIFY searchStateChanged)
     Q_PROPERTY(bool remoteDirectoryActive READ remoteDirectoryActive NOTIFY remoteStateChanged)
     Q_PROPERTY(bool showHidden READ showHidden NOTIFY listingOptionsChanged)
@@ -38,11 +41,14 @@ public:
     QString currentPath() const;
     QStringList history() const;
     int historyIndex() const;
+    QVariantList tabs() const;
+    QVariantList breadcrumbParts() const;
     int tabCount() const;
     int activeTabIndex() const;
     bool loading() const;
     QString loadError() const;
     bool searchActive() const;
+    bool searchVisible() const;
     QString searchQuery() const;
     bool remoteDirectoryActive() const;
     bool showHidden() const;
@@ -58,12 +64,21 @@ public:
     void setPreviews(bool previews);
 
     Q_INVOKABLE BackendRequestId navigateTo(const QString &path);
-    Q_INVOKABLE BackendRequestId submitSearch(const QString &root, const QString &query);
+    Q_INVOKABLE BackendRequestId submitSearch(
+        const QString &root,
+        const QString &query = QString());
+    Q_INVOKABLE void startSearch();
+    Q_INVOKABLE void hideSearch();
+    Q_INVOKABLE void clearSearch();
     Q_INVOKABLE void goBack();
     Q_INVOKABLE void goForward();
     Q_INVOKABLE void createTab(const QString &initialPath = QString());
     Q_INVOKABLE void closeTab(int index);
     Q_INVOKABLE void switchTab(int index);
+    Q_INVOKABLE void closeTabById(int tabId);
+    Q_INVOKABLE void switchTabById(int tabId);
+    Q_INVOKABLE int tabIndexById(int tabId) const;
+    Q_INVOKABLE void moveTab(int fromIndex, int toIndex);
     Q_INVOKABLE BackendRequestId refreshCurrentFolder();
 
 signals:
@@ -138,6 +153,7 @@ private:
     bool m_loading = false;
     QString m_loadError;
     bool m_searchActive = false;
+    bool m_searchVisible = false;
     QString m_searchQuery;
     QString m_searchRoot;
     bool m_remoteDirectoryActive = false;

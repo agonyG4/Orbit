@@ -43,6 +43,12 @@ BackendRequestId FakeRustBackendClient::remount(const QString &devicePath)
     return nextRequestId();
 }
 
+BackendRequestId FakeRustBackendClient::fileOperation(const FileOperationRequest &request)
+{
+    m_fileOperationRequests.append(request);
+    return nextRequestId();
+}
+
 void FakeRustBackendClient::cancel(BackendRequestId requestId)
 {
     m_cancelledRequests.append(requestId);
@@ -76,6 +82,20 @@ void FakeRustBackendClient::completeDeviceOperation(
     emit deviceOperationReady(requestId, result);
 }
 
+void FakeRustBackendClient::completeFileOperationProgress(
+    BackendRequestId requestId,
+    const FileOperationProgress &progress)
+{
+    emit fileOperationProgress(requestId, progress);
+}
+
+void FakeRustBackendClient::completeFileOperation(
+    BackendRequestId requestId,
+    const FileOperationResult &result)
+{
+    emit fileOperationReady(requestId, result);
+}
+
 void FakeRustBackendClient::failRequest(
     BackendRequestId requestId,
     const QString &code,
@@ -101,6 +121,11 @@ const QVector<SearchRequest> &FakeRustBackendClient::searchRequests() const
 const QVector<QStringList> &FakeRustBackendClient::deviceRequests() const
 {
     return m_deviceRequests;
+}
+
+const QVector<FileOperationRequest> &FakeRustBackendClient::fileOperationRequests() const
+{
+    return m_fileOperationRequests;
 }
 
 const QVector<BackendRequestId> &FakeRustBackendClient::cancelledRequests() const

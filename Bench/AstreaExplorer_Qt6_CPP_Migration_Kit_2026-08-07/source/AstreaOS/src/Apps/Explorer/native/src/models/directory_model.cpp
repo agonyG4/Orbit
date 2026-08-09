@@ -9,6 +9,11 @@ DirectoryModel::DirectoryModel(QObject *parent)
 {
 }
 
+int DirectoryModel::count() const
+{
+    return m_entries.size();
+}
+
 int DirectoryModel::rowCount(const QModelIndex &parent) const
 {
     if (parent.isValid()) {
@@ -82,6 +87,23 @@ QHash<int, QByteArray> DirectoryModel::roleNames() const
     };
 }
 
+QVariantMap DirectoryModel::get(int row) const
+{
+    if (row < 0 || row >= m_entries.size()) {
+        return {};
+    }
+
+    const QModelIndex modelIndex = index(row, 0);
+    const QHash<int, QByteArray> roles = roleNames();
+    QVariantMap result;
+    for (auto role = roles.cbegin(); role != roles.cend(); ++role) {
+        result.insert(
+            QString::fromUtf8(role.value()),
+            data(modelIndex, role.key()));
+    }
+    return result;
+}
+
 void DirectoryModel::setEntries(QVector<DirectoryEntry> entries, quint64 generation)
 {
     applyEntries(std::move(entries), generation);
@@ -99,6 +121,7 @@ bool DirectoryModel::applyEntries(
     m_entries = std::move(entries);
     m_generation = generation;
     endResetModel();
+    emit countChanged();
     return true;
 }
 

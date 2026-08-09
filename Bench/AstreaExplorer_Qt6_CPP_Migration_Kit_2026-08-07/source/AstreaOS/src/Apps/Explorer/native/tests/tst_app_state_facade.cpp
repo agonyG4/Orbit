@@ -19,6 +19,10 @@ class AppStateFacadeTest final : public QObject
 private slots:
     void exposesPersistedSettingsAndNavigationOptions();
     void writesSettingsThroughCompatibilityProperties();
+    void exposesCoreQmlContract();
+    void exposesResolverAndDialogCompatibility();
+    void propagatesNavigationAndBackendFailure();
+    void preservesSelectionAcrossModelRefresh();
 };
 
 struct FacadeFixture
@@ -106,6 +110,123 @@ void AppStateFacadeTest::writesSettingsThroughCompatibilityProperties()
     QCOMPARE(loaded.autoMountDeviceIdsJson, QStringLiteral("[\"usb-1\"]"));
     QCOMPARE(loaded.sidebarFavoritesJson, QStringLiteral("[\"/fixture\"]"));
     QCOMPARE(loaded.sidebarHiddenDefaultFavoritesJson, QStringLiteral("[\"/fixture/Hidden\"]"));
+}
+
+void AppStateFacadeTest::exposesCoreQmlContract()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model);
+
+    const QMetaObject &metaObject = AppStateFacade::staticMetaObject;
+    for (const char *propertyName : {
+             "fileModel", "currentPath", "history", "historyIdx", "tabs",
+             "breadcrumbParts", "activeTabIndex", "loadingDir", "loadError",
+             "searchActive", "searchQuery", "selectedFile", "selectedFiles",
+             "fileModelRevision", "showPreview", "viewMode", "sortField",
+             "sortAsc", "showHidden", "foldersFirst", "groupingEnabled", "zoomLevel",
+             "homePath", "runtimeRoot", "backendPath", "helperPath", "dialogActive",
+             "dialogMode", "dialogFilePatterns", "inTrashView", "recentVirtualPath"}) {
+        QVERIFY2(
+            metaObject.indexOfProperty(propertyName) >= 0,
+            qPrintable(QStringLiteral("missing AppState property %1").arg(propertyName)));
+    }
+    QCOMPARE(facade.fileModel(), &fixture.model);
+    QVERIFY(facade.tabs().isEmpty());
+    QVERIFY(facade.breadcrumbParts().isEmpty());
+}
+
+void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
+{
+    FacadeFixture fixture;
+    Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths runtimePaths;
+    runtimePaths.root = QStringLiteral("/fixture/astrea");
+    runtimePaths.backendProgram = QStringLiteral("/fixture/astrea/backend");
+    runtimePaths.helperProgram = QStringLiteral("/fixture/astrea/helper.py");
+    runtimePaths.launcherProgram = QStringLiteral("/fixture/astrea/astrea-launch");
+    runtimePaths.windowsRunnerProgram = QStringLiteral("/fixture/astrea/windows-run");
+
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        runtimePaths);
+
+    QCOMPARE(facade.runtimeRoot(), QStringLiteral("/fixture/astrea"));
+    QCOMPARE(facade.backendPath(), runtimePaths.backendProgram);
+    QCOMPARE(facade.helperPath(), runtimePaths.helperProgram);
+    QCOMPARE(facade.astreaLaunch(), runtimePaths.launcherProgram);
+    QCOMPARE(facade.windowsRun(), runtimePaths.windowsRunnerProgram);
+    QCOMPARE(facade.recentVirtualPath(), QStringLiteral("recent://"));
+    QVERIFY(facade.trashFilesPath().endsWith(QStringLiteral("/.local/share/Trash/files")));
+
+    facade.setDialogActive(true);
+    facade.setDialogMode(QStringLiteral("open-file"));
+    facade.setDialogFilePatterns({QStringLiteral("*.txt")});
+    QVERIFY(facade.dialogActive());
+    QCOMPARE(facade.dialogMode(), QStringLiteral("open-file"));
+    QCOMPARE(facade.dialogFilePatterns(), QStringList {QStringLiteral("*.txt")});
+    QVERIFY(facade.fileMatchesDialogFilter(QStringLiteral("notes.txt"), false));
+    QVERIFY(!facade.fileMatchesDialogFilter(QStringLiteral("notes.png"), false));
+    QVERIFY(facade.fileMatchesDialogFilter(QStringLiteral("folder"), true));
+
+    const double originalZoom = facade.zoomLevel();
+    facade.setZoomLevel(99.0);
+    QCOMPARE(facade.zoomLevel(), 2.0);
+    facade.resetZoom();
+    QCOMPARE(facade.zoomLevel(), 1.0);
+    QVERIFY(originalZoom >= 0.75);
+}
+
+void AppStateFacadeTest::propagatesNavigationAndBackendFailure()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model);
+    QSignalSpy pathSpy(&facade, &AppStateFacade::currentPathChanged);
+    QSignalSpy errorSpy(&facade, &AppStateFacade::loadErrorChanged);
+
+    const BackendRequestId requestId = facade.navigateTo(QStringLiteral("/fixture"));
+    QVERIFY(requestId != 0);
+    QCOMPARE(facade.currentPath(), QStringLiteral("/fixture"));
+    QVERIFY(pathSpy.count() > 0);
+
+    fixture.client.failRequest(requestId, QStringLiteral("io"), QStringLiteral("fixture failure"));
+    QTRY_COMPARE(facade.loadError(), QStringLiteral("fixture failure"));
+    QVERIFY(errorSpy.count() > 0);
+}
+
+void AppStateFacadeTest::preservesSelectionAcrossModelRefresh()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model);
+
+    DirectoryEntry first;
+    first.fileName = QStringLiteral("first.txt");
+    first.filePath = QStringLiteral("/fixture/first.txt");
+    DirectoryEntry second;
+    second.fileName = QStringLiteral("second.txt");
+    second.filePath = QStringLiteral("/fixture/second.txt");
+    fixture.model.setEntries({first, second}, 1);
+    facade.selectByName(QStringLiteral("second.txt"));
+    QCOMPARE(facade.selectedFile(), QStringLiteral("second.txt"));
+
+    DirectoryEntry refreshed = second;
+    refreshed.fileSize = 42;
+    fixture.model.setEntries({refreshed, first}, 2);
+    QCOMPARE(facade.selectedFile(), QStringLiteral("second.txt"));
+    QCOMPARE(facade.selectedFiles(), QStringList {QStringLiteral("second.txt")});
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

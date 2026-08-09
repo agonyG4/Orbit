@@ -1,5 +1,6 @@
 #include "controllers/navigation_controller.h"
 
+#include <QVariantMap>
 #include <QUrl>
 
 namespace Astrea::Explorer::Native::Backend {
@@ -62,6 +63,58 @@ int NavigationController::historyIndex() const
     return m_historyIndex;
 }
 
+QVariantList NavigationController::tabs() const
+{
+    QVariantList result;
+    result.reserve(m_tabs.size());
+    for (const Tab &tab : m_tabs) {
+        QVariantMap value;
+        value.insert(QStringLiteral("id"), tab.id);
+        value.insert(QStringLiteral("path"), tab.path);
+        value.insert(QStringLiteral("history"), tab.history);
+        value.insert(QStringLiteral("historyIdx"), tab.historyIndex);
+        result.append(value);
+    }
+    return result;
+}
+
+QVariantList NavigationController::breadcrumbParts() const
+{
+    QVariantList result;
+    if (m_currentPath.isEmpty()) {
+        return result;
+    }
+
+    const QUrl currentUrl(m_currentPath);
+    if (!currentUrl.scheme().isEmpty() && currentUrl.scheme() != QStringLiteral("file")) {
+        QVariantMap part;
+        part.insert(QStringLiteral("label"), m_currentPath);
+        part.insert(QStringLiteral("path"), m_currentPath);
+        result.append(part);
+        return result;
+    }
+
+    const QString path = currentUrl.isLocalFile() ? currentUrl.toLocalFile() : m_currentPath;
+    if (path == QStringLiteral("/")) {
+        QVariantMap part;
+        part.insert(QStringLiteral("label"), QStringLiteral("/"));
+        part.insert(QStringLiteral("path"), QStringLiteral("/"));
+        result.append(part);
+        return result;
+    }
+
+    QString accumulated;
+    const QStringList components = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        accumulated += QLatin1Char('/') + component;
+        QVariantMap part;
+        part.insert(QStringLiteral("label"), component);
+        part.insert(QStringLiteral("path"), accumulated);
+        result.append(part);
+    }
+    return result;
+}
+
 int NavigationController::tabCount() const
 {
     return m_tabs.size();
@@ -85,6 +138,11 @@ QString NavigationController::loadError() const
 bool NavigationController::searchActive() const
 {
     return m_searchActive;
+}
+
+bool NavigationController::searchVisible() const
+{
+    return m_searchVisible;
 }
 
 QString NavigationController::searchQuery() const
@@ -220,23 +278,52 @@ BackendRequestId NavigationController::submitSearch(
     const QString &root,
     const QString &query)
 {
-    const QString trimmedQuery = query.trimmed();
+    const QString searchRoot = query.isEmpty() ? m_currentPath : root;
+    const QString queryText = query.isEmpty() ? root : query;
+    const QString trimmedQuery = queryText.trimmed();
     if (trimmedQuery.isEmpty()) {
         clearSearchState();
+        m_searchVisible = false;
+        emit searchStateChanged();
         return startList(m_currentPath);
     }
 
-    const QString searchRoot = root.isEmpty() ? m_currentPath : root;
-    if (searchRoot.isEmpty()) {
+    const QString effectiveRoot = searchRoot.isEmpty() ? m_currentPath : searchRoot;
+    if (effectiveRoot.isEmpty()) {
         return 0;
     }
 
     cancelActiveRequest();
+    m_searchVisible = true;
     m_searchActive = true;
     m_searchQuery = trimmedQuery;
-    m_searchRoot = searchRoot;
+    m_searchRoot = effectiveRoot;
     emit searchStateChanged();
-    return startSearch(searchRoot, trimmedQuery);
+    return startSearch(effectiveRoot, trimmedQuery);
+}
+
+void NavigationController::startSearch()
+{
+    if (m_searchVisible) {
+        return;
+    }
+    m_searchVisible = true;
+    emit searchStateChanged();
+}
+
+void NavigationController::hideSearch()
+{
+    if (!m_searchVisible && !m_searchActive) {
+        return;
+    }
+    m_searchVisible = false;
+    clearSearchState();
+    emit searchStateChanged();
+}
+
+void NavigationController::clearSearch()
+{
+    hideSearch();
 }
 
 void NavigationController::goBack()
@@ -313,6 +400,41 @@ void NavigationController::closeTab(int index)
     emit activeTabIndexChanged();
     restoreTab(m_tabs.at(m_activeTabIndex));
     startList(m_currentPath);
+}
+
+void NavigationController::closeTabById(int tabId)
+{
+    closeTab(tabIndexById(tabId));
+}
+
+void NavigationController::switchTabById(int tabId)
+{
+    switchTab(tabIndexById(tabId));
+}
+
+int NavigationController::tabIndexById(int tabId) const
+{
+    for (int index = 0; index < m_tabs.size(); ++index) {
+        if (m_tabs.at(index).id == tabId) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+void NavigationController::moveTab(int fromIndex, int toIndex)
+{
+    if (fromIndex < 0 || fromIndex >= m_tabs.size()
+        || toIndex < 0 || toIndex >= m_tabs.size()
+        || fromIndex == toIndex) {
+        return;
+    }
+
+    const int activeTabId = m_tabs.at(m_activeTabIndex).id;
+    m_tabs.move(fromIndex, toIndex);
+    m_activeTabIndex = tabIndexById(activeTabId);
+    emit tabsChanged();
+    emit activeTabIndexChanged();
 }
 
 void NavigationController::switchTab(int index)
@@ -405,8 +527,10 @@ void NavigationController::cancelActiveRequest()
 void NavigationController::clearSearchState()
 {
     if (!m_searchActive && m_searchQuery.isEmpty() && m_searchRoot.isEmpty()) {
+        m_searchVisible = false;
         return;
     }
+    m_searchVisible = false;
     m_searchActive = false;
     m_searchQuery.clear();
     m_searchRoot.clear();

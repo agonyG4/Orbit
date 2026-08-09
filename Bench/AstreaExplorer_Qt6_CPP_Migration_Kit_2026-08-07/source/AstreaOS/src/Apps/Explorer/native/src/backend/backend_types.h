@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QMetaType>
+#include <QStringList>
 #include <QUrl>
 #include <QVector>
 
@@ -53,6 +54,42 @@ struct DeviceOperationResult
     QString message;
 };
 
+struct FileOperationRequest
+{
+    QString mode;
+    QString destination;
+    QString conflictPolicy {QStringLiteral("keep-both")};
+    QString rename;
+    QString progressMode {QStringLiteral("items")};
+    QStringList sources;
+};
+
+struct FileOperationProgress
+{
+    BackendRequestId requestId = 0;
+    QString mode;
+    int doneCount = 0;
+    int totalCount = 0;
+    int percent = 0;
+    QString path;
+    QString fileName;
+    qint64 doneBytes = 0;
+    qint64 totalBytes = 0;
+};
+
+struct FileOperationResult
+{
+    BackendRequestId requestId = 0;
+    bool ok = false;
+    QString mode;
+    QString destination;
+    int doneCount = 0;
+    int totalCount = 0;
+    int percent = 0;
+    QString errorCode;
+    QString errorMessage;
+};
+
 struct DirectoryEntry
 {
     QString fileName;
@@ -97,3 +134,6 @@ Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::DirectoryEntry>)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceEntry)
 Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::DeviceEntry>)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceOperationResult)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationRequest)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationProgress)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationResult)

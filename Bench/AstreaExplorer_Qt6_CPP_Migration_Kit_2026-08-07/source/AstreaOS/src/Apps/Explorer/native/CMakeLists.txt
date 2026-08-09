@@ -12,6 +12,8 @@ qt_standard_project_setup(REQUIRES 6.11)
 enable_testing()
 
 set(ASTREA_EXPLORER_BIN "${CMAKE_BINARY_DIR}/astrea-explorer")
+set(ASTREA_EXPLORER_RUNTIME_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src")
 
 add_library(astrea_explorer_native_backend STATIC
     src/backend/backend_types.h
@@ -24,6 +26,40 @@ add_library(astrea_explorer_native_backend STATIC
     src/backend/fake_backend_client.cpp
     src/models/directory_model.h
     src/models/directory_model.cpp
+)
+
+add_library(astrea_explorer_native_runtime STATIC
+    src/runtime/explorer_runtime_paths.h
+    src/runtime/explorer_runtime_paths.cpp
+)
+
+target_include_directories(astrea_explorer_native_runtime PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_runtime PUBLIC
+    Qt6::Core
+)
+
+add_library(astrea_explorer_native_operations STATIC
+    src/controllers/file_operations_controller.h
+    src/controllers/file_operations_controller.cpp
+    src/controllers/open_with_controller.h
+    src/controllers/open_with_controller.cpp
+    src/controllers/portal_controller.h
+    src/controllers/portal_controller.cpp
+    src/services/file_operation_service.h
+    src/services/file_operation_service.cpp
+)
+
+target_include_directories(astrea_explorer_native_operations PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_operations PUBLIC
+    Qt6::Core
+    astrea_explorer_native_backend
+    astrea_explorer_native_launch
 )
 
 target_include_directories(astrea_explorer_native_backend PUBLIC
@@ -91,6 +127,7 @@ target_link_libraries(astrea-explorer PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     astrea_explorer_native_backend
+    astrea_explorer_native_runtime
 )
 
 qt_add_qml_module(astrea-explorer
@@ -132,6 +169,22 @@ target_link_libraries(tst_directory_model PRIVATE
 
 add_test(NAME directory_model COMMAND tst_directory_model)
 
+qt_add_executable(tst_runtime_paths
+    tests/tst_runtime_paths.cpp
+)
+
+target_include_directories(tst_runtime_paths PRIVATE
+    src
+)
+
+target_link_libraries(tst_runtime_paths PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_runtime
+)
+
+add_test(NAME runtime_paths COMMAND tst_runtime_paths)
+
 add_library(astrea_explorer_native_navigation STATIC
     src/services/directory_watch_service.h
     src/services/directory_watch_service.cpp
@@ -162,7 +215,56 @@ target_link_libraries(astrea_explorer_native_navigation PUBLIC
 target_link_libraries(astrea-explorer PRIVATE
     astrea_explorer_native_navigation
     astrea_explorer_native_settings
+    astrea_explorer_native_operations
 )
+
+qt_add_executable(tst_file_operations_controller
+    tests/tst_file_operations_controller.cpp
+)
+
+target_include_directories(tst_file_operations_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_file_operations_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_operations
+)
+
+add_test(NAME file_operations_controller COMMAND tst_file_operations_controller)
+
+qt_add_executable(tst_open_with_controller
+    tests/tst_open_with_controller.cpp
+)
+
+target_include_directories(tst_open_with_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_open_with_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_operations
+)
+
+add_test(NAME open_with_controller COMMAND tst_open_with_controller)
+
+qt_add_executable(tst_portal_controller
+    tests/tst_portal_controller.cpp
+)
+
+target_include_directories(tst_portal_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_portal_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_operations
+)
+
+add_test(NAME portal_controller COMMAND tst_portal_controller)
 
 qt_add_executable(tst_navigation_controller
     tests/tst_navigation_controller.cpp
@@ -193,6 +295,7 @@ target_link_libraries(tst_selection_controller PRIVATE
     Qt6::Qml
     Qt6::Test
     astrea_explorer_native_navigation
+    astrea_explorer_native_operations
 )
 
 add_test(NAME selection_controller COMMAND tst_selection_controller)
@@ -307,6 +410,7 @@ target_link_libraries(tst_app_state_facade PRIVATE
     Qt6::Test
     astrea_explorer_native_navigation
     astrea_explorer_native_settings
+    astrea_explorer_native_operations
 )
 
 add_test(NAME app_state_facade COMMAND tst_app_state_facade)

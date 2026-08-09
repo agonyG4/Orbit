@@ -19,6 +19,7 @@ public:
     BackendRequestId mount(const QString &devicePath) override;
     BackendRequestId unmount(const QString &devicePath) override;
     BackendRequestId remount(const QString &devicePath) override;
+    BackendRequestId fileOperation(const FileOperationRequest &request) override;
 
 public slots:
     void cancel(BackendRequestId requestId) override;
@@ -30,11 +31,18 @@ public:
     void completeDeviceOperation(
         BackendRequestId requestId,
         const DeviceOperationResult &result);
+    void completeFileOperationProgress(
+        BackendRequestId requestId,
+        const FileOperationProgress &progress);
+    void completeFileOperation(
+        BackendRequestId requestId,
+        const FileOperationResult &result);
     void failRequest(BackendRequestId requestId, const QString &code, const QString &message);
 
     const QVector<ListRequest> &listRequests() const;
     const QVector<SearchRequest> &searchRequests() const;
     const QVector<QStringList> &deviceRequests() const;
+    const QVector<FileOperationRequest> &fileOperationRequests() const;
     const QVector<BackendRequestId> &cancelledRequests() const;
 
 private:
@@ -44,6 +52,7 @@ private:
     QVector<ListRequest> m_listRequests;
     QVector<SearchRequest> m_searchRequests;
     QVector<QStringList> m_deviceRequests;
+    QVector<FileOperationRequest> m_fileOperationRequests;
     QVector<BackendRequestId> m_cancelledRequests;
 };
 

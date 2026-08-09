@@ -11,6 +11,7 @@ class DirectoryModelTest final : public QObject
 
 private slots:
     void exposesLegacyRolesAndValues();
+    void exposesQmlListModelCompatibility();
     void startsEmpty();
     void handlesTenThousandEntriesWithoutIncrementalSignals();
     void rejectsStaleGenerations();
@@ -99,6 +100,30 @@ void DirectoryModelTest::startsEmpty()
     QCOMPARE(model.rowCount(), 0);
     QVERIFY(model.paths().isEmpty());
     QVERIFY(!model.data(QModelIndex(), DirectoryModel::FileNameRole).isValid());
+}
+
+void DirectoryModelTest::exposesQmlListModelCompatibility()
+{
+    DirectoryModel model;
+    const DirectoryEntry first = makeEntry(
+        QStringLiteral("first.txt"),
+        QStringLiteral("/tmp/first.txt"));
+    const DirectoryEntry second = makeEntry(
+        QStringLiteral("second"),
+        QStringLiteral("/tmp/second"),
+        true);
+
+    QSignalSpy countSpy(&model, &DirectoryModel::countChanged);
+    QVERIFY(model.applyEntries({first, second}, 1));
+
+    QCOMPARE(model.count(), 2);
+    QCOMPARE(countSpy.count(), 1);
+    const QVariantMap firstMap = model.get(0);
+    QCOMPARE(firstMap.value(QStringLiteral("fileName")).toString(), first.fileName);
+    QCOMPARE(firstMap.value(QStringLiteral("filePath")).toString(), first.filePath);
+    QCOMPARE(firstMap.value(QStringLiteral("fileIsDir")).toBool(), first.fileIsDir);
+    QVERIFY(model.get(-1).isEmpty());
+    QVERIFY(model.get(model.count()).isEmpty());
 }
 
 void DirectoryModelTest::handlesTenThousandEntriesWithoutIncrementalSignals()

@@ -73,6 +73,25 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 return;
             }
 
+            if (kind == RequestKind::FileOperation) {
+                BackendError error;
+                QVector<FileOperationProgress> progresses;
+                const FileOperationResult result = decodeFileOperation(
+                    requestId,
+                    payload,
+                    &error,
+                    &progresses);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    for (const FileOperationProgress &progress : progresses) {
+                        emit fileOperationProgress(requestId, progress);
+                    }
+                    emit fileOperationReady(requestId, result);
+                }
+                return;
+            }
+
             BackendError error;
             const QVector<DirectoryEntry> entries =
                 decodeEntries(requestId, payload, &error);
@@ -153,6 +172,13 @@ BackendRequestId RustBackendClient::remount(const QString &devicePath)
     return requestId;
 }
 
+BackendRequestId RustBackendClient::fileOperation(const FileOperationRequest &request)
+{
+    const BackendRequestId requestId = m_transport->start(fileOperationArguments(request));
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::FileOperation});
+    return requestId;
+}
+
 void RustBackendClient::cancel(BackendRequestId requestId)
 {
     if (!m_pendingRequests.contains(requestId)) {
@@ -191,6 +217,26 @@ QStringList RustBackendClient::searchArguments(const SearchRequest &request) con
         boolArg(request.sortAscending),
         boolArg(request.foldersFirst),
     };
+}
+
+QStringList RustBackendClient::fileOperationArguments(
+    const FileOperationRequest &request) const
+{
+    QStringList arguments {
+        QStringLiteral("file-op"),
+        QStringLiteral("--json-events"),
+        request.mode,
+        request.destination,
+        request.conflictPolicy,
+    };
+    if (!request.rename.isEmpty()) {
+        arguments.append(QStringLiteral("--rename"));
+        arguments.append(request.rename);
+    }
+    arguments.append(QStringLiteral("--progress"));
+    arguments.append(request.progressMode);
+    arguments.append(request.sources);
+    return arguments;
 }
 
 QVector<DirectoryEntry> RustBackendClient::decodeEntries(
@@ -353,6 +399,109 @@ DeviceOperationResult RustBackendClient::decodeDeviceOperation(
     result.ok = okValue.toBool();
     result.mountPath = mountPathValue.toString();
     result.message = messageValue.toString();
+    return result;
+}
+
+FileOperationResult RustBackendClient::decodeFileOperation(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error,
+    QVector<FileOperationProgress> *progresses) const
+{
+    FileOperationResult result;
+    result.requestId = requestId;
+    bool terminal = false;
+    const QList<QByteArray> lines = payload.split('\n');
+    for (const QByteArray &line : lines) {
+        if (line.trimmed().isEmpty()) {
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    parseError.error == QJsonParseError::NoError
+                        ? QStringLiteral("file operation event must be a JSON object")
+                        : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+            }
+            return {};
+        }
+
+        const QJsonObject object = document.object();
+        const QString event = object.value(QStringLiteral("event")).toString();
+        if (event == QStringLiteral("progress")) {
+            const QJsonValue done = object.value(QStringLiteral("done"));
+            const QJsonValue total = object.value(QStringLiteral("total"));
+            const QJsonValue percent = object.value(QStringLiteral("percent"));
+            const QJsonValue path = object.value(QStringLiteral("path"));
+            const QJsonValue name = object.value(QStringLiteral("name"));
+            if (!done.isDouble() || !total.isDouble() || !percent.isDouble()
+                || !path.isString() || !name.isString()) {
+                if (error != nullptr) {
+                    *error = makeDecodeError(
+                        requestId,
+                        QStringLiteral("file operation progress fields have incompatible types"));
+                }
+                return {};
+            }
+
+            FileOperationProgress progress;
+            progress.requestId = requestId;
+            progress.mode = object.value(QStringLiteral("mode")).toString();
+            progress.doneCount = done.toInt();
+            progress.totalCount = total.toInt();
+            progress.percent = percent.toInt();
+            progress.path = path.toString();
+            progress.fileName = name.toString();
+            progress.doneBytes = object.value(QStringLiteral("bytesDone")).toInteger();
+            progress.totalBytes = object.value(QStringLiteral("bytesTotal")).toInteger();
+            if (progresses != nullptr) {
+                progresses->append(progress);
+            }
+            continue;
+        }
+
+        if (event == QStringLiteral("done")) {
+            result.ok = true;
+            result.mode = object.value(QStringLiteral("mode")).toString();
+            result.destination = object.value(QStringLiteral("destination")).toString();
+            result.doneCount = object.value(QStringLiteral("done")).toInt();
+            result.totalCount = object.value(QStringLiteral("total")).toInt();
+            result.percent = object.value(QStringLiteral("percent")).toInt();
+            terminal = true;
+            continue;
+        }
+
+        if (event == QStringLiteral("error")) {
+            result.ok = false;
+            result.mode = object.value(QStringLiteral("mode")).toString();
+            result.errorCode = object.value(QStringLiteral("code")).toString();
+            result.errorMessage = object.value(QStringLiteral("message")).toString();
+            terminal = true;
+            continue;
+        }
+
+        if (event != QStringLiteral("start")) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    QStringLiteral("unknown file operation event '%1'").arg(event));
+            }
+            return {};
+        }
+    }
+
+    if (!terminal) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("file operation did not produce a terminal event"));
+        }
+        return {};
+    }
     return result;
 }
 
