@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UNIT_NAME="astrea-screentimed.service"
+USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT_LINK="$USER_UNIT_DIR/$UNIT_NAME"
+UNIT_SOURCE="$ROOT_DIR/$UNIT_NAME"
+LEGACY_UNIT_NAMES=("bench-screentime.service" "astrea-screentimed-rs.service" "astrea-screentimed-legacy.service")
+
+usage() {
+  printf 'Usage: %s {install|enable|disable|start|stop|restart|status|logs}\n' "$0"
+}
+
+cleanup_legacy_service() {
+  for legacy_unit_name in "${LEGACY_UNIT_NAMES[@]}"; do
+    systemctl --user disable --now "$legacy_unit_name" >/dev/null 2>&1 || true
+    legacy_unit_link="$USER_UNIT_DIR/$legacy_unit_name"
+    if [ -L "$legacy_unit_link" ] || [ -e "$legacy_unit_link" ]; then
+      rm -f "$legacy_unit_link"
+    fi
+  done
+}
+
+install_service() {
+  mkdir -p "$USER_UNIT_DIR"
+  ln -sf "$UNIT_SOURCE" "$UNIT_LINK"
+  cleanup_legacy_service
+  systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$UNIT_NAME"
+}
+
+case "${1:-}" in
+  install)
+    install_service
+    ;;
+  enable)
+    install_service
+    ;;
+  disable)
+    cleanup_legacy_service
+    systemctl --user disable --now "$UNIT_NAME" || true
+    systemctl --user daemon-reload
+    ;;
+  start)
+    mkdir -p "$USER_UNIT_DIR"
+    ln -sf "$UNIT_SOURCE" "$UNIT_LINK"
+    cleanup_legacy_service
+    systemctl --user daemon-reload
+    systemctl --user start "$UNIT_NAME"
+    ;;
+  stop)
+    cleanup_legacy_service
+    systemctl --user stop "$UNIT_NAME"
+    ;;
+  restart)
+    mkdir -p "$USER_UNIT_DIR"
+    ln -sf "$UNIT_SOURCE" "$UNIT_LINK"
+    cleanup_legacy_service
+    systemctl --user daemon-reload
+    systemctl --user restart "$UNIT_NAME"
+    ;;
+  status)
+    systemctl --user status "$UNIT_NAME" --no-pager
+    ;;
+  logs)
+    journalctl --user -u "$UNIT_NAME" -n "${2:-80}" --no-pager
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
