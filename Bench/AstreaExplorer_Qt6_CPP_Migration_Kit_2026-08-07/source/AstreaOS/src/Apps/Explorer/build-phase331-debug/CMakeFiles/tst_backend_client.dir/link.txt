@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -Wl,--dependency-file=CMakeFiles/tst_backend_client.dir/link.d CMakeFiles/tst_backend_client.dir/tst_backend_client_autogen/mocs_compilation.cpp.o CMakeFiles/tst_backend_client.dir/tests/tst_backend_client.cpp.o -o tst_backend_client  /usr/lib/libQt6Test.so.6.11.1 libastrea_explorer_native_backend.a /usr/lib/libQt6Core.so.6.11.1

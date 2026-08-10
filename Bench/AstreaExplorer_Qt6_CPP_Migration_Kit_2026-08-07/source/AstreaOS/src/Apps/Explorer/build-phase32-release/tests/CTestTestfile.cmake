@@ -1,0 +1,14 @@
+# CMake generated Testfile for 
+# Source directory: /home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests
+# Build directory: /home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/tests
+# 
+# This file includes the relevant testing commands required for 
+# testing this directory and lists subdirectories to be tested as well.
+add_test("native_bootstrap" "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/tests/tst_native_bootstrap")
+set_tests_properties("native_bootstrap" PROPERTIES  _BACKTRACE_TRIPLES "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;15;add_test;/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;0;")
+add_test("real_main_qml" "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/tests/tst_real_main_qml")
+set_tests_properties("real_main_qml" PROPERTIES  _BACKTRACE_TRIPLES "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;31;add_test;/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;0;")
+add_test("app_state_compatibility" "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/tests/tst_app_state_compatibility")
+set_tests_properties("app_state_compatibility" PROPERTIES  _BACKTRACE_TRIPLES "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;54;add_test;/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;0;")
+add_test("qml_warning_lifetime" "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/tests/tst_qml_warning_lifetime")
+set_tests_properties("qml_warning_lifetime" PROPERTIES  ENVIRONMENT "ASTREA_EXPLORER_NATIVE_SOURCE_ROOT=/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/../src" _BACKTRACE_TRIPLES "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;67;add_test;/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests/CMakeLists.txt;0;")

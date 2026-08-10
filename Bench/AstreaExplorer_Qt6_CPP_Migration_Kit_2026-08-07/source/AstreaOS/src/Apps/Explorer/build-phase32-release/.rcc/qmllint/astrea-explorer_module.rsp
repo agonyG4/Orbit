@@ -1,0 +1,16 @@
+-I
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release
+-I
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/Astrea/Explorer/Native
+-I
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release
+-I
+/usr/lib/qt6/qml
+--resource
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/.qt/rcc/qmake_Astrea_Explorer_Native.qrc
+--resource
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/.qt/rcc/astrea-explorer_raw_qml_0.qrc
+--resource
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/.qt/rcc/astrea-explorer_raw_qml_0_extra_qmldirs.qrc
+--module
+Astrea.Explorer.Native

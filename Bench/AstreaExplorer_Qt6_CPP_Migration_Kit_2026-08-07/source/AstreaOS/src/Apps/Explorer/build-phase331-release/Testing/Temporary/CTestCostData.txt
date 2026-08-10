@@ -1,0 +1,22 @@
+backend_client 2 0.230093
+directory_model 2 0.0093393
+runtime_paths 2 0.0193761
+file_operations_controller 2 0.0148568
+open_with_controller 2 0.0103863
+portal_controller 2 0.00945341
+navigation_controller 2 0.164589
+selection_controller 2 0.0212063
+settings_service 2 0.00472272
+clipboard_service 2 0.0102186
+launch_service 2 0.00193599
+recent_controller 2 0.0151986
+preview_controller 2 0.0102362
+device_controller 2 0.00984157
+app_state_facade 2 0.0520144
+shadow_parity 2 0.196221
+native_bootstrap 2 0.0679496
+real_main_qml 2 0.045139
+app_state_compatibility 2 0.210896
+recent_persistence 2 0.0350885
+qml_warning_lifetime 2 0.0198893
+---

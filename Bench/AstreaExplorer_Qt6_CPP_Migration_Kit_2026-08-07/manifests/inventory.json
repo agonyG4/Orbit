@@ -1,0 +1,66 @@
+{
+  "snapshot_date": "2026-08-07",
+  "source_archives": {
+    "Explorer.zip": {
+      "sha256": "a8546b41213cac339e266fd920a52cc61fab976c45ba0b2ec30374a8db9c7c77",
+      "size": 182088
+    },
+    "AstreaOS-Stable(1).zip": {
+      "sha256": "f4ef3561e19df4c6d5d818d79921396198d4bc575e35b4da838af1ad82ee0d2b",
+      "size": 40065889
+    }
+  },
+  "explorer": {
+    "qml_files": 23,
+    "js_files": 1,
+    "qml_process_nodes": 37,
+    "helper_python_lines": 1679,
+    "helper_subcommands": [
+      "create-folder",
+      "rename",
+      "suggest-dirs",
+      "which",
+      "network-mount-probe",
+      "copy-uri-list",
+      "scan-conflicts",
+      "monitor-dir",
+      "trash",
+      "restore-trash",
+      "empty-trash",
+      "paste-image",
+      "extract-archive",
+      "compress-folder",
+      "create-desktop-shortcut",
+      "merged-recents",
+      "open-with-apps",
+      "launch-open-with",
+      "set-default-open-with"
+    ],
+    "python_test_methods": 69
+  },
+  "rust_backend": {
+    "commands": [
+      "list",
+      "search",
+      "devices",
+      "mount",
+      "unmount",
+      "remount",
+      "warm-thumbnails",
+      "install-appimage",
+      "file-op"
+    ],
+    "rust_source_files": 7,
+    "rust_source_lines": 3609,
+    "rust_test_functions": 37,
+    "dependencies": [
+      "md5 = 0.7",
+      "rayon = 1.10"
+    ]
+  },
+  "verified_here": {
+    "python_unittest": "69 tests passed after restoring the archive symlinks to their tracked targets",
+    "rust_tests": "not run: rustc/cargo are not installed in this artifact environment"
+  },
+  "standalone_vs_astreaos": "29 regular Explorer files are byte-identical; AstreaOS additionally carries four tracked symlinks to shared modules."
+}

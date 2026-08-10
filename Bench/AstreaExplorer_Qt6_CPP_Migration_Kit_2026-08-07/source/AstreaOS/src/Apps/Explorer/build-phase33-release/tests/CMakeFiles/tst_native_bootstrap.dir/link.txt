@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tst_native_bootstrap.dir/link.d CMakeFiles/tst_native_bootstrap.dir/tst_native_bootstrap_autogen/mocs_compilation.cpp.o CMakeFiles/tst_native_bootstrap.dir/tst_native_bootstrap.cpp.o -o tst_native_bootstrap  /usr/lib/libQt6Test.so.6.11.1 /usr/lib/libQt6Core.so.6.11.1

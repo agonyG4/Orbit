@@ -1,0 +1,2 @@
+/usr/bin/ar qc libastrea_explorer_native_clipboard.a CMakeFiles/astrea_explorer_native_clipboard.dir/astrea_explorer_native_clipboard_autogen/mocs_compilation.cpp.o CMakeFiles/astrea_explorer_native_clipboard.dir/src/services/clipboard_service.cpp.o
+/usr/bin/ranlib libastrea_explorer_native_clipboard.a

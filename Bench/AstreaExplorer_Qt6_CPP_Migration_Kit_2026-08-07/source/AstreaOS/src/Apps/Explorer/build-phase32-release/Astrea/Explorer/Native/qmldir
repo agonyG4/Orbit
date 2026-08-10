@@ -1,0 +1,6 @@
+module Astrea.Explorer.Native
+typeinfo astrea-explorer.qmltypes
+prefer :/qt/qml/Astrea/Explorer/Native/
+NativeBootstrap 1.0 qml/NativeBootstrap.qml
+depends QtQuick
+

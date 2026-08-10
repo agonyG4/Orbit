@@ -1,0 +1,43 @@
+file(REMOVE_RECURSE
+  ".qt/rcc/qrc_astrea-explorer_raw_qml_0.cpp"
+  ".qt/rcc/qrc_astrea-explorer_raw_qml_0_extra_qmldirs.cpp"
+  ".qt/rcc/qrc_qmake_Astrea_Explorer_Native.cpp"
+  ".rcc/qmlcache/astrea-explorer_qml/NativeBootstrap_qml.cpp"
+  ".rcc/qmlcache/astrea-explorer_qml/NativeBootstrap_qml.cpp.aotstats"
+  ".rcc/qmlcache/astrea-explorer_qmlcache_loader.cpp"
+  "CMakeFiles/astrea-explorer.dir/link.d"
+  "CMakeFiles/astrea-explorer_autogen.dir/AutogenUsed.txt"
+  "CMakeFiles/astrea-explorer_autogen.dir/ParseCache.txt"
+  "astrea-explorer_autogen"
+  "Astrea/Explorer/Native/astrea-explorer.qmltypes"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_astrea-explorer_raw_qml_0.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_astrea-explorer_raw_qml_0.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_astrea-explorer_raw_qml_0_extra_qmldirs.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_astrea-explorer_raw_qml_0_extra_qmldirs.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_qmake_Astrea_Explorer_Native.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/.qt/rcc/qrc_qmake_Astrea_Explorer_Native.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/.rcc/qmlcache/astrea-explorer_qml/NativeBootstrap_qml.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/.rcc/qmlcache/astrea-explorer_qml/NativeBootstrap_qml.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/.rcc/qmlcache/astrea-explorer_qmlcache_loader.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/.rcc/qmlcache/astrea-explorer_qmlcache_loader.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/astrea-explorer_autogen/mocs_compilation.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/astrea-explorer_autogen/mocs_compilation.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/astrea-explorer_qmltyperegistrations.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/astrea-explorer_qmltyperegistrations.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/src/explorer_application.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/src/explorer_application.cpp.o.d"
+  "CMakeFiles/astrea-explorer.dir/src/main.cpp.o"
+  "CMakeFiles/astrea-explorer.dir/src/main.cpp.o.d"
+  "astrea-explorer"
+  "astrea-explorer.pdb"
+  "astrea-explorer_qmltyperegistrations.cpp"
+  "meta_types/astrea-explorer_json_file_list.txt"
+  "meta_types/astrea-explorer_json_file_list.txt.timestamp"
+  "meta_types/qt6astrea-explorer_metatypes.json"
+  "meta_types/qt6astrea-explorer_metatypes.json.gen"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/astrea-explorer.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

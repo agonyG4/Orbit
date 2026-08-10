@@ -1,0 +1,63 @@
+<h2>Notepad Astrea: direção visual</h2>
+<p class="subtitle">Três jeitos de aproximar o Notepad do Email app e do Apple Notes. Clique numa opção se quiser indicar preferência.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A — Editor focado</div>
+        <div class="mockup-body" style="display:grid;grid-template-rows:44px 1fr 28px;gap:10px;height:260px">
+          <div class="mock-nav">Novo · Abrir · Salvar <span style="float:right">B I U · Cor · Imagem</span></div>
+          <div class="placeholder" style="height:165px">Área de escrita rica, limpa e central</div>
+          <div class="mock-nav">Sem título.html · 128 palavras</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Migração visual mínima</h3>
+      <p>Preserva o app atual, troca tema/botões/search/menu por Astrea e melhora polimento. Mais rápido e reversível, mas menos parecido com Apple Notes.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B — Apple Notes leve</div>
+        <div class="mockup-body" style="display:grid;grid-template-columns:210px 1fr;gap:10px;height:260px">
+          <div class="mock-sidebar">
+            <div class="mock-input">Buscar notas</div>
+            <div class="placeholder" style="height:36px">Hoje · Nota rápida</div>
+            <div class="placeholder" style="height:36px">Ontem · Ideias</div>
+            <div class="placeholder" style="height:36px">Arquivo aberto</div>
+          </div>
+          <div style="display:grid;grid-template-rows:44px 1fr 28px;gap:10px">
+            <div class="mock-nav">Novo · Abrir · Salvar <span style="float:right">Aa · B I U · Imagem</span></div>
+            <div class="placeholder">Título + editor rico</div>
+            <div class="mock-nav">Editado agora · 128 palavras</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Recomendado: Notes leve</h3>
+      <p>Adiciona sidebar, busca, lista de notas recentes/arquivos e editor central. Usa Astrea como Email. Bom equilíbrio entre função e risco.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C — Biblioteca completa</div>
+        <div class="mockup-body" style="display:grid;grid-template-columns:150px 230px 1fr;gap:10px;height:260px">
+          <div class="mock-sidebar">Pastas<br><br>iCloud<br>Local<br>Arquivadas</div>
+          <div class="mock-sidebar"><div class="mock-input">Buscar</div><br>Lista detalhada de notas</div>
+          <div class="placeholder">Editor + anexos + organização</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Apple Notes completo</h3>
+      <p>Pastas, biblioteca de notas, persistência própria e features avançadas. Mais fiel, mas exige backend/modelo novo e maior risco.</p>
+    </div>
+  </div>
+</div>

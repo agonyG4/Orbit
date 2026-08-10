@@ -1,0 +1,9 @@
+-rootPath
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native
+-cmake-output
+-output-file
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase331-release/.qt/qml_imports/tst_selection_controller_conf.cmake
+-importPath
+/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase331-release
+-importPath
+/usr/lib/qt6/qml

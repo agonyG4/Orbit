@@ -1,0 +1,2 @@
+/usr/bin/ar qc libastrea_explorer_native_launch.a CMakeFiles/astrea_explorer_native_launch.dir/astrea_explorer_native_launch_autogen/mocs_compilation.cpp.o CMakeFiles/astrea_explorer_native_launch.dir/src/services/launch_service.cpp.o
+/usr/bin/ranlib libastrea_explorer_native_launch.a
