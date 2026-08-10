@@ -1,0 +1,54 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Codex / local tooling
+.superpowers/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Rust build output
+target/
+
+# CMake, Qt, and other native build output
+build*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+*_autogen/
+.qt/
+.rcc/
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Native compiler output
+*.o
+*.obj
+*.lo
+*.a
+*.so
+*.dylib
+*.dll
