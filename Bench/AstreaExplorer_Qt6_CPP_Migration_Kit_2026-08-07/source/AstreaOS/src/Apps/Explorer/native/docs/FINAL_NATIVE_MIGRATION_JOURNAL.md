@@ -48,8 +48,9 @@ does not provide a Quickshell or Python fallback.
 - Open With builds one desktop-entry catalog asynchronously, filters cached
   MIME associations, applies the XDG default application, and sorts
   deterministically. Late catalog generations are ignored.
-- The persistent worker is versioned JSONL with request IDs, bounded response
-  lines, timeout/crash failure mapping, and deterministic shutdown cleanup.
+- The persistent worker is versioned JSONL with request IDs, bounded request
+  and response/child-stream sizes, timeout/crash failure mapping, worker-side
+  child termination for cancellation, and deterministic shutdown cleanup.
 - Portal results are written atomically through `QSaveFile`; the portal keeps
   its compatibility result prefixes for stdout fallback while using the result
   file in native mode.
