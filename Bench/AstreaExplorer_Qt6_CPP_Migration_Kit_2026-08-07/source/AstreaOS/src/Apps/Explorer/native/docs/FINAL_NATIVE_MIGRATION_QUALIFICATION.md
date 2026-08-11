@@ -60,3 +60,4 @@ normal native runtime uses one persistent backend worker.
   installed.
 - Source-only archive: generated only after the final qualification checks;
   archive contents were inspected for build directories and compiled files.
+  Final path: `AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-11-final-source-only.zip`.
