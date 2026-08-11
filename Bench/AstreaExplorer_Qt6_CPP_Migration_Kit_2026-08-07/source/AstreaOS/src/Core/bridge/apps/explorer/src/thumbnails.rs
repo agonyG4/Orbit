@@ -13,13 +13,17 @@ const WARM_THUMBNAIL_THREADS: usize = 4;
 static CACHE_DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 pub fn run_warm(args: &[String]) -> Result<(), String> {
+    println!("{}", warm_count(args)?);
+    Ok(())
+}
+
+pub fn warm_count(args: &[String]) -> Result<usize, String> {
     let (dir, show_hidden, sort_field, sort_asc, folders_first) = entries::parse_list_args(args)?;
     let offset = args.get(5).and_then(|v| v.parse().ok()).unwrap_or(0usize);
     let limit = args.get(6).and_then(|v| v.parse().ok()).unwrap_or(24usize);
 
     if entries::path_uses_remote_listing(dir) {
-        println!("0");
-        return Ok(());
+        return Ok(0);
     }
 
     let cache = cache_dir()?;
@@ -52,8 +56,7 @@ pub fn run_warm(args: &[String]) -> Result<(), String> {
             .count()
     });
 
-    println!("{warmed}");
-    Ok(())
+    Ok(warmed)
 }
 
 pub fn preview_url(path: &Path, is_dir: bool, modified_ms: i64) -> String {

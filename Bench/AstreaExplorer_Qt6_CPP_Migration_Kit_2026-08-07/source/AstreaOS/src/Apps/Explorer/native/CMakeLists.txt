@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(AstreaExplorerNative LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -14,10 +16,14 @@ enable_testing()
 set(ASTREA_EXPLORER_BIN "${CMAKE_BINARY_DIR}/astrea-explorer")
 set(ASTREA_EXPLORER_RUNTIME_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src")
+set(ASTREA_EXPLORER_BACKEND_PROGRAM "" CACHE FILEPATH
+    "Path to the release explorer_backend binary installed with astrea-explorer")
 
 add_library(astrea_explorer_native_backend STATIC
     src/backend/backend_types.h
     src/backend/backend_transport.h
+    src/backend/persistent_worker_transport.h
+    src/backend/persistent_worker_transport.cpp
     src/backend/one_shot_cli_transport.h
     src/backend/one_shot_cli_transport.cpp
     src/backend/rust_backend_client.h
@@ -50,6 +56,10 @@ add_library(astrea_explorer_native_operations STATIC
     src/controllers/portal_controller.cpp
     src/services/file_operation_service.h
     src/services/file_operation_service.cpp
+    src/services/filesystem_service.h
+    src/services/filesystem_service.cpp
+    src/services/wallpaper_service.h
+    src/services/wallpaper_service.cpp
 )
 
 target_include_directories(astrea_explorer_native_operations PUBLIC
@@ -457,8 +467,6 @@ set(ASTREA_EXPLORER_RUST_ROOT
 qt_add_executable(tst_shadow_parity
     tests/parity/fixture_tree.h
     tests/parity/fixture_tree.cpp
-    tests/parity/legacy_oracle.h
-    tests/parity/legacy_oracle.cpp
     tests/parity/native_oracle.h
     tests/parity/native_oracle.cpp
     tests/parity/parity_snapshot.h
@@ -473,7 +481,6 @@ target_include_directories(tst_shadow_parity PRIVATE
 
 target_compile_definitions(tst_shadow_parity PRIVATE
     ASTREA_EXPLORER_PARITY_BACKEND="${ASTREA_EXPLORER_RUST_ROOT}/target/debug/explorer_backend"
-    ASTREA_EXPLORER_PARITY_HELPER="${CMAKE_CURRENT_SOURCE_DIR}/../explorer_helper.py"
 )
 
 target_link_libraries(tst_shadow_parity PRIVATE
@@ -485,3 +492,45 @@ target_link_libraries(tst_shadow_parity PRIVATE
 add_test(NAME shadow_parity COMMAND tst_shadow_parity)
 
 add_subdirectory(tests)
+
+# Production installation is rooted at ~/.local/share/Astrea (or the selected
+# CMAKE_INSTALL_PREFIX) so the runtime resolver remains independent of the
+# source checkout. QML is installed as source presentation; the Rust backend
+# is supplied explicitly by the packaging/build pipeline.
+install(TARGETS astrea-explorer
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+set(ASTREA_INSTALL_RUNTIME_ROOT "${CMAKE_INSTALL_DATADIR}/Astrea")
+install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Apps"
+    FILES_MATCHING
+        PATTERN "*.qml"
+        PATTERN "*.js"
+        PATTERN "qmldir"
+        PATTERN "*.json"
+        PATTERN "*.svg"
+        PATTERN "*.png"
+        PATTERN "*.jpg"
+        PATTERN "*.jpeg"
+        PATTERN "native" EXCLUDE
+        PATTERN "tests" EXCLUDE
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "QuickshellComponents" EXCLUDE
+        PATTERN "build*" EXCLUDE)
+install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Core/components"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core"
+    FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
+        PATTERN "*.json" PATTERN "*.svg" PATTERN "*.png")
+install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Features/Files"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Features"
+    FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir")
+install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/System/i18n"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/System"
+    FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
+        PATTERN "*.json")
+if (ASTREA_EXPLORER_BACKEND_PROGRAM AND EXISTS "${ASTREA_EXPLORER_BACKEND_PROGRAM}")
+    install(PROGRAMS "${ASTREA_EXPLORER_BACKEND_PROGRAM}"
+        DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core/bridge/apps"
+        RENAME explorer_backend)
+endif()

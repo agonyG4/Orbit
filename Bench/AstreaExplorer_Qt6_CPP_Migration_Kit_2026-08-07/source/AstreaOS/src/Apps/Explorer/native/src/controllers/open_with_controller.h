@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHash>
+#include <QPointer>
+#include <QThread>
 #include <QVariantList>
 #include <QVector>
 
@@ -15,6 +17,7 @@ struct OpenWithApplication
     QString icon;
     QString desktopFile;
     bool isDefault = false;
+    QStringList mimeTypes;
 };
 
 class OpenWithController final : public QObject
@@ -31,6 +34,7 @@ public:
     explicit OpenWithController(
         Services::LaunchService *launchService = nullptr,
         QObject *parent = nullptr);
+    ~OpenWithController() override;
 
     QVector<OpenWithApplication> applications() const;
     QVariantList applicationList() const;
@@ -64,6 +68,10 @@ private:
     QString m_selectedApplicationId;
     bool m_busy = false;
     QString m_error;
+    DesktopCatalog m_catalog;
+    QPointer<QThread> m_discoveryThread;
+    quint64 m_discoveryGeneration = 0;
+    bool m_catalogReady = false;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

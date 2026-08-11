@@ -8,10 +8,13 @@
 #include "controllers/device_controller.h"
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
+#include "controllers/open_with_controller.h"
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "runtime/explorer_runtime_paths.h"
 #include "services/settings_service.h"
+#include "services/filesystem_service.h"
+#include "services/wallpaper_service.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -85,6 +88,28 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString pendingPasteRename READ pendingPasteRename WRITE setPendingPasteRename NOTIFY pasteConflictStateChanged)
     Q_PROPERTY(QVariantList deviceModel READ deviceModel NOTIFY deviceStateChanged)
     Q_PROPERTY(QString deviceError READ deviceError NOTIFY deviceStateChanged)
+    Q_PROPERTY(QString deviceOperationPath READ deviceOperationPath NOTIFY deviceStateChanged)
+    Q_PROPERTY(QString deviceOperationType READ deviceOperationType NOTIFY deviceStateChanged)
+    Q_PROPERTY(QString deviceOperationTargetMountPath READ deviceOperationTargetMountPath NOTIFY deviceStateChanged)
+    Q_PROPERTY(bool deviceOperationOpenAfterMount READ deviceOperationOpenAfterMount NOTIFY deviceStateChanged)
+    Q_PROPERTY(QString lastUnmountedMountPath READ lastUnmountedMountPath NOTIFY deviceStateChanged)
+    Q_PROPERTY(bool archiveExtractionRunning READ archiveExtractionRunning NOTIFY archiveStateChanged)
+    Q_PROPERTY(double archiveExtractionProgress READ archiveExtractionProgress NOTIFY archiveStateChanged)
+    Q_PROPERTY(int archiveExtractionPercent READ archiveExtractionPercent NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveExtractionFileName READ archiveExtractionFileName NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveExtractionStatus READ archiveExtractionStatus NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveExtractionError READ archiveExtractionError NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveExtractionDestination READ archiveExtractionDestination NOTIFY archiveStateChanged)
+    Q_PROPERTY(int archiveExtractionDoneCount READ archiveExtractionDoneCount NOTIFY archiveStateChanged)
+    Q_PROPERTY(int archiveExtractionTotalCount READ archiveExtractionTotalCount NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveExtractionRemainingText READ archiveExtractionRemainingText NOTIFY archiveStateChanged)
+    Q_PROPERTY(bool archivePasswordPromptVisible READ archivePasswordPromptVisible NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archivePasswordError READ archivePasswordError NOTIFY archiveStateChanged)
+    Q_PROPERTY(bool archiveConflictVisible READ archiveConflictVisible NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveConflictDestination READ archiveConflictDestination NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveConflictName READ archiveConflictName NOTIFY archiveStateChanged)
+    Q_PROPERTY(bool appImageInstallRunning READ appImageInstallRunning NOTIFY archiveStateChanged)
+    Q_PROPERTY(bool wallpaperApplyRunning READ wallpaperApplyRunning NOTIFY wallpaperStateChanged)
 
 public:
     AppStateFacade(
@@ -96,7 +121,11 @@ public:
         FileOperationsController *fileOperations = nullptr,
         DeviceController *devices = nullptr,
         Runtime::ExplorerRuntimePaths runtimePaths = {},
-        RecentController *recentController = nullptr);
+        RecentController *recentController = nullptr,
+        Services::FilesystemService *filesystemService = nullptr,
+        OpenWithController *openWith = nullptr,
+        Services::LaunchService *launchService = nullptr,
+        Services::WallpaperService *wallpaperService = nullptr);
 
     QAbstractItemModel *fileModel() const;
     QString homePath() const;
@@ -165,6 +194,28 @@ public:
     QString pendingPasteRename() const;
     QVariantList deviceModel() const;
     QString deviceError() const;
+    QString deviceOperationPath() const;
+    QString deviceOperationType() const;
+    QString deviceOperationTargetMountPath() const;
+    bool deviceOperationOpenAfterMount() const;
+    QString lastUnmountedMountPath() const;
+    bool archiveExtractionRunning() const;
+    double archiveExtractionProgress() const;
+    int archiveExtractionPercent() const;
+    QString archiveExtractionFileName() const;
+    QString archiveExtractionStatus() const;
+    QString archiveExtractionError() const;
+    QString archiveExtractionDestination() const;
+    int archiveExtractionDoneCount() const;
+    int archiveExtractionTotalCount() const;
+    QString archiveExtractionRemainingText() const;
+    bool archivePasswordPromptVisible() const;
+    QString archivePasswordError() const;
+    bool archiveConflictVisible() const;
+    QString archiveConflictDestination() const;
+    QString archiveConflictName() const;
+    bool appImageInstallRunning() const;
+    bool wallpaperApplyRunning() const;
 
     void setShowPreview(bool showPreview);
     void setPreviewsEnabled(bool enabled);
@@ -206,6 +257,22 @@ public:
         const QString &path,
         bool isDirectory,
         const QString &fileUrl = QString());
+    Q_INVOKABLE BackendRequestId createFolder(
+        const QString &basePath,
+        const QString &name);
+    Q_INVOKABLE BackendRequestId renamePath(
+        const QString &sourcePath,
+        const QString &newName);
+    Q_INVOKABLE BackendRequestId requestDirectorySuggestions(
+        const QString &basePath,
+        const QString &prefix);
+    Q_INVOKABLE BackendRequestId checkExecutable(const QString &program);
+    Q_INVOKABLE BackendRequestId requestProperties(const QString &path);
+    Q_INVOKABLE BackendRequestId createDesktopShortcut(const QString &path);
+    Q_INVOKABLE BackendRequestId requestNetworkMountProbe(const QString &rootPath);
+    Q_INVOKABLE BackendRequestId connectToNetwork(const QString &address);
+    Q_INVOKABLE void refreshDevices();
+    Q_INVOKABLE void ensureAutoMountDevices();
     Q_INVOKABLE bool replaceFileModel(const QVariantList &items);
     Q_INVOKABLE int updateFileModelMetadata(const QVariantList &items);
     Q_INVOKABLE int removePathsFromFileModel(const QStringList &paths);
@@ -240,6 +307,26 @@ public:
     Q_INVOKABLE void resolvePasteConflict(const QString &policy);
     Q_INVOKABLE void renamePasteConflict(const QString &name);
     Q_INVOKABLE void cancelPasteConflict();
+    Q_INVOKABLE void deleteSelected();
+    Q_INVOKABLE void restoreSelected();
+    Q_INVOKABLE void emptyTrash();
+    Q_INVOKABLE void startArchiveExtraction(const QString &path, const QString &folderName);
+    Q_INVOKABLE void submitArchivePassword(const QString &password);
+    Q_INVOKABLE void cancelArchivePassword();
+    Q_INVOKABLE void submitArchiveConflict(const QString &policy);
+    Q_INVOKABLE void cancelArchiveConflict();
+    Q_INVOKABLE void startFolderCompression(const QString &path, const QString &format);
+    Q_INVOKABLE void installAppImage(const QString &path);
+    Q_INVOKABLE void setAsWallpaper(const QString &path);
+    Q_INVOKABLE QVariantList openWithApplications(const QString &path);
+    Q_INVOKABLE bool launchOpenWith(const QString &path, const QString &desktopFile);
+    Q_INVOKABLE bool setDefaultOpenWith(const QString &path, const QString &desktopFile);
+    Q_INVOKABLE void openItem(const QString &path, bool isDirectory, const QString &fileUrl = QString());
+    Q_INVOKABLE void openFile(const QString &path);
+    Q_INVOKABLE void refreshPreviewMetadata();
+    Q_INVOKABLE void requestThumbnailWarm(const QString &path, int offset, int limit);
+    Q_INVOKABLE QString themedIconSource(const QString &iconName, int size, const QString &themeName);
+    Q_INVOKABLE bool writePortalResult(const QString &json);
     Q_INVOKABLE BackendRequestId requestMountDevice(
         const QString &devicePath,
         bool fromAutoMount = false,
@@ -279,6 +366,7 @@ public:
         bool preserveCurrentSelection);
 
 signals:
+    void openWithReady(const QString &path, const QVariantList &applications);
     void currentPathChanged();
     void historyChanged();
     void tabsChanged();
@@ -309,6 +397,14 @@ signals:
     void fileOperationStateChanged();
     void pasteConflictStateChanged();
     void deviceStateChanged();
+    void archiveStateChanged();
+    void wallpaperStateChanged();
+    void filesystemActionFinished(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const QString &operation,
+        bool ok,
+        const QVariantMap &data,
+        const QString &error);
 
 private slots:
     void handleModelChanged();
@@ -325,6 +421,32 @@ private:
     FileOperationsController *m_fileOperations = nullptr;
     DeviceController *m_devices = nullptr;
     RecentController *m_recentController = nullptr;
+    Services::FilesystemService *m_filesystemService = nullptr;
+    BackendRequestId m_thumbnailWarmRequest = 0;
+    BackendRequestId m_archiveRequest = 0;
+    QString m_archivePath;
+    QString m_archiveDestination;
+    QString m_archiveConflictPolicy {QStringLiteral("keep-both")};
+    bool m_archiveRunning = false;
+    bool m_archivePasswordPrompt = false;
+    bool m_archiveConflict = false;
+    double m_archiveProgress = 0.0;
+    int m_archivePercent = 0;
+    int m_archiveDoneCount = 0;
+    int m_archiveTotalCount = 0;
+    QString m_archiveFileName;
+    QString m_archiveStatus;
+    QString m_archiveError;
+    QString m_archiveDestinationResult;
+    QString m_archivePasswordError;
+    QString m_archiveConflictDestination;
+    QString m_archiveConflictName;
+    bool m_appImageInstallRunning = false;
+    bool m_wallpaperApplyRunning = false;
+    OpenWithController *m_openWith = nullptr;
+    Services::LaunchService *m_launchService = nullptr;
+    Services::WallpaperService *m_wallpaperService = nullptr;
+    QString m_openWithPath;
     Runtime::ExplorerRuntimePaths m_runtimePaths;
     Services::ExplorerSettings m_settings;
     int m_fileModelRevision = 0;

@@ -2,11 +2,16 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QGuiApplication>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlApplicationEngine>
 #include <QProcessEnvironment>
+#include <QStandardPaths>
 #include <QTextStream>
 #include <QUrl>
 #include <QString>
@@ -14,7 +19,7 @@
 
 #include <QtQml/qqml.h>
 
-#include "backend/one_shot_cli_transport.h"
+#include "backend/persistent_worker_transport.h"
 #include "backend/rust_backend_client.h"
 #include "controllers/app_state_facade.h"
 #include "controllers/device_controller.h"
@@ -29,6 +34,7 @@
 #include "services/clipboard_service.h"
 #include "services/directory_watch_service.h"
 #include "services/file_operation_service.h"
+#include "services/filesystem_service.h"
 #include "services/launch_service.h"
 #include "services/settings_service.h"
 
@@ -41,6 +47,76 @@ constexpr auto kBootstrapTypeName = "NativeBootstrap";
 constexpr auto kNativeAppStateTypeName = "NativeAppState";
 constexpr auto kSelfTestArgument = "--self-test";
 constexpr auto kBootstrapArgument = "--bootstrap";
+
+QVariantMap readJsonMap(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    return document.isObject() ? document.object().toVariantMap() : QVariantMap{};
+}
+
+QString configuredLanguage(const QString &configRoot)
+{
+    const QString configPath = QDir(configRoot).filePath(
+        QStringLiteral("AstreaOS/system/settings.json"));
+    const QVariantMap settings = readJsonMap(configPath);
+    const QStringList keys = {
+        QStringLiteral("language"),
+        QStringLiteral("locale"),
+        QStringLiteral("ui_language"),
+        QStringLiteral("lang")};
+    for (const QString &key : keys) {
+        QString value = settings.value(key).toString().trimmed();
+        if (!value.isEmpty()) {
+            return value.replace(QLatin1Char('-'), QLatin1Char('_'));
+        }
+    }
+    return QStringLiteral("en_US");
+}
+
+struct I18nContext final {
+    QString language;
+    QVariantMap strings;
+    QVariantMap fallbackStrings;
+    QVariantMap messages;
+};
+
+I18nContext loadI18nContext(const QString &runtimeRoot)
+{
+    const QString catalogRoot = QDir(runtimeRoot).filePath(QStringLiteral("System/i18n"));
+    const QVariantMap fallbackStrings = readJsonMap(
+        QDir(catalogRoot).filePath(QStringLiteral("en_US.json")));
+    QString language = configuredLanguage(
+        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation));
+    const QStringList catalogs = QDir(catalogRoot).entryList(
+        {QStringLiteral("*.json")}, QDir::Files);
+    QString matchedLanguage;
+    for (const QString &catalog : catalogs) {
+        const QString candidate = QFileInfo(catalog).completeBaseName();
+        if (candidate.compare(language, Qt::CaseInsensitive) == 0) {
+            matchedLanguage = candidate;
+            break;
+        }
+    }
+    if (matchedLanguage.isEmpty()) {
+        matchedLanguage = QStringLiteral("en_US");
+    }
+    QVariantMap strings = readJsonMap(
+        QDir(catalogRoot).filePath(matchedLanguage + QStringLiteral(".json")));
+    if (strings.isEmpty() && matchedLanguage != QStringLiteral("en_US")) {
+        matchedLanguage = QStringLiteral("en_US");
+        strings = fallbackStrings;
+    }
+
+    QVariantMap messages = fallbackStrings;
+    for (auto it = strings.cbegin(); it != strings.cend(); ++it) {
+        messages.insert(it.key(), it.value());
+    }
+    return {matchedLanguage, strings, fallbackStrings, messages};
+}
 }
 
 int ExplorerApplication::run(int argc, char **argv)
@@ -53,6 +129,7 @@ int ExplorerApplication::run(int argc, char **argv)
     const QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     const bool useBootstrap = application.arguments().contains(
         QString::fromLatin1(kBootstrapArgument));
+    const bool usePortal = application.arguments().contains(QStringLiteral("--portal"));
     const auto runtimePaths = Astrea::Explorer::Native::Runtime::ExplorerRuntimeResolver::resolve(
         QCoreApplication::applicationDirPath(),
         QDir::homePath(),
@@ -69,11 +146,11 @@ int ExplorerApplication::run(int argc, char **argv)
     }
     using namespace Astrea::Explorer::Native::Backend;
     using namespace Astrea::Explorer::Native::Services;
-    OneShotCliTransportOptions transportOptions;
+    PersistentWorkerTransportOptions transportOptions;
     if (runtimePaths.valid) {
         transportOptions.backendProgram = runtimePaths.backendProgram;
     }
-    OneShotCliTransport transport(transportOptions, &application);
+    PersistentWorkerTransport transport(transportOptions, &application);
     RustBackendClient backendClient(&transport, &application);
     DirectoryModel directoryModel(&application);
     DirectoryWatchService directoryWatcher(&application);
@@ -85,6 +162,7 @@ int ExplorerApplication::run(int argc, char **argv)
         runtimePaths.launcherProgram,
         runtimePaths.windowsRunnerProgram);
     FileOperationService fileOperationService(&backendClient, &application);
+    FilesystemService filesystemService(&backendClient, &application);
     FileOperationsController fileOperations(
         &fileOperationService,
         &clipboard,
@@ -94,6 +172,7 @@ int ExplorerApplication::run(int argc, char **argv)
         &application,
         initialSettings.autoMountDeviceIdsJson);
     OpenWithController openWith(&launchService, &application);
+    WallpaperService wallpaper(&application);
     PortalController portal(&application);
     NavigationController navigation(
         &backendClient,
@@ -121,7 +200,11 @@ int ExplorerApplication::run(int argc, char **argv)
         &fileOperations,
         &devices,
         runtimePaths,
-        &recentController);
+        &recentController,
+        &filesystemService,
+        &openWith,
+        &launchService,
+        &wallpaper);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,
@@ -130,18 +213,53 @@ int ExplorerApplication::run(int argc, char **argv)
         &appState);
 
     QQmlApplicationEngine engine;
+    const I18nContext i18n = loadI18nContext(runtimePaths.root);
+    application.setProperty("astreaRuntimeRoot", runtimePaths.root);
+    application.setProperty(
+        "astreaUserName",
+        environment.value(QStringLiteral("USER"), QDir::home().dirName()));
+    application.setProperty("astreaI18nLanguage", i18n.language);
+    application.setProperty("astreaI18nStrings", i18n.strings);
+    application.setProperty("astreaI18nFallbackStrings", i18n.fallbackStrings);
+    application.setProperty("astreaI18nMessages", i18n.messages);
     engine.rootContext()->setContextProperty(
         QStringLiteral("astreaNativeAppStateAvailable"),
         runtimePaths.valid && !useBootstrap);
 
-    const bool loaded = useBootstrap
+    if (usePortal) {
+        const QByteArray optionsBytes = environment.value(
+            QStringLiteral("ASTREA_FILE_DIALOG_OPTIONS"),
+            environment.value(QStringLiteral("BENCH_FILE_DIALOG_OPTIONS"))).toUtf8();
+        const QJsonObject options = QJsonDocument::fromJson(optionsBytes).object();
+        PortalOptions portalOptions;
+        portalOptions.mode = options.value(QStringLiteral("mode")).toString(QStringLiteral("open_file"));
+        portalOptions.multiple = options.value(QStringLiteral("multiple")).toBool(false);
+        portalOptions.directoryOnly = portalOptions.mode == QStringLiteral("select_folder");
+        portalOptions.currentLocation = options.value(QStringLiteral("startFolder")).toString(QDir::homePath());
+        portal.begin(portalOptions);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("astreaPortalOptionsJson"),
+            environment.value(QStringLiteral("ASTREA_FILE_DIALOG_OPTIONS"),
+                              environment.value(QStringLiteral("BENCH_FILE_DIALOG_OPTIONS"))));
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("astreaPortalResultFile"),
+            environment.value(QStringLiteral("ASTREA_FILE_DIALOG_RESULT_FILE"),
+                              environment.value(QStringLiteral("BENCH_FILE_DIALOG_RESULT_FILE"))));
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("NativePortalController"),
+            &portal);
+    }
+
+    const bool loaded = usePortal
+        ? loadPortalQml(engine, runtimePaths)
+        : useBootstrap
         ? loadBootstrap(engine)
         : loadExplorerQml(engine, runtimePaths);
     if (!loaded) {
         return 1;
     }
 
-    if (navigation.currentPath().isEmpty()) {
+    if (!usePortal && navigation.currentPath().isEmpty()) {
         const QString requestedStartPath = environment
             .value(QStringLiteral("ASTREA_EXPLORER_START_PATH"))
             .trimmed();
@@ -193,6 +311,19 @@ bool ExplorerApplication::loadExplorerQml(
     }
 
     return !engine.rootObjects().isEmpty() && m_runtimeWarnings.isEmpty();
+}
+
+bool ExplorerApplication::loadPortalQml(
+    QQmlApplicationEngine &engine,
+    const Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths &paths) const
+{
+    for (const QString &importPath : paths.importPaths) {
+        engine.addImportPath(importPath);
+    }
+    const QUrl portalUrl = QUrl::fromLocalFile(
+        QDir(paths.root).filePath(QStringLiteral("Apps/Explorer/PortalDialog.qml")));
+    engine.load(portalUrl);
+    return !engine.rootObjects().isEmpty();
 }
 
 bool ExplorerApplication::loadBootstrap(QQmlApplicationEngine &engine) const

@@ -5,7 +5,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMimeDatabase>
 #include <QRegularExpression>
+#include <QSettings>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -23,7 +27,11 @@ AppStateFacade::AppStateFacade(
     FileOperationsController *fileOperations,
     DeviceController *devices,
     Runtime::ExplorerRuntimePaths runtimePaths,
-    RecentController *recentController)
+    RecentController *recentController,
+    Services::FilesystemService *filesystemService,
+    OpenWithController *openWith,
+    Services::LaunchService *launchService,
+    Services::WallpaperService *wallpaperService)
     : QObject(parent)
     , m_navigation(navigation)
     , m_selection(selection)
@@ -32,6 +40,10 @@ AppStateFacade::AppStateFacade(
     , m_fileOperations(fileOperations)
     , m_devices(devices)
     , m_recentController(recentController)
+    , m_filesystemService(filesystemService)
+    , m_openWith(openWith)
+    , m_launchService(launchService)
+    , m_wallpaperService(wallpaperService)
     , m_runtimePaths(std::move(runtimePaths))
 {
     Q_ASSERT(m_navigation != nullptr);
@@ -155,6 +167,11 @@ AppStateFacade::AppStateFacade(
             &FileOperationsController::pasteConflictChanged,
             this,
             &AppStateFacade::pasteConflictStateChanged);
+        connect(
+            m_fileOperations,
+            &FileOperationsController::imagePasted,
+            this,
+            [this](const QString &) { m_navigation->refreshCurrentFolder(); });
     }
     if (m_devices != nullptr) {
         connect(
@@ -174,6 +191,87 @@ AppStateFacade::AppStateFacade(
             [this]() {
                 emit deviceStateChanged();
                 emit autoMountDeviceIdsJsonChanged();
+            });
+    }
+    if (m_filesystemService != nullptr) {
+        connect(
+            m_filesystemService,
+            &Services::FilesystemService::operationFinished,
+            this,
+            [this](const UtilityResult &result) {
+                if (result.operation == QStringLiteral("warm-thumbnails")
+                    && result.requestId != m_thumbnailWarmRequest) {
+                    return;
+                }
+                if ((result.operation == QStringLiteral("archive-extract")
+                     || result.operation == QStringLiteral("archive-compress"))
+                    && result.requestId == m_archiveRequest) {
+                    m_archiveRunning = false;
+                    m_archivePercent = result.ok ? 100 : 0;
+                    m_archiveProgress = result.ok ? 1.0 : 0.0;
+                    m_archiveDoneCount = result.ok ? 1 : 0;
+                    m_archiveTotalCount = 1;
+                    m_archiveError = result.ok ? QString() : result.errorMessage;
+                    m_archiveStatus = result.ok ? QStringLiteral("Concluído") : QStringLiteral("Falha");
+                    if (result.ok) {
+                        QJsonValue resultPath = result.data.value(QStringLiteral("destination"));
+                        if (!resultPath.isString()) {
+                            resultPath = result.data.value(QStringLiteral("path"));
+                        }
+                        m_archiveDestinationResult = resultPath.toString();
+                        if (result.operation == QStringLiteral("archive-extract")
+                            && !m_archiveDestinationResult.isEmpty()) {
+                            m_navigation->navigateTo(m_archiveDestinationResult);
+                        }
+                    }
+                    emit archiveStateChanged();
+                }
+                if (result.operation == QStringLiteral("install-appimage")) {
+                    m_appImageInstallRunning = false;
+                    emit archiveStateChanged();
+                }
+                if (result.ok && (result.operation == QStringLiteral("trash")
+                                  || result.operation == QStringLiteral("restore-trash")
+                                  || result.operation == QStringLiteral("empty-trash"))) {
+                    m_navigation->refreshCurrentFolder();
+                }
+                emit filesystemActionFinished(
+                    result.requestId,
+                    result.operation,
+                    result.ok,
+                    result.data.toVariantMap(),
+                    result.ok ? QString() : result.errorMessage);
+            });
+    }
+    if (m_openWith != nullptr) {
+        connect(
+            m_openWith,
+            &OpenWithController::applicationsChanged,
+            this,
+            [this]() {
+                if (!m_openWithPath.isEmpty()) {
+                    emit openWithReady(m_openWithPath, m_openWith->applicationList());
+                }
+            });
+        connect(
+            m_openWith,
+            &OpenWithController::errorChanged,
+            this,
+            [this]() {
+                if (!m_openWithPath.isEmpty() && !m_openWith->error().isEmpty()) {
+                    emit openWithReady(m_openWithPath, {});
+                }
+            });
+    }
+    if (m_wallpaperService != nullptr) {
+        connect(
+            m_wallpaperService,
+            &Services::WallpaperService::finished,
+            this,
+            [this](quint64, bool ok, const QString &error) {
+                m_wallpaperApplyRunning = false;
+                emit wallpaperStateChanged();
+                emit filesystemActionFinished(0, QStringLiteral("wallpaper"), ok, {}, error);
             });
     }
 }
@@ -207,20 +305,12 @@ QString AppStateFacade::backendPath() const
 
 QString AppStateFacade::helperPath() const
 {
-    if (!m_runtimePaths.helperProgram.isEmpty()) {
-        return m_runtimePaths.helperProgram;
-    }
-    return runtimeRoot().isEmpty()
-        ? QString()
-        : QDir(runtimeRoot()).filePath(QStringLiteral("Apps/Explorer/explorer_helper.py"));
+    return {};
 }
 
 QString AppStateFacade::wallpaperManagerPath() const
 {
-    return runtimeRoot().isEmpty()
-        ? QString()
-        : QDir(runtimeRoot()).filePath(
-              QStringLiteral("Core/bridge/wallpaper/wallpaper_manager.py"));
+    return {};
 }
 
 QString AppStateFacade::astreaLaunch() const
@@ -615,6 +705,49 @@ QString AppStateFacade::deviceError() const
     return m_devices == nullptr ? QString() : m_devices->error();
 }
 
+QString AppStateFacade::deviceOperationPath() const
+{
+    return m_devices == nullptr ? QString() : m_devices->operationPath();
+}
+
+QString AppStateFacade::deviceOperationType() const
+{
+    return m_devices == nullptr ? QString() : m_devices->operationType();
+}
+
+QString AppStateFacade::deviceOperationTargetMountPath() const
+{
+    return m_devices == nullptr ? QString() : m_devices->operationTargetMountPath();
+}
+
+bool AppStateFacade::deviceOperationOpenAfterMount() const
+{
+    return m_devices != nullptr && m_devices->operationOpenAfterMount();
+}
+
+QString AppStateFacade::lastUnmountedMountPath() const
+{
+    return m_devices == nullptr ? QString() : m_devices->lastUnmountedMountPath();
+}
+
+bool AppStateFacade::archiveExtractionRunning() const { return m_archiveRunning; }
+double AppStateFacade::archiveExtractionProgress() const { return m_archiveProgress; }
+int AppStateFacade::archiveExtractionPercent() const { return m_archivePercent; }
+QString AppStateFacade::archiveExtractionFileName() const { return m_archiveFileName; }
+QString AppStateFacade::archiveExtractionStatus() const { return m_archiveStatus; }
+QString AppStateFacade::archiveExtractionError() const { return m_archiveError; }
+QString AppStateFacade::archiveExtractionDestination() const { return m_archiveDestinationResult; }
+int AppStateFacade::archiveExtractionDoneCount() const { return m_archiveDoneCount; }
+int AppStateFacade::archiveExtractionTotalCount() const { return m_archiveTotalCount; }
+QString AppStateFacade::archiveExtractionRemainingText() const { return m_archiveRunning ? QStringLiteral("Aguardando...") : QString(); }
+bool AppStateFacade::archivePasswordPromptVisible() const { return m_archivePasswordPrompt; }
+QString AppStateFacade::archivePasswordError() const { return m_archivePasswordError; }
+bool AppStateFacade::archiveConflictVisible() const { return m_archiveConflict; }
+QString AppStateFacade::archiveConflictDestination() const { return m_archiveConflictDestination; }
+QString AppStateFacade::archiveConflictName() const { return m_archiveConflictName; }
+bool AppStateFacade::appImageInstallRunning() const { return m_appImageInstallRunning; }
+bool AppStateFacade::wallpaperApplyRunning() const { return m_wallpaperApplyRunning; }
+
 void AppStateFacade::setShowPreview(bool showPreviewValue)
 {
     if (m_settings.showPreview == showPreviewValue) {
@@ -917,6 +1050,326 @@ void AppStateFacade::recordRecentAccess(
     }
     entry.fileIsDir = isDirectory || entry.fileIsDir;
     m_recentController->recordAccess(entry);
+}
+
+BackendRequestId AppStateFacade::createFolder(
+    const QString &basePath,
+    const QString &name)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->createFolder(basePath, name);
+}
+
+BackendRequestId AppStateFacade::renamePath(
+    const QString &sourcePath,
+    const QString &newName)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->renamePath(sourcePath, newName);
+}
+
+BackendRequestId AppStateFacade::requestDirectorySuggestions(
+    const QString &basePath,
+    const QString &prefix)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->suggestDirectories(basePath, prefix);
+}
+
+BackendRequestId AppStateFacade::checkExecutable(const QString &program)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->checkExecutable(program);
+}
+
+BackendRequestId AppStateFacade::requestProperties(const QString &path)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->properties(path);
+}
+
+BackendRequestId AppStateFacade::createDesktopShortcut(const QString &path)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->createDesktopShortcut(path);
+}
+
+BackendRequestId AppStateFacade::requestNetworkMountProbe(const QString &rootPath)
+{
+    return m_filesystemService == nullptr
+        ? 0
+        : m_filesystemService->networkMountProbe(rootPath);
+}
+
+void AppStateFacade::deleteSelected()
+{
+    if (m_filesystemService == nullptr) {
+        return;
+    }
+    const QStringList paths = selectedPathsInCurrentFolder();
+    if (paths.isEmpty()) {
+        return;
+    }
+    m_filesystemService->trash(trashFilesPath(), trashInfoPath(), paths);
+    m_selection->clearSelection();
+}
+
+void AppStateFacade::restoreSelected()
+{
+    if (m_filesystemService == nullptr || !inTrashView()) {
+        return;
+    }
+    const QStringList paths = selectedPathsInCurrentFolder();
+    if (paths.isEmpty()) {
+        return;
+    }
+    m_filesystemService->restoreTrash(trashInfoPath(), homePath(), paths);
+    m_selection->clearSelection();
+}
+
+void AppStateFacade::emptyTrash()
+{
+    if (m_filesystemService != nullptr) {
+        m_filesystemService->emptyTrash(trashFilesPath(), trashInfoPath());
+    }
+}
+
+void AppStateFacade::startArchiveExtraction(const QString &path, const QString &folderName)
+{
+    if (m_filesystemService == nullptr || path.isEmpty()) {
+        return;
+    }
+    m_archivePath = path;
+    const QString defaultName = QFileInfo(path).completeBaseName();
+    m_archiveDestination = QDir(m_navigation->currentPath()).filePath(
+        folderName.isEmpty() ? defaultName : folderName);
+    m_archiveConflictPolicy = QStringLiteral("keep-both");
+    m_archiveFileName = QFileInfo(path).fileName();
+    m_archiveStatus = QStringLiteral("Extraindo...");
+    m_archiveError.clear();
+    m_archiveDestinationResult.clear();
+    m_archiveRunning = true;
+    m_archivePasswordPrompt = false;
+    m_archiveConflict = false;
+    m_archivePercent = 0;
+    m_archiveProgress = 0.0;
+    m_archiveDoneCount = 0;
+    m_archiveTotalCount = 1;
+    emit archiveStateChanged();
+    m_archiveRequest = m_filesystemService->archiveExtract(
+        m_archivePath, m_archiveDestination, QString(), m_archiveConflictPolicy);
+}
+
+void AppStateFacade::submitArchivePassword(const QString &password)
+{
+    if (m_filesystemService == nullptr || m_archivePath.isEmpty()) {
+        return;
+    }
+    m_archivePasswordPrompt = false;
+    m_archivePasswordError.clear();
+    m_archiveRunning = true;
+    emit archiveStateChanged();
+    m_archiveRequest = m_filesystemService->archiveExtract(
+        m_archivePath, m_archiveDestination, password, m_archiveConflictPolicy);
+}
+
+void AppStateFacade::cancelArchivePassword()
+{
+    m_archivePasswordPrompt = false;
+    emit archiveStateChanged();
+}
+void AppStateFacade::submitArchiveConflict(const QString &policy)
+{
+    m_archiveConflictPolicy = policy.isEmpty() ? QStringLiteral("keep-both") : policy;
+    m_archiveConflict = false;
+    submitArchivePassword(QString());
+}
+void AppStateFacade::cancelArchiveConflict()
+{
+    m_archiveConflict = false;
+    emit archiveStateChanged();
+}
+void AppStateFacade::startFolderCompression(const QString &path, const QString &format)
+{
+    if (m_filesystemService == nullptr || path.isEmpty()) {
+        return;
+    }
+    const QString suffix = format.isEmpty() ? QStringLiteral("tar.gz") : format;
+    m_archivePath = path;
+    m_archiveFileName = QFileInfo(path).fileName();
+    m_archiveDestination = QDir(m_navigation->currentPath()).filePath(
+        m_archiveFileName + QStringLiteral(".") + suffix);
+    m_archiveStatus = QStringLiteral("Comprimindo...");
+    m_archiveError.clear();
+    m_archiveRunning = true;
+    m_archivePercent = 0;
+    m_archiveProgress = 0.0;
+    emit archiveStateChanged();
+    m_archiveRequest = m_filesystemService->archiveCompress(
+        path, m_archiveDestination, suffix);
+}
+void AppStateFacade::installAppImage(const QString &path)
+{
+    if (m_filesystemService != nullptr) {
+        m_appImageInstallRunning = true;
+        emit archiveStateChanged();
+        m_filesystemService->installAppImage(path);
+    }
+}
+void AppStateFacade::setAsWallpaper(const QString &path)
+{
+    if (m_wallpaperService != nullptr) {
+        m_wallpaperApplyRunning = true;
+        emit wallpaperStateChanged();
+        m_wallpaperService->apply(path);
+    }
+}
+
+QVariantList AppStateFacade::openWithApplications(const QString &path)
+{
+    if (m_openWith == nullptr) {
+        return {};
+    }
+    m_openWithPath = path;
+    m_openWith->discover(path);
+    return {};
+}
+
+bool AppStateFacade::launchOpenWith(const QString &path, const QString &desktopFile)
+{
+    if (m_openWith == nullptr) {
+        return false;
+    }
+    if (m_launchService == nullptr) {
+        return false;
+    }
+    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(desktopFile);
+    if (application.desktopFile.isEmpty()) {
+        return false;
+    }
+    const Services::LaunchResult result = m_launchService->launch(
+        m_launchService->desktopLaunch(application.desktopFile, path));
+    return result.started;
+}
+
+bool AppStateFacade::setDefaultOpenWith(const QString &path, const QString &desktopFile)
+{
+    if (path.isEmpty() || desktopFile.isEmpty()) {
+        return false;
+    }
+    const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
+    if (mime.isEmpty()) {
+        return false;
+    }
+    const QString configPath = QDir(QStandardPaths::writableLocation(
+        QStandardPaths::ConfigLocation)).filePath(QStringLiteral("mimeapps.list"));
+    QSettings settings(configPath, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("Default Applications"));
+    settings.setValue(mime, QFileInfo(desktopFile).fileName() + QLatin1Char(';'));
+    settings.endGroup();
+    settings.sync();
+    return settings.status() == QSettings::NoError;
+}
+
+void AppStateFacade::openItem(
+    const QString &path,
+    bool isDirectory,
+    const QString &fileUrl)
+{
+    Q_UNUSED(fileUrl);
+    if (isDirectory) {
+        navigateTo(path);
+        return;
+    }
+    if (m_launchService == nullptr) {
+        return;
+    }
+    Services::LaunchSpec spec;
+    if (path.endsWith(QStringLiteral(".desktop"), Qt::CaseInsensitive)) {
+        spec = m_launchService->desktopLaunch(path);
+    } else if (path.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)
+               || path.endsWith(QStringLiteral(".msi"), Qt::CaseInsensitive)) {
+        spec = m_launchService->windowsLaunch(path);
+    } else {
+        spec = m_launchService->fileLaunch(path);
+    }
+    m_launchService->launch(spec);
+}
+
+void AppStateFacade::openFile(const QString &path)
+{
+    openItem(path, false, QString());
+}
+
+void AppStateFacade::refreshPreviewMetadata()
+{
+    refreshCurrentFolder();
+}
+
+void AppStateFacade::requestThumbnailWarm(const QString &path, int offset, int limit)
+{
+    if (m_filesystemService == nullptr || path.isEmpty() || remoteDirectoryActive()) {
+        return;
+    }
+    m_thumbnailWarmRequest = m_filesystemService->warmThumbnails(path, offset, limit);
+}
+
+QString AppStateFacade::themedIconSource(
+    const QString &iconName,
+    int size,
+    const QString &themeName)
+{
+    Q_UNUSED(size);
+    if (iconName.isEmpty() || themeName.isEmpty()) {
+        return {};
+    }
+    return QUrl::fromLocalFile(QDir(homePath()).filePath(
+        QStringLiteral(".local/share/icons/%1/mimes/scalable/%2.svg")
+            .arg(themeName, iconName))).toString();
+}
+
+bool AppStateFacade::writePortalResult(const QString &json)
+{
+    const QString path = qEnvironmentVariable("ASTREA_FILE_DIALOG_RESULT_FILE").isEmpty()
+        ? qEnvironmentVariable("BENCH_FILE_DIALOG_RESULT_FILE")
+        : qEnvironmentVariable("ASTREA_FILE_DIALOG_RESULT_FILE");
+    if (path.isEmpty() || json.isEmpty()) {
+        return false;
+    }
+    QSaveFile output(path);
+    if (!output.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    output.write(json.toUtf8());
+    output.write("\n");
+    return output.commit();
+}
+
+BackendRequestId AppStateFacade::connectToNetwork(const QString &address)
+{
+    if (m_filesystemService == nullptr || address.isEmpty()) {
+        return 0;
+    }
+    return m_filesystemService->networkMount(address);
+}
+
+void AppStateFacade::refreshDevices()
+{
+    if (m_devices != nullptr) {
+        m_devices->refresh();
+    }
+}
+
+void AppStateFacade::ensureAutoMountDevices()
+{
+    // Auto-mount policy is applied by the device controller after a refresh.
+    refreshDevices();
 }
 
 bool AppStateFacade::replaceFileModel(const QVariantList &items)

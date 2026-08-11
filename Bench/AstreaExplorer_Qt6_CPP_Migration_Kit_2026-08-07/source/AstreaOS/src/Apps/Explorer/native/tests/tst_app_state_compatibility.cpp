@@ -175,15 +175,12 @@ void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeReg
     QVERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
     QObject *navigation = root->property("navigation").value<QObject *>();
     QVERIFY(navigation != nullptr);
-    QCOMPARE(navigation->property("legacyProcessExecutionEnabled").toBool(), true);
-
-    QTimer::singleShot(0, root, [root]() {
-        QMetaObject::invokeMethod(
-            root,
-            "navigateTo",
-            Q_ARG(QVariant, QVariant(QStringLiteral("/legacy-fixture"))));
-    });
-    QTRY_COMPARE(root->property("currentPath").toString(), QStringLiteral("/legacy-fixture"));
+    QCOMPARE(navigation->property("legacyProcessExecutionEnabled").toBool(), false);
+    QVERIFY(QMetaObject::invokeMethod(
+        root,
+        "navigateTo",
+        Q_ARG(QVariant, QVariant(QStringLiteral("/legacy-fixture")))));
+    QCOMPARE(root->property("currentPath").toString(), QString());
     delete root;
 
     if (hadMarker) {
@@ -314,9 +311,10 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QVERIFY2(root != nullptr, qPrintable(component.errorString()));
 
     QTRY_VERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
-    QTRY_COMPARE(
+    QTRY_COMPARE_WITH_TIMEOUT(
         root->property("nativeAppState").value<QObject *>()->property("nativeFacade").toBool(),
-        true);
+        true,
+        3000);
     QObject *nativeNavigation = root->property("navigation").value<QObject *>();
     QVERIFY(nativeNavigation != nullptr);
     QCOMPARE(nativeNavigation->property("legacyProcessExecutionEnabled").toBool(), false);

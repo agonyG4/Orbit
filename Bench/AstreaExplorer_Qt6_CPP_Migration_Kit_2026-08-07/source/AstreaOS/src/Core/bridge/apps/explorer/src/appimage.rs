@@ -9,6 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::json;
 
 pub fn run(args: &[String]) -> Result<(), String> {
+    println!("{}", install(args)?);
+    Ok(())
+}
+
+pub fn install(args: &[String]) -> Result<String, String> {
     let source = args
         .first()
         .ok_or_else(|| "usage: explorer_backend install-appimage <path>".to_string())?;
@@ -52,12 +57,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     );
     write_staged(&desktop_path, desktop.as_bytes())?;
 
-    println!(
+    Ok(format!(
         "{{\"ok\":true,\"path\":\"{}\",\"desktop\":\"{}\"}}",
         json::escape(&target_path.to_string_lossy()),
         json::escape(&desktop_path.to_string_lossy())
-    );
-    Ok(())
+    ))
 }
 
 fn desktop_id(name: &str) -> String {
@@ -171,8 +175,7 @@ fn make_executable(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("metadata {}: {e}", path.display()))?
             .permissions();
         perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(path, perms)
-            .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+        fs::set_permissions(path, perms).map_err(|e| format!("chmod {}: {e}", path.display()))?;
     }
     Ok(())
 }

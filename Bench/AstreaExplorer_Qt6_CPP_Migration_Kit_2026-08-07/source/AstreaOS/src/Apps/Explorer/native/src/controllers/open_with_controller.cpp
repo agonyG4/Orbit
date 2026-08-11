@@ -7,6 +7,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <algorithm>
+
 namespace Astrea::Explorer::Native::Backend {
 
 namespace {
@@ -30,12 +32,16 @@ OpenWithApplication readDesktopEntry(const QString &desktopFile)
     }
 
     const QString id = info.completeBaseName();
+    const QStringList mimeTypes = settings.value(QStringLiteral("MimeType"))
+                                      .toString()
+                                      .split(QLatin1Char(';'), Qt::SkipEmptyParts);
     const OpenWithApplication application {
         id,
         settings.value(QStringLiteral("Name"), id).toString(),
         settings.value(QStringLiteral("Icon")).toString(),
         info.absoluteFilePath(),
         false,
+        mimeTypes,
     };
     settings.endGroup();
     return application;
@@ -49,6 +55,14 @@ OpenWithController::OpenWithController(
     : QObject(parent)
     , m_launchService(launchService)
 {
+}
+
+OpenWithController::~OpenWithController()
+{
+    if (m_discoveryThread != nullptr && m_discoveryThread->isRunning()) {
+        m_discoveryThread->requestInterruption();
+        m_discoveryThread->wait();
+    }
 }
 
 OpenWithController::DesktopCatalog OpenWithController::buildDesktopCatalog(
@@ -179,48 +193,88 @@ void OpenWithController::setApplications(
 
 void OpenWithController::discover(const QString &path)
 {
+    const quint64 generation = ++m_discoveryGeneration;
     m_busy = true;
     m_error.clear();
     emit busyChanged();
     emit errorChanged();
 
     const QMimeType mimeType = QMimeDatabase().mimeTypeForFile(path);
-    QVector<OpenWithApplication> discovered;
     const QStringList applicationRoots = QStandardPaths::standardLocations(
         QStandardPaths::ApplicationsLocation);
-    for (const QString &root : applicationRoots) {
-        if (root.isEmpty()) {
-            continue;
+    const QString mime = mimeType.name();
+
+    const auto applyCatalog = [this, path, mime, generation](const DesktopCatalog &catalog) {
+        if (generation != m_discoveryGeneration) {
+            return;
         }
-        QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
-                              QDirIterator::Subdirectories);
-        while (iterator.hasNext()) {
-            const QString desktopFile = iterator.next();
-            const OpenWithApplication application = resolveDesktopEntry(desktopFile);
-            if (application.desktopFile.isEmpty()) {
-                continue;
-            }
-            QSettings settings(desktopFile, QSettings::IniFormat);
-            settings.beginGroup(QStringLiteral("Desktop Entry"));
-            if (settings.value(QStringLiteral("Type")).toString() != QStringLiteral("Application")
-                || settings.value(QStringLiteral("Hidden"), false).toBool()) {
-                settings.endGroup();
-                continue;
-            }
-            const QStringList mimeTypes = settings.value(QStringLiteral("MimeType"))
-                                              .toString()
-                                              .split(QLatin1Char(';'), Qt::SkipEmptyParts);
-            if (!mimeMatches(mimeTypes, mimeType.name())) {
-                settings.endGroup();
-                continue;
-            }
-            discovered.append(application);
+
+        m_catalog = catalog;
+        m_catalogReady = true;
+        QVector<OpenWithApplication> discovered;
+        discovered.reserve(m_catalog.size());
+        const QString defaultId = [&mime]() {
+            const QString configPath = QStandardPaths::writableLocation(
+                QStandardPaths::ConfigLocation)
+                + QStringLiteral("/mimeapps.list");
+            QSettings settings(configPath, QSettings::IniFormat);
+            settings.beginGroup(QStringLiteral("Default Applications"));
+            const QString value = settings.value(mime).toString();
             settings.endGroup();
+            return value.split(QLatin1Char(';'), Qt::SkipEmptyParts).value(0)
+                .trimmed()
+                .remove(QStringLiteral(".desktop"));
+        }();
+
+        for (const OpenWithApplication &candidate : m_catalog) {
+            if (!mimeMatches(candidate.mimeTypes, mime)) {
+                continue;
+            }
+            OpenWithApplication application = candidate;
+            application.isDefault = !defaultId.isEmpty() && application.id == defaultId;
+            discovered.append(application);
         }
+        std::sort(discovered.begin(), discovered.end(), [](const auto &left, const auto &right) {
+            const int nameOrder = QString::compare(left.name, right.name, Qt::CaseInsensitive);
+            return nameOrder == 0 ? left.id < right.id : nameOrder < 0;
+        });
+
+        setApplications(discovered);
+        m_busy = false;
+        emit busyChanged();
+    };
+
+    if (m_catalogReady) {
+        applyCatalog(m_catalog);
+        return;
     }
-    setApplications(discovered);
-    m_busy = false;
-    emit busyChanged();
+
+    const QPointer<OpenWithController> self(this);
+    QThread *thread = QThread::create([self, applicationRoots, applyCatalog, generation]() mutable {
+        if (!self || QThread::currentThread()->isInterruptionRequested()) {
+            return;
+        }
+        const DesktopCatalog catalog = buildDesktopCatalog(applicationRoots);
+        if (!self || QThread::currentThread()->isInterruptionRequested()) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self,
+            [self, catalog, applyCatalog, generation]() {
+                if (self) {
+                    applyCatalog(catalog);
+                }
+            },
+            Qt::QueuedConnection);
+    });
+    m_discoveryThread = thread;
+    connect(thread, &QThread::finished, this, [this, thread]() {
+        if (m_discoveryThread == thread) {
+            m_discoveryThread = nullptr;
+        }
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 void OpenWithController::selectApplication(const QString &id)
@@ -245,14 +299,13 @@ bool OpenWithController::launchSelected(const QString &path)
         emit errorChanged();
         return false;
     }
-    const Services::LaunchResult result =
-        m_launchService->launch(m_launchService->desktopLaunch(application.desktopFile));
+    const Services::LaunchResult result = m_launchService->launch(
+        m_launchService->desktopLaunch(application.desktopFile, path));
     if (!result.started) {
         m_error = result.error;
         emit errorChanged();
         return false;
     }
-    Q_UNUSED(path);
     emit launched(application.id);
     return true;
 }

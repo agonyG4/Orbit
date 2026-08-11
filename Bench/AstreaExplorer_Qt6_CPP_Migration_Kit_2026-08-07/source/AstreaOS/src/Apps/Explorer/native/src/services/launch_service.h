@@ -27,6 +27,7 @@ public:
 
     LaunchSpec fileLaunch(const QString &path) const;
     LaunchSpec desktopLaunch(const QString &path) const;
+    LaunchSpec desktopLaunch(const QString &desktopFile, const QString &targetPath) const;
     LaunchSpec windowsLaunch(const QString &path) const;
     LaunchResult launch(const LaunchSpec &spec) const;
 

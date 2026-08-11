@@ -551,11 +551,7 @@ fn sort_decorated_entries(
         _ => a.name_lower.cmp(&b.name_lower),
     }
     .then_with(|| a.name_lower.cmp(&b.name_lower));
-    if asc {
-        ord
-    } else {
-        ord.reverse()
-    }
+    if asc { ord } else { ord.reverse() }
 }
 
 fn entry_to_json(e: &Entry) -> String {
@@ -1048,9 +1044,11 @@ mod tests {
         search_dir_recursive(&root, &root, true, "steam.exe", 0, &mut entries).unwrap();
 
         assert_eq!(entries.len(), 1);
-        assert!(entries[0]
-            .path
-            .ends_with("project/files/lib/wine/steam.exe"));
+        assert!(
+            entries[0]
+                .path
+                .ends_with("project/files/lib/wine/steam.exe")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

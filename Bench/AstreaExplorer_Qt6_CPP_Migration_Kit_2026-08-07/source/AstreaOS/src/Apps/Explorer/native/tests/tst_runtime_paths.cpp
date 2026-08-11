@@ -22,13 +22,9 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
     QVERIFY(runtime.mkpath(QStringLiteral("Core/components")));
     QVERIFY(runtime.mkpath(QStringLiteral("Features/Files")));
     QVERIFY(runtime.mkpath(QStringLiteral("System/i18n")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Quickshell")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Quickshell/components")));
-
     QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaComponents")));
     QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaFiles")));
     QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaI18n")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/QuickshellComponents")));
 
     const QStringList requiredFiles {
         QStringLiteral("Apps/Explorer/Main.qml"),
@@ -58,7 +54,8 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
         QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/State.qml"),
         QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Tokens.qml"),
         QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Shell.qml"),
-        QStringLiteral("Apps/Explorer/QuickshellComponents/AppIcon.qml"),
+        QStringLiteral("Apps/Explorer/PortalDialog.qml"),
+        QStringLiteral("Apps/Explorer/AstreaComponents/AppIcon.qml"),
         QStringLiteral("Core/components/Theme.qml"),
         QStringLiteral("Core/components/qmldir"),
         QStringLiteral("Core/components/theme/Theme.qml"),
@@ -85,7 +82,6 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
     QVERIFY(runtime.mkpath(QStringLiteral("System/scripts")));
     const QStringList optionalPaths {
         QStringLiteral("Core/bridge/apps/explorer_backend"),
-        QStringLiteral("Apps/Explorer/explorer_helper.py"),
         QStringLiteral("bin/astrea-launch"),
         QStringLiteral("System/scripts/astrea-windows-run"),
     };
@@ -249,7 +245,6 @@ void RuntimePathsTest::optionalRuntimePathsStayUnderResolvedRoot()
 
     QVERIFY(result.valid);
     QVERIFY(result.backendProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
-    QVERIFY(result.helperProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
     QVERIFY(result.launcherProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
     QVERIFY(result.windowsRunnerProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
     QVERIFY(!result.importPaths.isEmpty());

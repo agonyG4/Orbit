@@ -92,6 +92,17 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 return;
             }
 
+            if (kind == RequestKind::Utility) {
+                BackendError error;
+                const UtilityResult result = decodeUtility(requestId, payload, &error);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    emit utilityReady(requestId, result);
+                }
+                return;
+            }
+
             BackendError error;
             const QVector<DirectoryEntry> entries =
                 decodeEntries(requestId, payload, &error);
@@ -179,6 +190,13 @@ BackendRequestId RustBackendClient::fileOperation(const FileOperationRequest &re
     return requestId;
 }
 
+BackendRequestId RustBackendClient::utility(const UtilityRequest &request)
+{
+    const BackendRequestId requestId = m_transport->start(utilityArguments(request));
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::Utility});
+    return requestId;
+}
+
 void RustBackendClient::cancel(BackendRequestId requestId)
 {
     if (!m_pendingRequests.contains(requestId)) {
@@ -236,6 +254,13 @@ QStringList RustBackendClient::fileOperationArguments(
     arguments.append(QStringLiteral("--progress"));
     arguments.append(request.progressMode);
     arguments.append(request.sources);
+    return arguments;
+}
+
+QStringList RustBackendClient::utilityArguments(const UtilityRequest &request) const
+{
+    QStringList arguments {QStringLiteral("utility"), request.operation};
+    arguments.append(request.arguments);
     return arguments;
 }
 
@@ -502,6 +527,46 @@ FileOperationResult RustBackendClient::decodeFileOperation(
         }
         return {};
     }
+    return result;
+}
+
+UtilityResult RustBackendClient::decodeUtility(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error) const
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                parseError.error == QJsonParseError::NoError
+                    ? QStringLiteral("utility result must be a JSON object")
+                    : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+        }
+        return {};
+    }
+
+    const QJsonObject object = document.object();
+    const QJsonValue okValue = object.value(QStringLiteral("ok"));
+    const QJsonValue operationValue = object.value(QStringLiteral("operation"));
+    if (!okValue.isBool() || !operationValue.isString()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("utility result has incompatible fields"));
+        }
+        return {};
+    }
+
+    UtilityResult result;
+    result.requestId = requestId;
+    result.operation = operationValue.toString();
+    result.ok = okValue.toBool();
+    result.data = object;
+    result.errorCode = object.value(QStringLiteral("errorCode")).toString();
+    result.errorMessage = object.value(QStringLiteral("error")).toString();
     return result;
 }
 
