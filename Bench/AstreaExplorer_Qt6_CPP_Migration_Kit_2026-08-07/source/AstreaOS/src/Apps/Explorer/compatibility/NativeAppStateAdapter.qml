@@ -7,6 +7,7 @@ QtObject {
     readonly property QtObject facade: NativeAppState
     readonly property bool isPortalDialog: facade.isPortalDialog
     readonly property string homePath: facade.homePath
+    readonly property string runtimeRoot: facade.runtimeRoot
     readonly property string backendPath: facade.backendPath
     readonly property string helperPath: facade.helperPath
     readonly property string wallpaperManagerPath: facade.wallpaperManagerPath
@@ -37,6 +38,19 @@ QtObject {
     property int lastSelectedIndex: facade.lastSelectedIndex
     property var clipboardFiles: facade.clipboardFiles
     property string clipboardMode: facade.clipboardMode
+    property bool fileOperationRunning: facade.fileOperationRunning
+    property real fileOperationProgress: facade.fileOperationProgress
+    property int fileOperationPercent: facade.fileOperationPercent
+    property string fileOperationFileName: facade.fileOperationFileName
+    property string fileOperationStatus: facade.fileOperationStatus
+    property string fileOperationError: facade.fileOperationError
+    property string fileOperationDestination: facade.fileOperationDestination
+    property int fileOperationDoneCount: facade.fileOperationDoneCount
+    property int fileOperationTotalCount: facade.fileOperationTotalCount
+    property string fileOperationMode: facade.fileOperationMode
+    property bool pasteConflictVisible: facade.pasteConflictVisible
+    property var pasteConflictItems: facade.pasteConflictItems
+    property string pendingPasteRename: facade.pendingPasteRename
     property bool showPreview: facade.showPreview
     property bool previewsEnabled: facade.previewsEnabled
     property string viewMode: facade.viewMode
@@ -57,18 +71,51 @@ QtObject {
     property bool dialogActive: facade.dialogActive
     property string dialogMode: facade.dialogMode
     property var dialogFilePatterns: facade.dialogFilePatterns
+    property var deviceModel: facade.deviceModel
+    property string deviceError: facade.deviceError
+    property string deviceOperationPath: facade.deviceOperationPath
+    property string deviceOperationType: facade.deviceOperationType
+    property string deviceOperationTargetMountPath: facade.deviceOperationTargetMountPath
+    property bool deviceOperationOpenAfterMount: facade.deviceOperationOpenAfterMount
+    property string lastUnmountedMountPath: facade.lastUnmountedMountPath
+    property bool archiveExtractionRunning: facade.archiveExtractionRunning
+    property real archiveExtractionProgress: facade.archiveExtractionProgress
+    property int archiveExtractionPercent: facade.archiveExtractionPercent
+    property string archiveExtractionFileName: facade.archiveExtractionFileName
+    property string archiveExtractionStatus: facade.archiveExtractionStatus
+    property string archiveExtractionError: facade.archiveExtractionError
+    property string archiveExtractionDestination: facade.archiveExtractionDestination
+    property int archiveExtractionDoneCount: facade.archiveExtractionDoneCount
+    property int archiveExtractionTotalCount: facade.archiveExtractionTotalCount
+    property string archiveExtractionRemainingText: facade.archiveExtractionRemainingText
+    property bool archivePasswordPromptVisible: facade.archivePasswordPromptVisible
+    property string archivePassword: ""
+    property string archivePasswordError: facade.archivePasswordError
+    property bool archiveConflictVisible: facade.archiveConflictVisible
+    property string archiveConflictDestination: facade.archiveConflictDestination
+    property string archiveConflictName: facade.archiveConflictName
+    property bool appImageInstallRunning: facade.appImageInstallRunning
+    property bool wallpaperApplyRunning: facade.wallpaperApplyRunning
 
     readonly property bool nativeFacade: true
 
     signal searchStateChanged()
     signal dialogStateChanged()
     signal clipboardStateChanged()
+    signal filesystemActionFinished(int requestId, string operation, bool ok, var data, string error)
+    signal openWithReady(string path, var applications)
 
     property Connections facadeConnections: Connections {
         target: root.facade
         function onSearchStateChanged() { root.searchStateChanged() }
         function onDialogStateChanged() { root.dialogStateChanged() }
         function onClipboardStateChanged() { root.clipboardStateChanged() }
+        function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+            root.filesystemActionFinished(requestId, operation, ok, data, error)
+        }
+        function onOpenWithReady(path, applications) {
+            root.openWithReady(path, applications)
+        }
     }
 
     onCurrentPathChanged: {
@@ -158,6 +205,26 @@ QtObject {
     function recordRecentAccess(path, isDirectory, fileUrl) {
         facade.recordRecentAccess(path, isDirectory, fileUrl || "")
     }
+    function createFolder(basePath, name) { return facade.createFolder(basePath, name) }
+    function renamePath(sourcePath, newName) { return facade.renamePath(sourcePath, newName) }
+    function requestDirectorySuggestions(basePath, prefix) {
+        return facade.requestDirectorySuggestions(basePath, prefix)
+    }
+    function checkExecutable(program) { return facade.checkExecutable(program) }
+    function requestProperties(path) { return facade.requestProperties(path) }
+    function createDesktopShortcut(path) { return facade.createDesktopShortcut(path) }
+    function requestNetworkMountProbe(rootPath) { return facade.requestNetworkMountProbe(rootPath) }
+    function connectToNetwork(address) { return facade.connectToNetwork(address) }
+    function refreshDevices() { facade.refreshDevices() }
+    function ensureAutoMountDevices() { facade.ensureAutoMountDevices() }
+    function requestMountDevice(path, fromAutoMount, openAfterMount) {
+        return facade.requestMountDevice(path, fromAutoMount || false, openAfterMount || false)
+    }
+    function requestUnmountDevice(path, mountPath) { return facade.requestUnmountDevice(path, mountPath || "") }
+    function requestRemountDevice(path, mountPath, openAfterMount) {
+        return facade.requestRemountDevice(path, mountPath || "", openAfterMount || false)
+    }
+    function toggleDeviceAutoMount(deviceId, enabled) { facade.toggleDeviceAutoMount(deviceId, enabled) }
     function replaceFileModel(items) { return facade.replaceFileModel(items) }
     function updateFileModelMetadata(items) { return facade.updateFileModelMetadata(items) }
     function removePathsFromFileModel(paths) { return facade.removePathsFromFileModel(paths) }
@@ -177,6 +244,31 @@ QtObject {
     function cutSelected() { facade.cutSelected() }
     function dropFiles(urls, destination, mode) { facade.dropFiles(urls, destination, mode || "copy") }
     function dropFilePaths(paths, destination, mode) { facade.dropFilePaths(paths, destination, mode || "copy") }
+    function pasteFiles() { return facade.pasteFiles() }
+    function resolvePasteConflict(policy) { facade.resolvePasteConflict(policy) }
+    function renamePasteConflict(name) { facade.renamePasteConflict(name) }
+    function cancelPasteConflict() { facade.cancelPasteConflict() }
+    function deleteSelected() { facade.deleteSelected() }
+    function restoreSelected() { facade.restoreSelected() }
+    function emptyTrash() { facade.emptyTrash() }
+    function startArchiveExtraction(path, folderName) { facade.startArchiveExtraction(path, folderName) }
+    function submitArchivePassword(password) { facade.submitArchivePassword(password) }
+    function cancelArchivePassword() { facade.cancelArchivePassword() }
+    function submitArchiveConflict(policy) { facade.submitArchiveConflict(policy) }
+    function cancelArchiveConflict() { facade.cancelArchiveConflict() }
+    function startFolderCompression(path, format) { facade.startFolderCompression(path, format) }
+    function installAppImage(path) { facade.installAppImage(path) }
+    function setAsWallpaper(path) { facade.setAsWallpaper(path) }
+    function openWithApplications(path) { return facade.openWithApplications(path) }
+    function launchOpenWith(path, desktopFile) { return facade.launchOpenWith(path, desktopFile) }
+    function setDefaultOpenWith(path, desktopFile) { return facade.setDefaultOpenWith(path, desktopFile) }
+    function openItem(path, isDirectory, fileUrl) { facade.openItem(path, isDirectory, fileUrl || "") }
+    function openFile(path) { facade.openFile(path) }
+    function refreshPreviewMetadata() { facade.refreshPreviewMetadata() }
+    function requestThumbnailWarm(path, offset, limit) { facade.requestThumbnailWarm(path, offset, limit) }
+    function themedIconSource(iconName, size, themeName) { return facade.themedIconSource(iconName, size, themeName) }
+    function writePortalResult(json) { return facade.writePortalResult(json) }
+    function setPendingPasteRename(name) { facade.pendingPasteRename = name }
     function setZoom(level) { facade.setZoom(level) }
     function increaseZoom() { facade.increaseZoom() }
     function decreaseZoom() { facade.decreaseZoom() }

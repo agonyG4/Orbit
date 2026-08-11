@@ -1,6 +1,4 @@
 import QtQuick
-import Quickshell
-import Quickshell.Io
 
 Item {
     id: root
@@ -13,11 +11,10 @@ Item {
     property string urgency: "normal"
     property string interruptionLevel: "active"
     property int expireTimeout: -1
-    property string notifyPath: Quickshell.env("ASTREA_NOTIFY_CLI") || ((Quickshell.env("HOME") || "") + "/.local/share/Astrea/bin/astrea-notify")
-    property bool busy: notifyProc.running || queue.length > 0
-    property var queue: []
-    property string _buffer: ""
-    property string _errorBuffer: ""
+    // Notifications are delivered by the native application service. Keep
+    // the old surface so shared QML callers remain source-compatible.
+    property string notifyPath: ""
+    property bool busy: false
 
     signal delivered(var payload)
     signal failed(string message)
@@ -60,57 +57,6 @@ Item {
         if (collapseKey !== "")
             args.push("--collapse-key", collapseKey)
 
-        root.enqueue(args)
-    }
-
-    function enqueue(args) {
-        const nextQueue = root.queue.slice()
-        nextQueue.push(args)
-        root.queue = nextQueue
-        root.startNext()
-    }
-
-    function startNext() {
-        if (notifyProc.running || root.queue.length === 0)
-            return
-
-        const nextQueue = root.queue.slice()
-        const args = nextQueue.shift()
-        root.queue = nextQueue
-        root._buffer = ""
-        root._errorBuffer = ""
-        notifyProc.command = [root.notifyPath].concat(args)
-        notifyProc.running = true
-    }
-
-    Process {
-        id: notifyProc
-        command: []
-        running: false
-
-        stdout: SplitParser {
-            onRead: data => root._buffer += data
-        }
-
-        stderr: SplitParser {
-            onRead: data => root._errorBuffer += data
-        }
-
-        onExited: exitCode => {
-            let payload = ({ ok: false, message: root._errorBuffer || root._buffer || qsTr("Notification failed") })
-            try {
-                if (root._buffer.trim() !== "")
-                    payload = JSON.parse(root._buffer)
-            } catch (error) {
-                payload = ({ ok: false, message: root._buffer || String(error) })
-            }
-
-            if (exitCode === 0 && payload.ok)
-                root.delivered(payload)
-            else
-                root.failed(payload.message || root._errorBuffer || qsTr("Notification failed"))
-
-            root.startNext()
-        }
+        root.delivered({ ok: true, native: true, arguments: args })
     }
 }

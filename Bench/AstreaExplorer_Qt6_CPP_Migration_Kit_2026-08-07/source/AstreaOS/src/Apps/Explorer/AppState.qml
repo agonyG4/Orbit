@@ -6,6 +6,8 @@ import "state" as StateModules
 QtObject {
     id: state
 
+    signal openWithReady(string path, var applications)
+
     // This is process-local and is set only after the native executable has
     // registered the NativeAppState singleton. Inherited environment state is
     // deliberately not part of the capability boundary.
@@ -22,6 +24,7 @@ QtObject {
     readonly property bool nativeNavigationActive: state.nativeAdapterReady
     readonly property bool isPortalDialog: nativeAppState.isPortalDialog
     readonly property string homePath: nativeAppState.homePath
+    readonly property string runtimeRoot: nativeAppState.runtimeRoot
     readonly property string backendPath: nativeAppState.backendPath
     readonly property string helperPath: nativeAppState.helperPath
     readonly property string wallpaperManagerPath: nativeAppState.wallpaperManagerPath
@@ -242,6 +245,12 @@ QtObject {
             fileOpsObj.clipboardFiles = state.nativeAppState.clipboardFiles
             fileOpsObj.clipboardMode = state.nativeAppState.clipboardMode
         }
+        function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+            state.filesystemActionFinished(requestId, operation, ok, data, error)
+        }
+        function onOpenWithReady(path, applications) {
+            state.openWithReady(path, applications)
+        }
     }
 
     onCurrentPathChanged: {
@@ -443,6 +452,25 @@ QtObject {
         else
             recent.recordAccess(path, isDir, fileUrl)
     }
+    signal filesystemActionFinished(int requestId, string operation, bool ok, var data, string error)
+
+    function createFolder(basePath, name) { return nativeAppState.createFolder(basePath, name) }
+    function renamePath(sourcePath, newName) { return nativeAppState.renamePath(sourcePath, newName) }
+    function requestDirectorySuggestions(basePath, prefix) {
+        return nativeAppState.requestDirectorySuggestions(basePath, prefix)
+    }
+    function checkExecutable(program) { return nativeAppState.checkExecutable(program) }
+    function requestProperties(path) { return nativeAppState.requestProperties(path) }
+    function createDesktopShortcut(path) { return nativeAppState.createDesktopShortcut(path) }
+    function requestNetworkMountProbe(rootPath) { return nativeAppState.requestNetworkMountProbe(rootPath) }
+    function openWithApplications(path) { return nativeAppState.openWithApplications(path) }
+    function launchOpenWith(path, desktopFile) {
+        return nativeAppState.launchOpenWith(path, desktopFile)
+    }
+    function setDefaultOpenWith(path, desktopFile) {
+        return nativeAppState.setDefaultOpenWith(path, desktopFile)
+    }
+    function writePortalResult(json) { return nativeAppState.writePortalResult(json) }
     function recentModelItems() {
         return nativeNavigationActive ? [] : recent.recentModelItems()
     }

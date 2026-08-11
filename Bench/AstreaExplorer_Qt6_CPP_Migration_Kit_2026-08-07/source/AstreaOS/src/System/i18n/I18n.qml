@@ -1,22 +1,31 @@
 pragma Singleton
 
 import QtQuick
-import Quickshell
-import Quickshell.Io
 
 QtObject {
     id: root
 
-    readonly property string astreaRoot: Quickshell.env("ASTREA_ROOT") || ((Quickshell.env("HOME") || "") + "/.local/share/Astrea")
-    readonly property string helperPath: astreaRoot + "/System/i18n/i18n.py"
-    readonly property string configPath: (Quickshell.env("HOME") || "") + "/.config/AstreaOS/system/settings.json"
+    // qmllint disable missing-property
+    function nativeValue(name, fallback) {
+        var application = Qt.application
+        if (!application || !application.property)
+            return fallback
+        var value = application.property(name)
+        return value === undefined || value === null ? fallback : value
+    }
+    // qmllint enable missing-property
 
-    property string language: "en_US"
-    property var messages: ({})
-    property var strings: ({})
-    property var fallbackStrings: ({})
-    property bool ready: false
-    property string _buffer: ""
+    // Catalogs are loaded by the native Explorer bootstrap. QML only exposes
+    // the immutable presentation data to existing consumers.
+    readonly property string astreaRoot: root.nativeValue("astreaRuntimeRoot", "")
+    readonly property string helperPath: ""
+    readonly property string configPath: ""
+
+    property string language: root.nativeValue("astreaI18nLanguage", "en_US")
+    property var messages: root.nativeValue("astreaI18nMessages", ({}))
+    property var strings: root.nativeValue("astreaI18nStrings", ({}))
+    property var fallbackStrings: root.nativeValue("astreaI18nFallbackStrings", ({}))
+    property bool ready: true
 
 
     function tr(key, fallback, params) {
@@ -29,61 +38,12 @@ QtObject {
     }
 
     function reload() {
-        ready = false
-        _buffer = ""
-        loadProc.running = false
-        loadProc.command = ["python3", helperPath, "dump"]
-        loadProc.running = true
+        language = root.nativeValue("astreaI18nLanguage", "en_US")
+        messages = root.nativeValue("astreaI18nMessages", ({}))
+        strings = root.nativeValue("astreaI18nStrings", ({}))
+        fallbackStrings = root.nativeValue("astreaI18nFallbackStrings", ({}))
+        ready = true
     }
 
     Component.onCompleted: reload()
-
-    property var configReloadDebounce: Timer {
-        id: configReloadDebounce
-        interval: 120
-        repeat: false
-        onTriggered: root.reload()
-    }
-
-    property var configFile: FileView {
-        id: configFile
-        path: root.configPath
-        preload: true
-        blockLoading: true
-        watchChanges: true
-        printErrors: false
-        onFileChanged: configReloadDebounce.restart()
-    }
-
-    property var loadProc: Process {
-        id: loadProc
-        running: false
-        stdout: SplitParser {
-            onRead: data => root._buffer += data
-        }
-        onExited: code => {
-            if (code === 0) {
-                try {
-                    var payload = JSON.parse(root._buffer || "{}")
-                    var merged = ({})
-                    var fallback = payload.fallback || ({})
-                    var active = payload.strings || ({})
-                    for (var fallbackKey in fallback)
-                        merged[fallbackKey] = fallback[fallbackKey]
-                    for (var activeKey in active)
-                        merged[activeKey] = active[activeKey]
-                    root.language = payload.language || "en_US"
-                    root.strings = active
-                    root.fallbackStrings = fallback
-                    root.messages = merged
-                } catch (e) {
-                    console.log("Astrea i18n parse failed:", e)
-                }
-            } else {
-                console.log("Astrea i18n helper failed:", code)
-            }
-            root._buffer = ""
-            root.ready = true
-        }
-    }
 }

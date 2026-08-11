@@ -1,6 +1,5 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
-import Quickshell.Io
 import "../.."
 import "." as Common
 import "../../AstreaFiles" as AstreaFiles
@@ -25,6 +24,9 @@ Item {
     property real compressionSubmenuY: 0
     property string pendingFolderName: ""
     property string pendingRenameName: ""
+    property int rarRequestId: 0
+    property int createFolderRequestId: 0
+    property int renameRequestId: 0
     readonly property bool isBackgroundTarget: itemPath === AppState.currentPath && itemIsDir
     readonly property bool isArchiveTarget: !itemIsDir && /\.(zip|tar|tgz|tar\.gz|tar\.bz2|tbz2|tar\.xz|txz|7z|rar)$/i.test(itemPath)
     readonly property bool isAppImageTarget: !itemIsDir && AppState.isAppImageFileName(itemPath)
@@ -74,7 +76,7 @@ Item {
         }
     }
 
-    Component.onCompleted: rarProbe.running = true
+    Component.onCompleted: rarRequestId = AppState.checkExecutable("rar")
 
     function runOpen() {
         closeMenu()
@@ -205,8 +207,7 @@ Item {
         var trimmed = pendingFolderName.trim()
         if (trimmed === "") return
         pendingFolderName = trimmed
-        createFolderProcess.running = false
-        createFolderProcess.running = true
+        createFolderRequestId = AppState.createFolder(AppState.currentPath, pendingFolderName)
         creatingFolder = false
     }
 
@@ -214,8 +215,7 @@ Item {
         var trimmed = pendingRenameName.trim()
         var currentName = itemPath.split("/").pop()
         if (trimmed === "" || trimmed === currentName) return
-        renameProcess.running = false
-        renameProcess.running = true
+        renameRequestId = AppState.renamePath(itemPath, pendingRenameName)
         renamingItem = false
     }
 
@@ -383,12 +383,27 @@ Item {
         }
     }
 
-    Process {
-        id: rarProbe
-        command: ["python3", AppState.helperPath, "which", "rar"]
-        running: false
-        onExited: function(exitCode) {
-            menuRoot.rarAvailable = exitCode === 0
+    Connections {
+        target: AppState
+        function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+            if (operation === "which" && requestId === menuRoot.rarRequestId) {
+                menuRoot.rarAvailable = ok && data && data.found === true
+                return
+            }
+            if (operation === "create-folder" && requestId === menuRoot.createFolderRequestId) {
+                menuRoot.creatingFolder = false
+                if (ok)
+                    AppState.refreshCurrentFolder()
+                return
+            }
+            if (operation === "rename" && requestId === menuRoot.renameRequestId) {
+                menuRoot.renamingItem = false
+                if (ok) {
+                    AppState.refreshCurrentFolder()
+                    if (AppState.selectedFile === itemPath.split('/').pop())
+                        AppState.selectedFile = pendingRenameName
+                }
+            }
         }
     }
 
@@ -418,6 +433,7 @@ Item {
         property string propAccessed: ""
         property string propPerms: ""
         property string propContains: ""
+        property int propertiesRequestId: 0
 
         readonly property bool isImageFile: {
             if (isMulti) return false
@@ -443,33 +459,8 @@ Item {
             propAccessed = "Carregando..."
             propPerms = "Carregando..."
             propContains = targetIsDir ? "Carregando..." : ""
-            propProcess.command = [
-                "bash", "-lc",
-                "if [ \"$1\" = \"--multi\" ]; then " +
-                "  shift; total_size=0; count=$#; " +
-                "  for f in \"$@\"; do " +
-                "    [ -e \"$f\" ] || continue; " +
-                "    s=$(du -sb -- \"$f\" 2>/dev/null | cut -f1); " +
-                "    total_size=$((total_size + s)); " +
-                "  done; " +
-                "  printf 'OK|%s itens|%s|—|—|—|%s\\n' \"$count\" \"$total_size\" \"$count\"; " +
-                "else " +
-                "  target=\"$1\"; " +
-                "  [ -e \"$target\" ] || { echo 'ERROR|Arquivo nao encontrado'; exit 1; }; " +
-                "  meta=$(stat -Lc '%F|%s|%Y|%X|%A' -- \"$target\" 2>/dev/null) || { echo 'ERROR|Erro ao ler metadados'; exit 1; }; " +
-                "  IFS='|' read -r kind bytes modified accessed perms <<EOF\n$meta\nEOF\n" +
-                "  if [ -d \"$target\" ]; then " +
-                "    size=$(du -sb -- \"$target\" 2>/dev/null | cut -f1); " +
-                "    count=$(find \"$target\" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l); " +
-                "    printf 'OK|%s|%s|%s|%s|%s|%s\\n' \"$kind\" \"${size:-0}\" \"$modified\" \"$accessed\" \"$perms\" \"$count\"; " +
-                "  else " +
-                "    printf 'OK|%s|%s|%s|%s|%s|\\n' \"$kind\" \"$bytes\" \"$modified\" \"$accessed\" \"$perms\"; " +
-                "  fi; " +
-                "fi",
-                "_"
-            ].concat(propertiesWin.isMulti ? ["--multi"].concat(propertiesWin.targetPaths) : [propertiesWin.targetPath])
-            propProcess.running = false
-            propProcess.running = true
+            propertiesWin.propertiesRequestId = AppState.requestProperties(
+                propertiesWin.isMulti ? propertiesWin.targetPaths[0] : propertiesWin.targetPath)
         }
 
         Rectangle {
@@ -620,43 +611,27 @@ Item {
             }
         }
 
-        Process {
-            id: propProcess
-            command: []
-            running: false
-            stdout: StdioCollector {
-                onStreamFinished: {
-                    var raw = text.trim()
-                    if (!raw) {
-                        propertiesWin.isLoading = false
-                        propertiesWin.errorText = "Sem resposta do sistema."
-                        return
-                    }
-                    var parts = raw.split("|")
-                    if (parts[0] !== "OK") {
-                        propertiesWin.isLoading = false
-                        propertiesWin.errorText = parts.length > 1 ? parts.slice(1).join("|") : "Erro ao carregar."
-                        return
-                    }
-                    propertiesWin.errorText = ""
-                    propertiesWin.propType = parts[1] || (propertiesWin.targetIsDir ? "Pasta" : "Arquivo")
-                    propertiesWin.propSize = AppState.formatSize(Number(parts[2] || 0))
-                    propertiesWin.propModified = propertiesWin.fmtDate(parts[3])
-                    propertiesWin.propAccessed = propertiesWin.fmtDate(parts[4])
-                    propertiesWin.propPerms = parts[5] || "--"
-                    if (propertiesWin.targetIsDir) {
-                        var cnt = Number(parts[6] || 0)
-                        propertiesWin.propContains = cnt + (cnt === 1 ? " item" : " itens")
-                    }
+        Connections {
+            target: AppState
+            function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+                if (operation !== "properties" || requestId !== propertiesWin.propertiesRequestId)
+                    return
+                if (!ok) {
                     propertiesWin.isLoading = false
+                    propertiesWin.errorText = error || "Falha ao consultar propriedades."
+                    return
                 }
-            }
-            onExited: function(exitCode) {
-                if (exitCode !== 0 && propertiesWin.isLoading) {
-                    propertiesWin.isLoading = false
-                    if (!propertiesWin.errorText)
-                        propertiesWin.errorText = "Falha ao consultar propriedades."
+                propertiesWin.errorText = ""
+                propertiesWin.propType = data.type || (propertiesWin.targetIsDir ? "Pasta" : "Arquivo")
+                propertiesWin.propSize = AppState.formatSize(Number(data.size || 0))
+                propertiesWin.propModified = propertiesWin.fmtDate(Number(data.modifiedMs || 0) / 1000)
+                propertiesWin.propAccessed = propertiesWin.fmtDate(Number(data.accessedMs || 0) / 1000)
+                propertiesWin.propPerms = data.permissions || "--"
+                if (propertiesWin.targetIsDir) {
+                    var count = Number(data.contains || 0)
+                    propertiesWin.propContains = count + (count === 1 ? " item" : " itens")
                 }
+                propertiesWin.isLoading = false
             }
         }
     }
@@ -776,28 +751,6 @@ Item {
                     FlatButton { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.cancelar"]) || "Cancel"); onClicked: menuRoot.renamingItem = false }
                     FlatButton { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.renomear"]) || "Rename"); primary: true; onClicked: menuRoot.confirmRename() }
                 }
-            }
-        }
-    }
-
-    Process {
-        id: createFolderProcess
-        command: ["python3", AppState.helperPath, "create-folder", AppState.currentPath, pendingFolderName]
-        running: false
-        onExited: function(exitCode) {
-            if (exitCode === 0) AppState.refreshCurrentFolder()
-        }
-    }
-
-    Process {
-        id: renameProcess
-        command: ["python3", AppState.helperPath, "rename", itemPath, pendingRenameName]
-        running: false
-        onExited: function(exitCode) {
-            if (exitCode === 0) {
-                AppState.refreshCurrentFolder()
-                if (AppState.selectedFile === itemPath.split('/').pop())
-                    AppState.selectedFile = pendingRenameName
             }
         }
     }

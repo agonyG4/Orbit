@@ -1,7 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
 import ".." as Components
 
 Item {
@@ -18,6 +16,16 @@ Item {
     property int avatarVersion: 0
     property bool   isSudo:     false
     property int expansionVersion: 0
+
+    // qmllint disable missing-property
+    function applicationValue(name, fallback) {
+        var application = Qt.application
+        if (!application || !application.property)
+            return fallback
+        var value = application.property(name)
+        return value === undefined || value === null ? fallback : value
+    }
+    // qmllint enable missing-property
 
     function translatedLabel(item) {
         const key = item.labelKey !== undefined ? item.labelKey : ""
@@ -47,15 +55,8 @@ Item {
     }
 
     Component.onCompleted: {
-        userName   = Quickshell.env("USER") || Quickshell.env("LOGNAME") || "user"
+        userName   = root.applicationValue("astreaUserName", "user")
         avatarPath = "/var/lib/AccountsService/icons/" + userName
-        checkSudoProc.running = true
-    }
-
-    Process {
-        id: checkSudoProc
-        command: ["bash", "-c", "groups " + root.userName + " | grep -q 'wheel\\|sudo'"]
-        onExited: (exitCode) => root.isSudo = (exitCode === 0)
     }
 
     Components.SidebarFrame {

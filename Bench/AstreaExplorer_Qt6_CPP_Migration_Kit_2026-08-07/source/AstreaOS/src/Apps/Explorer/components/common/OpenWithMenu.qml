@@ -2,9 +2,8 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
-import Quickshell.Io
 import "../.."
-import "../../QuickshellComponents" as ShellComponents
+import "../../AstreaComponents" as ShellComponents
 import "../../AstreaI18n" as AstreaI18n
 
 Item {
@@ -37,30 +36,46 @@ Item {
         openWithWindow.show()
         openWithWindow.raise()
         openWithWindow.requestActivate()
-
-        appsProc.command = ["python3", AppState.helperPath, "open-with-apps", targetPath]
-        appsProc.running = false
-        appsProc.running = true
+        AppState.openWithApplications(targetPath)
     }
 
     function closeMenu() {
         openWithWindow.hide()
     }
 
+    Connections {
+        target: AppState
+        function onOpenWithReady(path, applications) {
+            if (path !== root.targetPath)
+                return
+            root.loading = false
+            root.errorText = ""
+            appsModel.clear()
+            for (var i = 0; i < applications.length; i++) {
+                var application = applications[i]
+                appsModel.append({
+                    item_type: "app",
+                    name: application.name || application.id,
+                    icon: application.icon || "application-x-executable",
+                    desktop_id: application.id || "",
+                    desktop_file: application.desktopFile || "",
+                    is_default: application.isDefault === true
+                })
+            }
+            if (applications.length > 0)
+                appsModel.insert(0, { item_type: "section", title: "Recommended apps" })
+        }
+    }
+
     function setDefaultForApp(desktopFile) {
-        if (!desktopFile || setDefaultProc.running)
+        if (!desktopFile)
             return
         pendingDefaultDesktopFile = desktopFile
         errorText = ""
-        setDefaultProc.command = [
-            "python3",
-            AppState.helperPath,
-            "set-default-open-with",
-            root.targetPath,
-            desktopFile
-        ]
-        setDefaultProc.running = false
-        setDefaultProc.running = true
+        if (AppState.setDefaultOpenWith(root.targetPath, desktopFile))
+            root.openForPath(root.targetPath)
+        else
+            errorText = "Could not change the default app"
     }
 
     ListModel {
@@ -202,17 +217,9 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            enabled: model.item_type === "app" && !launchProc.running && !setDefaultProc.running
+                            enabled: model.item_type === "app" && !root.loading
                             onClicked: {
-                                launchProc.command = [
-                                    "python3",
-                                    AppState.helperPath,
-                                    "launch-open-with",
-                                    root.targetPath,
-                                    model.desktop_file
-                                ]
-                                launchProc.running = false
-                                launchProc.running = true
+                                AppState.launchOpenWith(root.targetPath, model.desktop_file)
                                 root.closeMenu()
                             }
                         }
@@ -287,7 +294,7 @@ Item {
 
                                 MouseArea {
                                     anchors.fill: parent
-                                    enabled: !setDefaultProc.running
+                                    enabled: true
                                     onClicked: root.setDefaultForApp(model.desktop_file)
                                 }
                             }
@@ -347,77 +354,4 @@ Item {
         }
     }
 
-    Process {
-        id: appsProc
-        command: []
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                root.loading = false
-                appsModel.clear()
-                try {
-                    var payload = JSON.parse(text || "{}")
-                    if (payload.ok === false) {
-                        root.errorText = payload.error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.could_not_list_apps"]) || "Could not list apps")
-                        return
-                    }
-                    root.mimeText = payload.mime || ""
-                    root.targetIsDirectory = payload.is_directory === true
-                    var sections = payload.sections || []
-                    var apps = payload.apps || []
-                    if (apps.length > 0) {
-                        appsModel.append({ "item_type": "section", "title": ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.label.recommended_apps"]) || "Recommended apps") })
-                        for (var i = 0; i < apps.length; i++) {
-                            apps[i].item_type = "app"
-                            appsModel.append(apps[i])
-                        }
-                    }
-                } catch (error) {
-                    root.errorText = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.invalid_response"]) || "Invalid response")
-                }
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: if (text.trim() !== "") root.errorText = text.trim()
-        }
-        onExited: function(exitCode) {
-            root.loading = false
-            if (exitCode !== 0 && root.errorText === "")
-                root.errorText = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.could_not_list_apps"]) || "Could not list apps")
-        }
-    }
-
-    Process {
-        id: launchProc
-        command: []
-        running: false
-    }
-
-    Process {
-        id: setDefaultProc
-        command: []
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                try {
-                    var payload = JSON.parse(text || "{}")
-                    if (payload.ok === false) {
-                        root.errorText = payload.error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.could_not_change_default_app"]) || "Could not change the default app")
-                        return
-                    }
-                } catch (error) {
-                    root.errorText = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.invalid_response"]) || "Invalid response")
-                    return
-                }
-                root.openForPath(root.targetPath)
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: if (text.trim() !== "") root.errorText = text.trim()
-        }
-        onExited: function(exitCode) {
-            if (exitCode !== 0 && root.errorText === "")
-                root.errorText = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.open_with_menu.error.could_not_change_default_app"]) || "Could not change the default app")
-        }
-    }
 }
