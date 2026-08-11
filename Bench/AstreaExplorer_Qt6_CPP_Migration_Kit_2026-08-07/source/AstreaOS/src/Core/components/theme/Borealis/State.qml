@@ -1,7 +1,5 @@
 pragma Singleton
 import QtQuick
-import Quickshell
-import Quickshell.Io
 
 Item {
     id: state
@@ -9,10 +7,12 @@ Item {
     width: 0
     height: 0
 
-    readonly property string configPath: (Quickshell.env("HOME") || "") + "/.config/AstreaOS/ui/theme.json"
-    readonly property string colorSchemeApplyPath: (Quickshell.env("ASTREA_ROOT") || ((Quickshell.env("HOME") || "") + "/.local/share/Astrea")) + "/System/services/theme/apply_color_scheme.sh"
-    readonly property string decorationApplyPath: (Quickshell.env("ASTREA_ROOT") || ((Quickshell.env("HOME") || "") + "/.local/share/Astrea")) + "/System/services/theme/apply_decoration_style.sh"
-    property bool loaded: false
+    // Theme persistence is owned by the native application layer. These
+    // compatibility properties remain for the shared QML theme facade.
+    readonly property string configPath: ""
+    readonly property string colorSchemeApplyPath: ""
+    readonly property string decorationApplyPath: ""
+    property bool loaded: true
 
     property int themeMode: 0
     property int shellStyle: 0
@@ -51,84 +51,7 @@ Item {
     }
 
     function save() {
-        if (!loaded)
-            return
-        saveThemeProc.save()
-    }
-
-    Component.onCompleted: loadThemeProc.running = true
-
-    Process {
-        id: loadThemeProc
-        command: ["bash", "-c",
-            "FILE=\"$1\";" +
-            "mkdir -p \"$(dirname \"$FILE\")\";" +
-            "if [ ! -f \"$FILE\" ]; then " +
-            "  printf '%s\n' '{' " +
-            "    '  \"theme\": \"dark\",' " +
-            "    '  \"theme_mode\": 0,' " +
-            "    '  \"shell_style\": 0,' " +
-            "    '  \"accent\": \"#0a84ff\",' " +
-            "    '  \"icon_style\": 0,' " +
-            "    '  \"icon_theme\": \"dark\",' " +
-            "    '  \"audio_osd_style\": 0' " +
-            "  '}' > \"$FILE\"; " +
-            "fi; " +
-            "if command -v jq >/dev/null 2>&1; then " +
-            "  jq -c . \"$FILE\" 2>/dev/null; " +
-            "else " +
-            "  python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' \"$FILE\" 2>/dev/null; " +
-            "fi",
-            "--", state.configPath]
-        property string outData: ""
-
-        stdout: SplitParser {
-            onRead: data => { loadThemeProc.outData += data }
-        }
-
-        onExited: {
-            if (!outData) {
-                state.applyConfig({})
-                state.save()
-                return
-            }
-
-            try {
-                state.applyConfig(JSON.parse(outData))
-            } catch (e) {
-                console.log("Error parsing theme.json:", e)
-                state.applyConfig({})
-                state.save()
-            }
-        }
-    }
-
-    Process {
-        id: saveThemeProc
-        property string jsonData: ""
-
-        function save() {
-            var shouldApplyDecoration = state.shellStyle !== state.persistedShellStyle
-            var nextShellStyle = state.shellStyle
-
-            jsonData = JSON.stringify({
-                theme: state.themeMode === 1 ? "light" : "dark",
-                theme_mode: state.themeMode,
-                shell_style: state.shellStyle,
-                accent: state.accentHex,
-                icon_style: state.iconStyle,
-                icon_theme: state.iconTheme,
-                audio_osd_style: state.audioOsdStyle
-            }, null, 4)
-
-            command = ["bash", "-c",
-                "mkdir -p \"$(dirname \"$1\")\"; cat <<'EOF' > \"$1\"\n" + jsonData + "\nEOF\n" +
-                "if [ -x \"$3\" ]; then \"$3\"; fi\n" +
-                "if [ \"$5\" = \"1\" ] && [ -x \"$4\" ]; then \"$4\" \"$2\"; fi\n",
-                "--", state.configPath, String(nextShellStyle), state.colorSchemeApplyPath, state.decorationApplyPath, shouldApplyDecoration ? "1" : "0"]
-            state.persistedShellStyle = nextShellStyle
-            running = false
-            running = true
-        }
+        // The native SettingsService persists theme changes. Keep this
+        // callable for existing QML consumers without starting a process.
     }
 }

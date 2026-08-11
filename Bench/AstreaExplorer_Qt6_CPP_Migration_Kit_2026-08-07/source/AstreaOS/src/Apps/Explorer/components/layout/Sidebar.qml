@@ -3,7 +3,6 @@ import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
 import QtQuick.Layouts
 import QtQuick.Effects
-import Quickshell.Io
 import "../../AstreaFiles/DragDropSupport.js" as DragDropSupport
 import "../.."
 import "../common" as Common
@@ -42,6 +41,7 @@ Item {
     property bool   sidebarMenuIsFavorite:false
     property string desktopLinkPath:      ""
     property string desktopLinkError:     ""
+    property int desktopLinkRequestId:    0
 
     readonly property color sidebarIconIdle: Theme.isLight ? UI.Theme.textSecondary : Qt.rgba(1, 1, 1, 0.78)
     readonly property color sidebarIconHover: UI.Theme.textPrimary
@@ -120,8 +120,7 @@ Item {
         desktopLinkPath = sidebarMenuPath
         desktopLinkError = ""
         closeMenus()
-        desktopLinkProcess.running = false
-        desktopLinkProcess.running = true
+        desktopLinkRequestId = AppState.createDesktopShortcut(desktopLinkPath)
     }
 
     function handleDroppedUrls(drop, destinationPath) {
@@ -438,32 +437,18 @@ Item {
         }
     }
 
-    Process {
-        id: desktopLinkProcess
-        command: ["python3", AppState.helperPath, "create-desktop-shortcut", root.desktopLinkPath]
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                try {
-                    var payload = JSON.parse(text || "{}")
-                    if (payload.ok !== true)
-                        root.desktopLinkError = payload.error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_create_shortcut"]) || "Failed to create shortcut")
-                } catch (error) {
-                    root.desktopLinkError = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.invalid_shortcut_response"]) || "Invalid shortcut response")
-                }
-            }
-        }
-        stderr: StdioCollector {
-            onStreamFinished: if (text.trim() !== "") root.desktopLinkError = text.trim()
-        }
-        onExited: function(exitCode) {
-            if (exitCode === 0 && AppState.currentPath === AppState.defaultSidebarFavoritePaths[0])
+    Connections {
+        target: AppState
+        function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+            if (operation !== "create-desktop-shortcut" || requestId !== root.desktopLinkRequestId)
+                return
+            root.desktopLinkError = ok
+                ? ""
+                : (error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_create_shortcut"]) || "Failed to create shortcut"))
+            if (ok && AppState.currentPath === AppState.defaultSidebarFavoritePaths[0])
                 AppState.refreshCurrentFolder()
-            if (exitCode !== 0 && root.desktopLinkError === "")
-                root.desktopLinkError = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_create_desktop_shortcut"]) || "Failed to create desktop shortcut")
         }
     }
-
     Text {
         visible: root.desktopLinkError !== ""
         anchors.left: parent.left
@@ -496,6 +481,7 @@ Item {
         property string propModified: ""
         property string propPerms: ""
         property string propContains: ""
+        property int propertiesRequestId: 0
 
         function fmtDate(epochSeconds) {
             var v = Number(epochSeconds)
@@ -512,26 +498,7 @@ Item {
             propModified = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
             propPerms = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
             propContains = targetIsDir ? ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...") : ""
-            propProcess.command = [
-                "bash", "-lc",
-                "target=\"$1\"; " +
-                "[ -e \"$target\" ] || [ -L \"$target\" ] || { echo 'ERROR|'$2; exit 1; }; " +
-                "meta=$(stat -Lc '%F|%s|%Y|%A' -- \"$target\" 2>/dev/null) || { echo 'ERROR|'$3; exit 1; }; " +
-                "IFS='|' read -r kind bytes modified perms <<EOF\n$meta\nEOF\n" +
-                "if [ -d \"$target\" ]; then " +
-                "  size=$(du -sb -- \"$target\" 2>/dev/null | cut -f1); " +
-                "  count=$(find \"$target\" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l); " +
-                "  printf 'OK|%s|%s|%s|%s|%s\\n' \"$kind\" \"${size:-0}\" \"$modified\" \"$perms\" \"$count\"; " +
-                "else " +
-                "  printf 'OK|%s|%s|%s|%s|\\n' \"$kind\" \"$bytes\" \"$modified\" \"$perms\"; " +
-                "fi",
-                "_",
-                sidebarProperties.targetPath,
-                ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.file_not_found"]) || "File not found"),
-                ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_read_metadata"]) || "Failed to read metadata")
-            ]
-            propProcess.running = false
-            propProcess.running = true
+            sidebarProperties.propertiesRequestId = AppState.requestProperties(sidebarProperties.targetPath)
         }
 
         Rectangle {
@@ -655,29 +622,22 @@ Item {
             }
         }
 
-        Process {
-            id: propProcess
-            command: []
-            running: false
-            stdout: StdioCollector {
-                onStreamFinished: {
-                    var raw = text.trim()
-                    if (!raw) {
-                        sidebarProperties.errorText = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.no_system_response"]) || "No response from system.")
-                        return
-                    }
-                    var parts = raw.split("|")
-                    if (parts[0] !== "OK") {
-                        sidebarProperties.errorText = parts.length > 1 ? parts.slice(1).join("|") : ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_load"]) || "Failed to load.")
-                        return
-                    }
-                    sidebarProperties.errorText = ""
-                    sidebarProperties.propType = parts[1] || "Item"
-                    sidebarProperties.propSize = AppState.formatSize(Number(parts[2] || 0))
-                    sidebarProperties.propModified = sidebarProperties.fmtDate(parts[3])
-                    sidebarProperties.propPerms = parts[4] || "--"
-                    sidebarProperties.propContains = parts[5] ? (parts[5] + (Number(parts[5]) === 1 ? " item" : " itens")) : "--"
+        Connections {
+            target: AppState
+            function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+                if (operation !== "properties" || requestId !== sidebarProperties.propertiesRequestId)
+                    return
+                if (!ok) {
+                    sidebarProperties.errorText = error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_load"]) || "Failed to load.")
+                    return
                 }
+                sidebarProperties.errorText = ""
+                sidebarProperties.propType = data.type || "Item"
+                sidebarProperties.propSize = AppState.formatSize(Number(data.size || 0))
+                sidebarProperties.propModified = sidebarProperties.fmtDate(Number(data.modifiedMs || 0) / 1000)
+                sidebarProperties.propPerms = data.permissions || "--"
+                var count = Number(data.contains || 0)
+                sidebarProperties.propContains = count > 0 ? (count + (count === 1 ? " item" : " itens")) : "--"
             }
         }
     }

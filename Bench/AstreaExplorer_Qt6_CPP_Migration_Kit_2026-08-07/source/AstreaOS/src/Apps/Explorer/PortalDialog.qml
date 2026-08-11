@@ -1,5 +1,3 @@
-import Quickshell
-import Quickshell.Io
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import "." as Finder
@@ -16,10 +14,10 @@ ApplicationWindow {
     property var options: ({})
     property string resultFile: ""
     property string pendingResultJson: ""
-    readonly property string stateJsonScript: (Quickshell.env("ASTREA_ROOT") || ((Quickshell.env("HOME") || "") + "/.local/share/Astrea")) + "/Core/bridge/state_json.py"
+    readonly property string portalOptionsJson: astreaPortalOptionsJson || "{}"
 
     function parseOptions() {
-        var raw = Quickshell.env("ASTREA_FILE_DIALOG_OPTIONS") || Quickshell.env("BENCH_FILE_DIALOG_OPTIONS") || ""
+        var raw = root.portalOptionsJson
         if (!raw)
             return {}
 
@@ -43,9 +41,21 @@ ApplicationWindow {
             return
         resultSent = true
         pendingResultJson = JSON.stringify(payload)
+        var selectedPaths = []
+        if (payload.files) {
+            for (var i = 0; i < payload.files.length; i++)
+                if (payload.files[i].filePath) selectedPaths.push(payload.files[i].filePath)
+        } else if (payload.filePath) {
+            selectedPaths.push(payload.filePath)
+        }
+        if (typeof NativePortalController !== "undefined") {
+            NativePortalController.setSelectedPaths(selectedPaths)
+            if (payload.accepted) NativePortalController.accept()
+            else NativePortalController.reject()
+        }
         if (resultFile !== "") {
-            resultWriter.running = false
-            resultWriter.running = true
+            if (AppState.writePortalResult(root.pendingResultJson))
+                Qt.quit()
         } else {
             emitResult(payload)
             Qt.callLater(function() {
@@ -59,7 +69,7 @@ ApplicationWindow {
         Qt.application.organization = "agony"
         Qt.application.domain = "local"
         options = parseOptions()
-        resultFile = Quickshell.env("ASTREA_FILE_DIALOG_RESULT_FILE") || Quickshell.env("BENCH_FILE_DIALOG_RESULT_FILE") || ""
+        resultFile = astreaPortalResultFile || ""
         dialog.mode = options.mode || "open_file"
         dialog.dialogTitle = options.title || dialog.dialogTitle
         dialog.acceptLabel = options.acceptLabel || dialog.acceptLabel
@@ -72,23 +82,6 @@ ApplicationWindow {
         Qt.callLater(function() {
             dialog.openDialog()
         })
-    }
-
-    Process {
-        id: resultWriter
-        command: [
-            "python3",
-            root.stateJsonScript,
-            "write",
-            root.resultFile,
-            root.pendingResultJson
-        ]
-        running: false
-        stdout: StdioCollector {}
-        onExited: function() {
-            emitResult(JSON.parse(root.pendingResultJson))
-            Qt.quit()
-        }
     }
 
     Finder.FileDialog {

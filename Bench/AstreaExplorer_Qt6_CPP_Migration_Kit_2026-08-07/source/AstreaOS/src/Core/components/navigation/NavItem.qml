@@ -1,11 +1,20 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
-import Quickshell
 import ".." as Components
 
 Item {
     id: root
+
+    // qmllint disable missing-property
+    function applicationValue(name, fallback) {
+        var application = Qt.application
+        if (!application || !application.property)
+            return fallback
+        var value = application.property(name)
+        return value === undefined || value === null ? fallback : value
+    }
+    // qmllint enable missing-property
 
     height: 40
 
@@ -25,8 +34,7 @@ Item {
     readonly property color idleForeground: isLight ? Components.Theme.textSecondary : Qt.rgba(1, 1, 1, 0.78)
     readonly property color accentForeground: Components.Theme.accentForeground
     readonly property color activeForeground: Components.Theme.textPrimary
-    readonly property string astreaRoot: Quickshell.env("ASTREA_ROOT")
-        || (Quickshell.env("HOME") + "/.local/share/Astrea")
+    readonly property string astreaRoot: root.applicationValue("astreaRuntimeRoot", "")
 
     // ── Fundo ─────────────────────────────────────────────────────────────
     Rectangle {

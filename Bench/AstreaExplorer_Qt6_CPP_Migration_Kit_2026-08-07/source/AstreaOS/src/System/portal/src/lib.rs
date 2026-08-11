@@ -73,8 +73,7 @@ pub struct DialogOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DialogRunConfig {
-    pub qs_bin: PathBuf,
-    pub portal_dialog_qml: PathBuf,
+    pub explorer_bin: PathBuf,
     pub timeout: Duration,
 }
 
@@ -278,12 +277,10 @@ pub fn parse_result_from_text(text: &str) -> Result<Option<PortalSelection>, Por
 }
 
 pub fn default_run_config() -> DialogRunConfig {
-    let astrea_root = std::env::var("ASTREA_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(home_dir()).join(".local/share/Astrea"));
     DialogRunConfig {
-        qs_bin: PathBuf::from("/usr/bin/qs"),
-        portal_dialog_qml: astrea_root.join("Apps/Explorer/PortalDialog.qml"),
+        explorer_bin: std::env::var_os("ASTREA_EXPLORER_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("astrea-explorer")),
         timeout: Duration::from_secs(300),
     }
 }
@@ -302,10 +299,6 @@ pub fn run_dialog_with_config(
     options: &PortalOptions,
     config: &DialogRunConfig,
 ) -> Result<PortalSelection, PortalError> {
-    if !config.portal_dialog_qml.is_file() {
-        return Ok(PortalSelection::default());
-    }
-
     let result_file = tempfile::Builder::new()
         .prefix("astrea_file_dialog_result_")
         .suffix(".json")
@@ -316,9 +309,8 @@ pub fn run_dialog_with_config(
     let dialog_options_json = serde_json::to_string(&dialog_options)
         .map_err(|err| PortalError::new(format!("serialize dialog options: {err}")))?;
 
-    let mut child = Command::new(&config.qs_bin)
-        .arg("-p")
-        .arg(&config.portal_dialog_qml)
+    let mut child = Command::new(&config.explorer_bin)
+        .arg("--portal")
         .env("ASTREA_FILE_DIALOG_OPTIONS", &dialog_options_json)
         .env("ASTREA_FILE_DIALOG_RESULT_FILE", &result_path)
         .env("BENCH_FILE_DIALOG_OPTIONS", &dialog_options_json)
@@ -630,21 +622,18 @@ mod tests {
     #[test]
     fn run_dialog_reads_json_result_file_written_by_child() {
         let temp = tempfile::tempdir().unwrap();
-        let fake_qs = temp.path().join("fake-qs");
+        let fake_explorer = temp.path().join("fake-explorer");
         fs::write(
-            &fake_qs,
+            &fake_explorer,
             "#!/usr/bin/env sh\nprintf '{\"accepted\":true,\"filePath\":\"/tmp/from-child.txt\"}' > \"$ASTREA_FILE_DIALOG_RESULT_FILE\"\n",
         )
         .unwrap();
-        let mut permissions = fs::metadata(&fake_qs).unwrap().permissions();
+        let mut permissions = fs::metadata(&fake_explorer).unwrap().permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&fake_qs, permissions).unwrap();
-        let fake_qml = temp.path().join("PortalDialog.qml");
-        fs::write(&fake_qml, "fake").unwrap();
+        fs::set_permissions(&fake_explorer, permissions).unwrap();
 
         let config = DialogRunConfig {
-            qs_bin: fake_qs,
-            portal_dialog_qml: fake_qml,
+            explorer_bin: fake_explorer,
             timeout: Duration::from_secs(2),
         };
         let selection =

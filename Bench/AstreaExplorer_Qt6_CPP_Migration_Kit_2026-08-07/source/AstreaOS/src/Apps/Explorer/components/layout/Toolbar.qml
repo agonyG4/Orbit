@@ -3,7 +3,6 @@ import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
-import Quickshell.Io
 import "../.."
 import "../../AstreaComponents" as UI
 import "../../AstreaFiles" as AstreaFiles
@@ -23,6 +22,7 @@ Rectangle {
     readonly property bool searching: AppState.searchVisible || AppState.searchActive
     property bool emptyTrashConfirmVisible: false
     property int suggestionRequestId: 0
+    property int activeSuggestionRequestId: 0
 
     // ── Helpers ──────────────────────────────────────────────────
     function normalizePathInput(text) {
@@ -104,16 +104,7 @@ Rectangle {
         }
 
         suggestionRequestId += 1
-        suggestionProcess.command = [
-            "python3",
-            AppState.helperPath,
-            "suggest-dirs",
-            basePath,
-            prefix,
-            "--request-id", String(suggestionRequestId)
-        ]
-        suggestionProcess.running = false
-        suggestionProcess.running = true
+        activeSuggestionRequestId = AppState.requestDirectorySuggestions(basePath, prefix)
     }
 
     function moveSuggestionSelection(step) {
@@ -948,37 +939,23 @@ Rectangle {
     // ── Bottom border ─────────────────────────────────────────────
     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.border }
 
-    // ── Data / Process ────────────────────────────────────────────
+    // ── Data / native filesystem suggestions ─────────────────────
     ListModel { id: pathSuggestions }
 
-    Process {
-        id: suggestionProcess
-        command: []
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                var lines = text.split("\n")
-                var token = ""
-                if (lines.length > 0 && lines[0].indexOf("__request_id__:") === 0)
-                    token = lines.shift().slice("__request_id__:".length)
-                if (token !== "" && Number(token) !== toolbar.suggestionRequestId)
-                    return
-                pathSuggestions.clear()
-                toolbar.selectedSuggestionIndex = -1
-                for (var i = 0; i < lines.length; i++) {
-                    var entry = lines[i].trim()
-                    if (entry)
-                        pathSuggestions.append({ path: entry })
-                }
-                if (toolbar.editingPath && pathSuggestions.count > 0) {
-                    suggestionsPopup.open()
-                } else {
-                    suggestionsPopup.close()
-                }
+    Connections {
+        target: AppState
+        function onFilesystemActionFinished(requestId, operation, ok, data, error) {
+            if (operation !== "suggest-dirs" || requestId !== toolbar.activeSuggestionRequestId)
+                return
+            pathSuggestions.clear()
+            toolbar.selectedSuggestionIndex = -1
+            if (ok && data && data.suggestions) {
+                for (var i = 0; i < data.suggestions.length; i++)
+                    pathSuggestions.append({ path: String(data.suggestions[i]) })
             }
-        }
-        onExited: function() {
-            if (!toolbar.editingPath)
+            if (toolbar.editingPath && pathSuggestions.count > 0)
+                suggestionsPopup.open()
+            else
                 suggestionsPopup.close()
         }
     }

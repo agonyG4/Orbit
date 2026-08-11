@@ -50,19 +50,17 @@ class ExplorerRecentPersistenceTests(unittest.TestCase):
         self.assertIn("function loadRecent()", adapter)
         self.assertIn("function recordRecentAccess", adapter)
         self.assertIn("readonly property bool nativeOwned", recent_qml)
-        self.assertIn("if (nativeOwned)", recent_qml)
-        self.assertIn("if (recent.nativeOwned)", recent_qml)
+        self.assertNotIn("Quickshell", recent_qml)
+        self.assertNotIn("Process", recent_qml)
 
-    def test_recent_refresh_waits_for_latest_persistence_completion(self):
+    def test_recent_state_is_a_native_compatibility_shim(self):
         recent_qml = (APP_ROOT / "state" / "RecentState.qml").read_text(encoding="utf-8")
 
         self.assertIn("persistenceGeneration", recent_qml)
         self.assertIn("saveGeneration", recent_qml)
-        self.assertIn("onExited", recent_qml)
-        record_section = recent_qml[recent_qml.index("function recordAccess"):recent_qml.index("property Process loadProc")]
-        self.assertNotIn("app.refreshCurrentFolder()", record_section)
-        self.assertIn("app.refreshCurrentFolder()", recent_qml[recent_qml.index("property Process saveProc"):])
-        self.assertIn("saveGeneration < recent.persistenceGeneration", recent_qml)
+        self.assertIn("nativeAppState.loadRecent()", recent_qml)
+        self.assertIn("nativeAppState.recordRecentAccess", recent_qml)
+        self.assertIn("property QtObject app", recent_qml)
 
     def test_native_capability_does_not_use_inherited_environment_marker(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
@@ -83,20 +81,20 @@ class ExplorerRecentPersistenceTests(unittest.TestCase):
         self.assertIn("contentItem.forceActiveFocus", main_qml)
         self.assertNotIn("\n        forceActiveFocus()\n", main_qml)
 
-    def test_archive_process_preserves_helper_errors_and_resets_password_state(self):
+    def test_archive_compatibility_surface_is_native_only(self):
         file_ops_qml = (APP_ROOT / "state" / "FileOperationsState.qml").read_text(encoding="utf-8")
 
-        self.assertIn('archivePassword = password !== undefined && password !== null ? String(password) : ""', file_ops_qml)
-        self.assertIn('if (archivePassword !== "")', file_ops_qml)
-        self.assertIn("id: archiveExtractStderr", file_ops_qml)
-        self.assertIn("ops.archiveExtractionError || archiveErr", file_ops_qml)
+        self.assertIn("function startArchiveExtraction", file_ops_qml)
+        self.assertIn("bridge.startArchiveExtraction", file_ops_qml)
+        self.assertNotIn("Quickshell", file_ops_qml)
+        self.assertNotIn("Process", file_ops_qml)
 
-    def test_archive_completion_navigates_to_extracted_destination(self):
+    def test_archive_progress_surface_remains_available_to_main(self):
         file_ops_qml = (APP_ROOT / "state" / "FileOperationsState.qml").read_text(encoding="utf-8")
 
-        self.assertIn('ops.archiveOperationMode === "extract" && ops.archiveExtractionDestination !== ""', file_ops_qml)
-        self.assertIn("app.navigateTo(ops.archiveExtractionDestination)", file_ops_qml)
-        self.assertIn('interval: ops.archiveExtractionError !== "" ? 6000 : 1800', file_ops_qml)
+        self.assertIn("archiveExtractionRunning", file_ops_qml)
+        self.assertIn("archiveExtractionProgress", file_ops_qml)
+        self.assertIn("archiveExtractionError", file_ops_qml)
 
     def test_archive_progress_card_takes_priority_over_file_operation_card(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")
@@ -136,9 +134,9 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
         self.assertIn("appState.dropFilePaths(", drag_support)
         self.assertIn("DragDropSupport.dropPaths(drop)", (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8"))
         self.assertIn("function dropFilePaths(paths, destinationPath, mode)", app_state)
-        self.assertIn("function dropFilePaths(paths, destinationPath, mode)", file_ops_qml)
-        self.assertIn('cmd = cmd.concat(["--rename", pendingPasteRename])', file_ops_qml)
-        self.assertNotIn("policy,\n            pendingPasteRename", file_ops_qml)
+        self.assertIn("function dropFilePaths(paths, destination, mode)", file_ops_qml)
+        self.assertIn("pendingPasteRename", file_ops_qml)
+        self.assertNotIn("Process {", file_ops_qml)
 
     def test_file_dialog_uses_astrea_components_and_multiple_selection(self):
         file_dialog = (APP_ROOT / "FileDialog.qml").read_text(encoding="utf-8")
@@ -161,9 +159,9 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
 
         self.assertIn("property alias remoteDirectoryActive", app_state)
         self.assertIn("property bool remoteDirectoryActive", navigation)
-        self.assertIn("function remotePathReason(path)", navigation)
-        self.assertIn("updateRemoteStateFromItems(items)", navigation)
-        self.assertIn("item.fileRemote", navigation)
+        self.assertIn("readonly property bool nativeOwned", navigation)
+        self.assertIn("function stopTransitionalProcesses()", navigation)
+        self.assertNotIn("Process {", navigation)
         self.assertIn("remoteDirectoryActive", navigation)
         self.assertIn("app.remoteDirectoryActive", preview)
 
@@ -175,7 +173,7 @@ class ExplorerDateFormattingRegressionTests(unittest.TestCase):
         self.assertIn("function formatAbsoluteDate(date)", preview_state)
         self.assertIn("function padDatePart(value)", preview_state)
         self.assertIn('if (!(date instanceof Date) || isNaN(date.getTime())) return "—"', preview_state)
-        self.assertIn('return formatAbsoluteDate(date)', preview_state)
+        self.assertIn('return formatAbsoluteDate(value)', preview_state)
         self.assertNotIn('return Qt.formatDate(date, "d MMM yyyy")', preview_state)
 
     def test_icon_view_date_groups_do_not_use_vague_old_bucket(self):
