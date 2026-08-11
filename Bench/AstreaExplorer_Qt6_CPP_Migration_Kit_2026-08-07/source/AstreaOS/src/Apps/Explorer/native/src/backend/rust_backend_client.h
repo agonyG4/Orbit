@@ -23,6 +23,7 @@ public:
     virtual BackendRequestId unmount(const QString &devicePath) = 0;
     virtual BackendRequestId remount(const QString &devicePath) = 0;
     virtual BackendRequestId fileOperation(const FileOperationRequest &request) = 0;
+    virtual BackendRequestId utility(const UtilityRequest &request) = 0;
 
 public slots:
     virtual void cancel(BackendRequestId requestId) = 0;
@@ -47,6 +48,9 @@ signals:
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const Astrea::Explorer::Native::Backend::FileOperationResult &result);
     void failed(const Astrea::Explorer::Native::Backend::BackendError &error);
+    void utilityReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::UtilityResult &result);
 };
 
 class RustBackendClient final : public IRustBackendClient
@@ -63,6 +67,7 @@ public:
     BackendRequestId unmount(const QString &devicePath) override;
     BackendRequestId remount(const QString &devicePath) override;
     BackendRequestId fileOperation(const FileOperationRequest &request) override;
+    BackendRequestId utility(const UtilityRequest &request) override;
 
 public slots:
     void cancel(BackendRequestId requestId) override;
@@ -75,6 +80,7 @@ private:
         Devices,
         DeviceOperation,
         FileOperation,
+        Utility,
     };
 
     struct PendingRequest
@@ -85,6 +91,7 @@ private:
     QStringList listArguments(const ListRequest &request) const;
     QStringList searchArguments(const SearchRequest &request) const;
     QStringList fileOperationArguments(const FileOperationRequest &request) const;
+    QStringList utilityArguments(const UtilityRequest &request) const;
     QVector<DirectoryEntry> decodeEntries(
         BackendRequestId requestId,
         const QByteArray &payload,
@@ -102,6 +109,10 @@ private:
         const QByteArray &payload,
         BackendError *error,
         QVector<FileOperationProgress> *progresses) const;
+    UtilityResult decodeUtility(
+        BackendRequestId requestId,
+        const QByteArray &payload,
+        BackendError *error) const;
     DirectoryEntry decodeEntry(const QJsonObject &object, BackendError *error) const;
     BackendError makeDecodeError(
         BackendRequestId requestId,

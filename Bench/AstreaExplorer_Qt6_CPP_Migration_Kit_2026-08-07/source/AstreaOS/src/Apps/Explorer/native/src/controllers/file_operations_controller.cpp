@@ -164,6 +164,21 @@ BackendRequestId FileOperationsController::pasteFiles(
     const QString &destination,
     const QString &conflictPolicy)
 {
+    if (m_clipboardFiles.isEmpty() && m_clipboardService != nullptr) {
+        const QStringList systemFiles = m_clipboardService->filePaths();
+        if (!systemFiles.isEmpty()) {
+            m_clipboardFiles = systemFiles;
+            m_clipboardMode = QStringLiteral("copy");
+            emit clipboardChanged();
+        } else {
+            QString error;
+            const QString imagePath = m_clipboardService->pasteImage(destination, &error);
+            if (!imagePath.isEmpty()) {
+                emit imagePasted(imagePath);
+            }
+            return 0;
+        }
+    }
     if (m_clipboardFiles.isEmpty() || m_running) {
         return 0;
     }

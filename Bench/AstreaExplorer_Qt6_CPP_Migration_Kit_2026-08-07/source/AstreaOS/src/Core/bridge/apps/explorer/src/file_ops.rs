@@ -120,7 +120,13 @@ impl ProgressEmitter {
 
     fn maybe_emit_with_percent(&mut self, percent: usize, source: &Path) {
         let now = Instant::now();
-        if should_emit_progress(self.last_percent, self.last_emit, percent, now, self.min_interval) {
+        if should_emit_progress(
+            self.last_percent,
+            self.last_emit,
+            percent,
+            now,
+            self.min_interval,
+        ) {
             emit_file_op_progress_percent(
                 self.format,
                 self.op_mode,
@@ -177,7 +183,13 @@ fn run_inner(args: &[String], format: EventFormat) -> Result<(), String> {
     }
 
     let progress_plan = build_progress_plan(&sources, requested_progress_mode);
-    emit_file_op_start(format, mode, destination, sources.len(), progress_plan.total_bytes);
+    emit_file_op_start(
+        format,
+        mode,
+        destination,
+        sources.len(),
+        progress_plan.total_bytes,
+    );
     let mut progress = ProgressEmitter::new(format, mode, &progress_plan);
 
     for source_info in &progress_plan.sources {
@@ -229,7 +241,14 @@ fn run_inner(args: &[String], format: EventFormat) -> Result<(), String> {
         progress.finish_source(source, source_done_floor);
     }
 
-    emit_file_op_done(format, mode, destination, progress.done_items, progress.total_items, progress.byte_fields());
+    emit_file_op_done(
+        format,
+        mode,
+        destination,
+        progress.done_items,
+        progress.total_items,
+        progress.byte_fields(),
+    );
     Ok(())
 }
 
@@ -350,11 +369,15 @@ fn build_progress_plan(sources: &[PathBuf], requested: ProgressMode) -> Progress
 }
 
 fn pre_scan_total_bytes(sources: &[PathBuf]) -> Result<Vec<u64>, String> {
-    sources.iter().map(|source| scan_path_bytes(source)).collect()
+    sources
+        .iter()
+        .map(|source| scan_path_bytes(source))
+        .collect()
 }
 
 fn scan_path_bytes(path: &Path) -> Result<u64, String> {
-    let meta = fs::symlink_metadata(path).map_err(|e| format!("metadata {}: {e}", path.display()))?;
+    let meta =
+        fs::symlink_metadata(path).map_err(|e| format!("metadata {}: {e}", path.display()))?;
     if meta.file_type().is_symlink() {
         return Ok(0);
     }
@@ -426,12 +449,7 @@ fn run_operation_with_progress(
         if let Ok(meta) = fs::symlink_metadata(source) {
             if meta.is_file() {
                 return copy_regular_file_with_progress(
-                    source,
-                    target,
-                    overwrite,
-                    format,
-                    mode,
-                    progress,
+                    source, target, overwrite, format, mode, progress,
                 );
             }
         }
@@ -440,12 +458,20 @@ fn run_operation_with_progress(
 }
 
 fn clamped_percent(done: usize, total: usize) -> usize {
-    let raw = if total == 0 { 100 } else { done.saturating_mul(100) / total };
+    let raw = if total == 0 {
+        100
+    } else {
+        done.saturating_mul(100) / total
+    };
     raw.clamp(0, 100)
 }
 
 fn clamped_percent_u64(done: u64, total: u64) -> usize {
-    let raw = if total == 0 { 100 } else { done.saturating_mul(100) / total };
+    let raw = if total == 0 {
+        100
+    } else {
+        done.saturating_mul(100) / total
+    };
     (raw as usize).clamp(0, 100)
 }
 
@@ -517,10 +543,19 @@ fn emit_file_op_event(event: &str, fields: &[String]) {
     println!("{line}");
 }
 
-fn emit_file_op_start(format: EventFormat, mode: OperationMode, destination: &Path, total: usize, total_bytes: Option<u64>) {
+fn emit_file_op_start(
+    format: EventFormat,
+    mode: OperationMode,
+    destination: &Path,
+    total: usize,
+    total_bytes: Option<u64>,
+) {
     let destination = destination.to_string_lossy().into_owned();
     match format {
-        EventFormat::Legacy => emit_file_op_event("START", &[mode.as_str().to_string(), destination, total.to_string()]),
+        EventFormat::Legacy => emit_file_op_event(
+            "START",
+            &[mode.as_str().to_string(), destination, total.to_string()],
+        ),
         EventFormat::Jsonl => println!(
             "{}",
             json_start_line(mode, &destination, total, total_bytes)
@@ -529,13 +564,22 @@ fn emit_file_op_start(format: EventFormat, mode: OperationMode, destination: &Pa
     flush_stdout();
 }
 
-fn emit_file_op_done(format: EventFormat, mode: OperationMode, destination: &Path, done: usize, total: usize, byte_fields: Option<(u64, u64)>) {
+fn emit_file_op_done(
+    format: EventFormat,
+    mode: OperationMode,
+    destination: &Path,
+    done: usize,
+    total: usize,
+    byte_fields: Option<(u64, u64)>,
+) {
     let destination = destination.to_string_lossy().into_owned();
     let percent = byte_fields
         .map(|(done_bytes, total_bytes)| clamped_percent_u64(done_bytes, total_bytes))
         .unwrap_or_else(|| clamped_percent(done, total));
     match format {
-        EventFormat::Legacy => emit_file_op_event("DONE", &[destination, done.to_string(), total.to_string()]),
+        EventFormat::Legacy => {
+            emit_file_op_event("DONE", &[destination, done.to_string(), total.to_string()])
+        }
         EventFormat::Jsonl => println!(
             "{}",
             json_done_line(mode, &destination, done, total, percent, byte_fields)
@@ -544,16 +588,23 @@ fn emit_file_op_done(format: EventFormat, mode: OperationMode, destination: &Pat
     flush_stdout();
 }
 
-fn emit_file_op_error(format: EventFormat, code: &str, message: &str, mode: Option<OperationMode>, path: Option<&Path>) {
+fn emit_file_op_error(
+    format: EventFormat,
+    code: &str,
+    message: &str,
+    mode: Option<OperationMode>,
+    path: Option<&Path>,
+) {
     match format {
         EventFormat::Legacy => emit_file_op_event("ERROR", &[message.to_string()]),
         EventFormat::Jsonl => {
-            let mode_json = mode.map(|m| format!(",\"mode\":\"{}\"", m.as_str())).unwrap_or_default();
-            let path_json = path.map(|p| format!(",\"path\":\"{}\"", escape_json(&p.to_string_lossy()))).unwrap_or_default();
-            println!(
-                "{}",
-                json_error_line(mode_json, code, message, path_json)
-            );
+            let mode_json = mode
+                .map(|m| format!(",\"mode\":\"{}\"", m.as_str()))
+                .unwrap_or_default();
+            let path_json = path
+                .map(|p| format!(",\"path\":\"{}\"", escape_json(&p.to_string_lossy())))
+                .unwrap_or_default();
+            println!("{}", json_error_line(mode_json, code, message, path_json));
         }
     }
     flush_stdout();
@@ -573,7 +624,12 @@ fn classify_error_code(message: &str) -> &'static str {
         "operation_failed"
     }
 }
-fn json_start_line(mode: OperationMode, destination: &str, total: usize, total_bytes: Option<u64>) -> String {
+fn json_start_line(
+    mode: OperationMode,
+    destination: &str,
+    total: usize,
+    total_bytes: Option<u64>,
+) -> String {
     let byte_json = total_bytes
         .map(|bytes| format!(",\"bytesTotal\":{bytes}"))
         .unwrap_or_default();
@@ -585,9 +641,22 @@ fn json_start_line(mode: OperationMode, destination: &str, total: usize, total_b
         byte_json
     )
 }
-fn json_progress_line(mode: OperationMode, done: usize, total: usize, percent: usize, path: &str, name: &str, byte_fields: Option<(u64, u64)>) -> String {
+fn json_progress_line(
+    mode: OperationMode,
+    done: usize,
+    total: usize,
+    percent: usize,
+    path: &str,
+    name: &str,
+    byte_fields: Option<(u64, u64)>,
+) -> String {
     let byte_json = byte_fields
-        .map(|(done_bytes, total_bytes)| format!(",\"bytesDone\":{},\"bytesTotal\":{}", done_bytes, total_bytes))
+        .map(|(done_bytes, total_bytes)| {
+            format!(
+                ",\"bytesDone\":{},\"bytesTotal\":{}",
+                done_bytes, total_bytes
+            )
+        })
         .unwrap_or_default();
     format!(
         "{{\"event\":\"progress\",\"mode\":\"{}\",\"done\":{},\"total\":{},\"percent\":{},\"path\":\"{}\",\"name\":\"{}\"{}}}",
@@ -600,9 +669,21 @@ fn json_progress_line(mode: OperationMode, done: usize, total: usize, percent: u
         byte_json
     )
 }
-fn json_done_line(mode: OperationMode, destination: &str, done: usize, total: usize, percent: usize, byte_fields: Option<(u64, u64)>) -> String {
+fn json_done_line(
+    mode: OperationMode,
+    destination: &str,
+    done: usize,
+    total: usize,
+    percent: usize,
+    byte_fields: Option<(u64, u64)>,
+) -> String {
     let byte_json = byte_fields
-        .map(|(done_bytes, total_bytes)| format!(",\"bytesDone\":{},\"bytesTotal\":{}", done_bytes, total_bytes))
+        .map(|(done_bytes, total_bytes)| {
+            format!(
+                ",\"bytesDone\":{},\"bytesTotal\":{}",
+                done_bytes, total_bytes
+            )
+        })
         .unwrap_or_default();
     format!(
         "{{\"event\":\"done\",\"mode\":\"{}\",\"destination\":\"{}\",\"done\":{},\"total\":{},\"percent\":{}{}}}",
@@ -743,10 +824,7 @@ fn hidden_sibling(path: &Path, label: &str) -> Result<PathBuf, String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("target has no parent: {}", path.display()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("item");
+    let file_name = path.file_name().and_then(|v| v.to_str()).unwrap_or("item");
     Ok(unique_path(&parent.join(format!(
         ".{file_name}.astrea-{label}-{}-{}",
         process::id(),
@@ -808,7 +886,12 @@ fn move_path(source: &Path, target: &Path, overwrite: bool) -> Result<(), String
         ));
     }
 
-    if overwrite && source.is_dir() && !source.is_symlink() && target.is_dir() && !target.is_symlink() {
+    if overwrite
+        && source.is_dir()
+        && !source.is_symlink()
+        && target.is_dir()
+        && !target.is_symlink()
+    {
         return move_dir_recursive_overwrite(source, target);
     }
 
@@ -935,13 +1018,7 @@ fn copy_regular_file_with_progress(
         return Err(format!("target already exists: {}", target.display()));
     }
     let staged = hidden_sibling(target, "copy")?;
-    if let Err(err) = copy_file_stream_with_progress(
-        source,
-        &staged,
-        format,
-        mode,
-        progress,
-    ) {
+    if let Err(err) = copy_file_stream_with_progress(source, &staged, format, mode, progress) {
         let _ = remove_existing_if_present(&staged);
         return Err(err);
     }
@@ -969,13 +1046,12 @@ fn copy_file_stream_with_progress(
     _mode: OperationMode,
     progress: &mut ProgressEmitter,
 ) -> Result<(), String> {
-    let meta =
-        fs::metadata(source).map_err(|e| format!("metadata {}: {e}", source.display()))?;
+    let meta = fs::metadata(source).map_err(|e| format!("metadata {}: {e}", source.display()))?;
     let total_bytes = meta.len();
-    let mut input = fs::File::open(source)
-        .map_err(|e| format!("open {}: {e}", source.display()))?;
-    let mut output = fs::File::create(target)
-        .map_err(|e| format!("create {}: {e}", target.display()))?;
+    let mut input =
+        fs::File::open(source).map_err(|e| format!("open {}: {e}", source.display()))?;
+    let mut output =
+        fs::File::create(target).map_err(|e| format!("create {}: {e}", target.display()))?;
     let _ = output.set_permissions(meta.permissions());
     let mut copied = 0u64;
     let mut buffer = vec![0u8; 1024 * 1024];
@@ -1054,8 +1130,7 @@ fn preserve_file_times(source: &Path, target: &Path) -> Result<(), String> {
 
     const AT_FDCWD: i32 = -100;
 
-    let meta =
-        fs::metadata(source).map_err(|e| format!("metadata {}: {e}", source.display()))?;
+    let meta = fs::metadata(source).map_err(|e| format!("metadata {}: {e}", source.display()))?;
     let path = CString::new(target.as_os_str().as_bytes())
         .map_err(|_| format!("target path contains NUL: {}", target.display()))?;
     let times = [
@@ -1209,10 +1284,34 @@ mod tests {
     #[test]
     fn progress_throttle_requires_percent_change_and_interval() {
         let start = Instant::now();
-        assert!(should_emit_progress(None, None, 1, start, Duration::from_millis(100)));
-        assert!(!should_emit_progress(Some(1), Some(start), 1, start + Duration::from_millis(200), Duration::from_millis(100)));
-        assert!(!should_emit_progress(Some(1), Some(start), 2, start + Duration::from_millis(99), Duration::from_millis(100)));
-        assert!(should_emit_progress(Some(1), Some(start), 2, start + Duration::from_millis(100), Duration::from_millis(100)));
+        assert!(should_emit_progress(
+            None,
+            None,
+            1,
+            start,
+            Duration::from_millis(100)
+        ));
+        assert!(!should_emit_progress(
+            Some(1),
+            Some(start),
+            1,
+            start + Duration::from_millis(200),
+            Duration::from_millis(100)
+        ));
+        assert!(!should_emit_progress(
+            Some(1),
+            Some(start),
+            2,
+            start + Duration::from_millis(99),
+            Duration::from_millis(100)
+        ));
+        assert!(should_emit_progress(
+            Some(1),
+            Some(start),
+            2,
+            start + Duration::from_millis(100),
+            Duration::from_millis(100)
+        ));
     }
 
     #[test]
@@ -1236,7 +1335,10 @@ mod tests {
         ];
         let request = parse_file_op_request(&args).unwrap();
         assert_eq!(request.progress_mode, ProgressMode::Bytes);
-        assert_eq!(request.sources, vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")]);
+        assert_eq!(
+            request.sources,
+            vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")]
+        );
     }
 
     #[test]
@@ -1250,7 +1352,8 @@ mod tests {
     #[test]
     fn byte_progress_json_fields_are_additive() {
         let start = json_start_line(OperationMode::Copy, "/tmp", 2, Some(42));
-        let progress = json_progress_line(OperationMode::Copy, 1, 2, 50, "/tmp/a", "a", Some((21, 42)));
+        let progress =
+            json_progress_line(OperationMode::Copy, 1, 2, 50, "/tmp/a", "a", Some((21, 42)));
         let done = json_done_line(OperationMode::Copy, "/tmp", 2, 2, 100, Some((42, 42)));
         assert!(start.contains("\"total\":2"));
         assert!(start.contains("\"bytesTotal\":42"));
@@ -1262,7 +1365,12 @@ mod tests {
 
     #[test]
     fn error_event_shape_contains_code_and_message() {
-        let line = json_error_line(",\"mode\":\"copy\"".to_string(), "permission_denied", "denied", ",\"path\":\"/tmp/x\"".to_string());
+        let line = json_error_line(
+            ",\"mode\":\"copy\"".to_string(),
+            "permission_denied",
+            "denied",
+            ",\"path\":\"/tmp/x\"".to_string(),
+        );
         assert!(line.contains("\"event\":\"error\""));
         assert!(line.contains("\"code\":\"permission_denied\""));
         assert!(line.contains("\"message\":\"denied\""));
@@ -1271,8 +1379,14 @@ mod tests {
 
     #[test]
     fn classify_error_code_maps_common_errors() {
-        assert_eq!(classify_error_code("Permission denied: /tmp/a"), "permission_denied");
-        assert_eq!(classify_error_code("No such file or directory"), "not_found");
+        assert_eq!(
+            classify_error_code("Permission denied: /tmp/a"),
+            "permission_denied"
+        );
+        assert_eq!(
+            classify_error_code("No such file or directory"),
+            "not_found"
+        );
         assert_eq!(classify_error_code("already exists"), "already_exists");
         assert_eq!(classify_error_code("invalid source path"), "invalid_path");
         assert_eq!(classify_error_code("something else"), "operation_failed");
@@ -1315,7 +1429,10 @@ mod tests {
         assert!(!first.exists());
         assert!(!second.exists());
         assert_eq!(fs::read_to_string(dest.join("first.txt")).unwrap(), "first");
-        assert_eq!(fs::read_to_string(dest.join("second.txt")).unwrap(), "second");
+        assert_eq!(
+            fs::read_to_string(dest.join("second.txt")).unwrap(),
+            "second"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1356,10 +1473,8 @@ mod tests {
     fn keep_both_does_not_follow_broken_destination_symlink() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!(
-            "astrea-file-op-broken-link-test-{}",
-            unix_millis()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("astrea-file-op-broken-link-test-{}", unix_millis()));
         let source_dir = root.join("src");
         let dest = root.join("dest");
         fs::create_dir_all(&source_dir).unwrap();
@@ -1383,7 +1498,10 @@ mod tests {
 
         assert!(!outside.exists());
         assert!(dest.join("victim.txt").is_symlink());
-        assert_eq!(fs::read_to_string(dest.join("victim 2.txt")).unwrap(), "new");
+        assert_eq!(
+            fs::read_to_string(dest.join("victim 2.txt")).unwrap(),
+            "new"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1425,10 +1543,8 @@ mod tests {
 
     #[test]
     fn copy_preserves_source_modified_time() {
-        let root = std::env::temp_dir().join(format!(
-            "astrea-file-op-mtime-test-{}",
-            unix_millis()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("astrea-file-op-mtime-test-{}", unix_millis()));
         let source_dir = root.join("src");
         let dest = root.join("dest");
         fs::create_dir_all(&source_dir).unwrap();
@@ -1443,17 +1559,17 @@ mod tests {
         copy_path(&source, &dest.join("file.txt"), false).unwrap();
 
         let src_modified = fs::metadata(&source).unwrap().modified().unwrap();
-        let dst_modified = fs::metadata(dest.join("file.txt")).unwrap().modified().unwrap();
+        let dst_modified = fs::metadata(dest.join("file.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
         assert_eq!(src_modified, dst_modified);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn failed_move_overwrite_restores_existing_directory() {
-        let root = std::env::temp_dir().join(format!(
-            "astrea-file-op-test-{}",
-            unix_millis()
-        ));
+        let root = std::env::temp_dir().join(format!("astrea-file-op-test-{}", unix_millis()));
         let source = root.join("source");
         let target = source.join("child/source");
         fs::create_dir_all(&target).unwrap();
@@ -1468,10 +1584,8 @@ mod tests {
 
     #[test]
     fn copy_overwrite_existing_directory_merges_contents() {
-        let root = std::env::temp_dir().join(format!(
-            "astrea-file-op-copy-merge-test-{}",
-            unix_millis()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("astrea-file-op-copy-merge-test-{}", unix_millis()));
         let source = root.join("source");
         let target = root.join("target");
         fs::create_dir_all(source.join("nested")).unwrap();
@@ -1508,10 +1622,8 @@ mod tests {
 
     #[test]
     fn move_overwrite_existing_directory_merges_contents() {
-        let root = std::env::temp_dir().join(format!(
-            "astrea-file-op-move-merge-test-{}",
-            unix_millis()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("astrea-file-op-move-merge-test-{}", unix_millis()));
         let source = root.join("source");
         let target = root.join("target");
         fs::create_dir_all(source.join("nested")).unwrap();

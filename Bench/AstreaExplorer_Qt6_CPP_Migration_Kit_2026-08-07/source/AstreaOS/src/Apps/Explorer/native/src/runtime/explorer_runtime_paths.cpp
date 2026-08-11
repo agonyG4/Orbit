@@ -24,6 +24,7 @@ const QStringList kRequiredFiles {
     QStringLiteral("Apps/Explorer/components/views/FileIconView.qml"),
     QStringLiteral("Apps/Explorer/components/common/NavButton.qml"),
     QStringLiteral("Apps/Explorer/components/common/FileContextMenu.qml"),
+    QStringLiteral("Apps/Explorer/PortalDialog.qml"),
     QStringLiteral("Apps/Explorer/AstreaFiles/qmldir"),
     QStringLiteral("Apps/Explorer/AstreaFiles/DragDropSupport.js"),
     QStringLiteral("Apps/Explorer/AstreaFiles/ui/OperationProgressCard.qml"),
@@ -36,7 +37,7 @@ const QStringList kRequiredFiles {
     QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/State.qml"),
     QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Tokens.qml"),
     QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Shell.qml"),
-    QStringLiteral("Apps/Explorer/QuickshellComponents/AppIcon.qml"),
+    QStringLiteral("Apps/Explorer/AstreaComponents/AppIcon.qml"),
     QStringLiteral("Core/components/Theme.qml"),
     QStringLiteral("Core/components/qmldir"),
     QStringLiteral("Core/components/theme/Theme.qml"),
@@ -59,15 +60,12 @@ const QStringList kRequiredDirectories {
     QStringLiteral("Apps/Explorer/AstreaComponents"),
     QStringLiteral("Apps/Explorer/AstreaFiles"),
     QStringLiteral("Apps/Explorer/AstreaI18n"),
-    QStringLiteral("Apps/Explorer/QuickshellComponents"),
     QStringLiteral("Core"),
     QStringLiteral("Core/components"),
     QStringLiteral("Features"),
     QStringLiteral("Features/Files"),
     QStringLiteral("System"),
     QStringLiteral("System/i18n"),
-    QStringLiteral("Quickshell"),
-    QStringLiteral("Quickshell/components"),
 };
 
 QString absoluteCleanPath(const QString &path)
@@ -148,18 +146,14 @@ ExplorerRuntimePaths fromCandidate(
     }
 
     const QStringList optionalPaths {
-        rootDir.filePath(QStringLiteral("Apps/Explorer/explorer_helper.py")),
         rootDir.filePath(QStringLiteral("bin/astrea-launch")),
         rootDir.filePath(QStringLiteral("System/scripts/astrea-windows-run")),
     };
     if (QFileInfo(optionalPaths.at(0)).isFile()) {
-        result.helperProgram = optionalPaths.at(0);
+        result.launcherProgram = optionalPaths.at(0);
     }
     if (QFileInfo(optionalPaths.at(1)).isFile()) {
-        result.launcherProgram = optionalPaths.at(1);
-    }
-    if (QFileInfo(optionalPaths.at(2)).isFile()) {
-        result.windowsRunnerProgram = optionalPaths.at(2);
+        result.windowsRunnerProgram = optionalPaths.at(1);
     }
 
     result.valid = true;

@@ -2,6 +2,9 @@
 
 #include <QBuffer>
 #include <QClipboard>
+#include <QDir>
+#include <QFileInfo>
+#include <QSaveFile>
 #include <QUrl>
 #include <QVariant>
 
@@ -73,6 +76,71 @@ bool ClipboardService::clear() const
     }
     m_clipboard->clear(QClipboard::Clipboard);
     return true;
+}
+
+QStringList ClipboardService::filePaths() const
+{
+    if (m_clipboard == nullptr || m_clipboard->mimeData() == nullptr) {
+        return {};
+    }
+    QStringList paths;
+    for (const QUrl &url : m_clipboard->mimeData()->urls()) {
+        if (url.isLocalFile()) {
+            paths.append(url.toLocalFile());
+        }
+    }
+    return paths;
+}
+
+QImage ClipboardService::image() const
+{
+    if (m_clipboard == nullptr || m_clipboard->mimeData() == nullptr) {
+        return {};
+    }
+    const QMimeData *mimeData = m_clipboard->mimeData();
+    if (mimeData->imageData().canConvert<QImage>()) {
+        return qvariant_cast<QImage>(mimeData->imageData());
+    }
+    for (const QString &format : mimeData->formats()) {
+        if (format.startsWith(QStringLiteral("image/"))) {
+            const QImage decoded = QImage::fromData(mimeData->data(format));
+            if (!decoded.isNull()) {
+                return decoded;
+            }
+        }
+    }
+    return {};
+}
+
+QString ClipboardService::pasteImage(const QString &directory, QString *error) const
+{
+    const QImage clipboardImage = image();
+    if (clipboardImage.isNull()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("clipboard does not contain an image");
+        }
+        return {};
+    }
+    const QDir destination(directory);
+    if (!destination.exists() && !QDir().mkpath(directory)) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not create image destination");
+        }
+        return {};
+    }
+    QString target = destination.filePath(QStringLiteral("pasted-image.png"));
+    for (int index = 2; QFileInfo::exists(target); ++index) {
+        target = destination.filePath(QStringLiteral("pasted-image %1.png").arg(index));
+    }
+    QSaveFile output(target);
+    if (!output.open(QIODevice::WriteOnly) || !clipboardImage.save(&output, "PNG")
+        || !output.commit()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not write clipboard image");
+        }
+        return {};
+    }
+    return target;
 }
 
 bool ClipboardService::publish(std::unique_ptr<QMimeData> mimeData) const

@@ -1,9 +1,12 @@
 mod appimage;
+mod archive;
 mod devices;
 mod entries;
 mod file_ops;
 mod json;
 mod thumbnails;
+mod utility;
+mod worker;
 
 use std::env;
 
@@ -26,7 +29,11 @@ fn run() -> Result<(), String> {
         Some("warm-thumbnails") => thumbnails::run_warm(&args[2..]),
         Some("install-appimage") => appimage::run(&args[2..]),
         Some("file-op") => file_ops::run(&args[2..]),
+        Some("archive-extract") => archive::run_extract(&args[2..]),
+        Some("archive-compress") => archive::run_compress(&args[2..]),
+        Some("utility") => utility::run(&args[2..]),
+        Some("serve") => worker::run(),
         _ if args.len() >= 6 => entries::run_list(&args[1..]),
-        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|warm-thumbnails|install-appimage|file-op ...".into()),
+        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|warm-thumbnails|install-appimage|file-op|utility|serve ...".into()),
     }
 }

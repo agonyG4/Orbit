@@ -69,6 +69,7 @@ public:
 
 signals:
     void clipboardChanged();
+    void imagePasted(const QString &path);
     void operationStateChanged();
     void pasteConflictChanged();
     void operationFinished(

@@ -149,7 +149,7 @@ void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
     Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths runtimePaths;
     runtimePaths.root = QStringLiteral("/fixture/astrea");
     runtimePaths.backendProgram = QStringLiteral("/fixture/astrea/backend");
-    runtimePaths.helperProgram = QStringLiteral("/fixture/astrea/helper.py");
+    runtimePaths.helperProgram.clear();
     runtimePaths.launcherProgram = QStringLiteral("/fixture/astrea/astrea-launch");
     runtimePaths.windowsRunnerProgram = QStringLiteral("/fixture/astrea/windows-run");
 
@@ -165,7 +165,7 @@ void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
 
     QCOMPARE(facade.runtimeRoot(), QStringLiteral("/fixture/astrea"));
     QCOMPARE(facade.backendPath(), runtimePaths.backendProgram);
-    QCOMPARE(facade.helperPath(), runtimePaths.helperProgram);
+    QCOMPARE(facade.helperPath(), QString());
     QCOMPARE(facade.astreaLaunch(), runtimePaths.launcherProgram);
     QCOMPARE(facade.windowsRun(), runtimePaths.windowsRunnerProgram);
     QCOMPARE(facade.recentVirtualPath(), QStringLiteral("recent://"));

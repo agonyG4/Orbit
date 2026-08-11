@@ -17,6 +17,9 @@ private:
     bool loadExplorerQml(
         QQmlApplicationEngine &engine,
         const Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths &paths) const;
+    bool loadPortalQml(
+        QQmlApplicationEngine &engine,
+        const Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths &paths) const;
     bool loadBootstrap(QQmlApplicationEngine &engine) const;
     int runSelfTest(QQmlApplicationEngine &engine) const;
 

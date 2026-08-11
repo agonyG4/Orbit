@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QMetaType>
+#include <QJsonObject>
 #include <QStringList>
 #include <QUrl>
 #include <QVector>
@@ -126,6 +127,22 @@ struct BackendTransportError
     QByteArray stderrData;
 };
 
+struct UtilityRequest
+{
+    QString operation;
+    QStringList arguments;
+};
+
+struct UtilityResult
+{
+    BackendRequestId requestId = 0;
+    QString operation;
+    bool ok = false;
+    QJsonObject data;
+    QString errorCode;
+    QString errorMessage;
+};
+
 } // namespace Astrea::Explorer::Native::Backend
 
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::BackendError)
@@ -138,3 +155,5 @@ Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceOperationResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationProgress)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationResult)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityRequest)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityResult)

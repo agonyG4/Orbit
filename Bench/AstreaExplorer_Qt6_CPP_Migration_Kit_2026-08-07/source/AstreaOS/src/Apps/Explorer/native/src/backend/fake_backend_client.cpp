@@ -49,6 +49,13 @@ BackendRequestId FakeRustBackendClient::fileOperation(const FileOperationRequest
     return nextRequestId();
 }
 
+BackendRequestId FakeRustBackendClient::utility(const UtilityRequest &request)
+{
+    const BackendRequestId requestId = nextRequestId();
+    m_utilityRequests.append(request);
+    return requestId;
+}
+
 void FakeRustBackendClient::cancel(BackendRequestId requestId)
 {
     m_cancelledRequests.append(requestId);
@@ -96,6 +103,15 @@ void FakeRustBackendClient::completeFileOperation(
     emit fileOperationReady(requestId, result);
 }
 
+void FakeRustBackendClient::completeUtility(
+    BackendRequestId requestId,
+    const UtilityResult &result)
+{
+    UtilityResult completed = result;
+    completed.requestId = requestId;
+    emit utilityReady(requestId, completed);
+}
+
 void FakeRustBackendClient::failRequest(
     BackendRequestId requestId,
     const QString &code,
@@ -126,6 +142,11 @@ const QVector<QStringList> &FakeRustBackendClient::deviceRequests() const
 const QVector<FileOperationRequest> &FakeRustBackendClient::fileOperationRequests() const
 {
     return m_fileOperationRequests;
+}
+
+const QVector<UtilityRequest> &FakeRustBackendClient::utilityRequests() const
+{
+    return m_utilityRequests;
 }
 
 const QVector<BackendRequestId> &FakeRustBackendClient::cancelledRequests() const
