@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QVariantList>
 #include <QVector>
 
@@ -25,6 +26,8 @@ class OpenWithController final : public QObject
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
+    using DesktopCatalog = QHash<QString, OpenWithApplication>;
+
     explicit OpenWithController(
         Services::LaunchService *launchService = nullptr,
         QObject *parent = nullptr);
@@ -36,7 +39,10 @@ public:
     bool busy() const;
     QString error() const;
 
-    static OpenWithApplication resolveDesktopEntry(const QString &desktopId);
+    static DesktopCatalog buildDesktopCatalog(const QStringList &roots = {});
+    static OpenWithApplication resolveDesktopEntry(
+        const QString &desktopId,
+        const DesktopCatalog *catalog = nullptr);
 
     void setApplications(const QVector<OpenWithApplication> &applications);
     Q_INVOKABLE void discover(const QString &path);

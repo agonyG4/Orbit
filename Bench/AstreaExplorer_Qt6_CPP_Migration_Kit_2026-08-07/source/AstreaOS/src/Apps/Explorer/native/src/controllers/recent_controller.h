@@ -1,58 +1,63 @@
 #pragma once
 
-#include <QVector>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QHash>
+#include <QObject>
+#include <QVector>
 
 #include "backend/backend_types.h"
-#include "controllers/open_with_controller.h"
+#include "services/recent_store.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
-struct RecentRecord
+class RecentController final : public QObject
 {
-    DirectoryEntry entry;
-    qint64 lastAccessed = 0;
-    QString source;
-};
+    Q_OBJECT
 
-struct RecentSourcePaths
-{
-    QString finderPath;
-    QString launchHistoryPath;
-    QString xbelPath;
-    int limit = 60;
-};
-
-class RecentController final
-{
 public:
-    QVector<DirectoryEntry> load(const RecentSourcePaths &paths) const;
+    explicit RecentController(
+        RecentStore *store = nullptr,
+        QObject *parent = nullptr);
+
+    BackendRequestId loadAsync();
+    void cancelLoad(BackendRequestId requestId);
+    void recordAccess(const DirectoryEntry &entry);
+
+    QVector<DirectoryEntry> currentEntries() const;
     QVector<DirectoryEntry> merge(
         const QVector<RecentRecord> &records,
         int limit = 60) const;
 
+signals:
+    void recentReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const QVector<Astrea::Explorer::Native::Backend::DirectoryEntry> &entries);
+    void recentFailed(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const QString &message);
+    void projectionChanged();
+    void persistenceFailed(const QString &message);
+
+private slots:
+    void handleStoreLoadReady(
+        quint64 storeRequestId,
+        const QVector<RecentRecord> &records,
+        quintptr workerThreadId);
+    void handleStoreRecordsChanged();
+    void handleStoreSaveFinished(
+        quint64 generation,
+        bool success,
+        const QString &message,
+        quintptr workerThreadId);
+
 private:
-    static RecentRecord recordFromPath(
-        const QString &path,
-        qint64 lastAccessed,
-        const QString &source,
-        const QString &kind = QString());
-    static RecentRecord recordFromObject(
-        const QJsonObject &object,
-        const QString &source);
-    static RecentRecord recordFromDesktop(
-        const QString &desktopId,
-        const QJsonArray &argv,
-        qint64 lastAccessed,
-        const QString &source,
-        QHash<QString, QString> *desktopPathCache = nullptr);
-    static bool isPreviewablePath(const QString &path, bool isDirectory);
-    static qint64 parseTimestamp(const QString &value);
-    static QVector<RecentRecord> loadFinder(const QString &path);
-    static QVector<RecentRecord> loadLaunchHistory(const QString &path, int limit);
-    static QVector<RecentRecord> loadXbel(const QString &path);
+    void rebuildProjection();
+
+    RecentStore *m_store = nullptr;
+    QHash<quint64, BackendRequestId> m_storeRequests;
+    BackendRequestId m_nextRequestId = 0;
+    BackendRequestId m_activeRequestId = 0;
+    quint64 m_activeStoreRequestId = 0;
+    QVector<DirectoryEntry> m_currentEntries;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

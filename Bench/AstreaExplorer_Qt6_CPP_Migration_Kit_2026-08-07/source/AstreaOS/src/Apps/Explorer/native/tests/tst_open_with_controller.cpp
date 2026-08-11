@@ -15,6 +15,7 @@ class OpenWithControllerTest final : public QObject
 private slots:
     void exposesTypedApplicationCatalogAndSelection();
     void resolvesDesktopEntryForRecentHistory();
+    void resolvesManyDesktopEntriesThroughOneIndexedCatalog();
 };
 
 void OpenWithControllerTest::exposesTypedApplicationCatalogAndSelection()
@@ -56,6 +57,36 @@ void OpenWithControllerTest::resolvesDesktopEntryForRecentHistory()
     QCOMPARE(application.name, QStringLiteral("Example Application"));
     QCOMPARE(application.icon, QStringLiteral("example-icon"));
     QCOMPARE(application.desktopFile, QFileInfo(desktopFile).absoluteFilePath());
+}
+
+void OpenWithControllerTest::resolvesManyDesktopEntriesThroughOneIndexedCatalog()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    for (int index = 0; index < 8; ++index) {
+        const QString desktopFile = QDir(directory.path()).filePath(
+            QStringLiteral("example-%1.desktop").arg(index));
+        QFile file(desktopFile);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(QStringLiteral(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=Example %1\n"
+            "Icon=example-%1\n"
+            "Exec=example-%1\n").arg(index).toUtf8()) > 0);
+        file.close();
+    }
+
+    const OpenWithController::DesktopCatalog catalog =
+        OpenWithController::buildDesktopCatalog({directory.path()});
+    QCOMPARE(catalog.size(), 8);
+    for (int index = 0; index < 8; ++index) {
+        const OpenWithApplication application = OpenWithController::resolveDesktopEntry(
+            QStringLiteral("example-%1.desktop").arg(index),
+            &catalog);
+        QCOMPARE(application.name, QStringLiteral("Example %1").arg(index));
+        QCOMPARE(application.icon, QStringLiteral("example-%1").arg(index));
+    }
 }
 
 QTEST_GUILESS_MAIN(OpenWithControllerTest)

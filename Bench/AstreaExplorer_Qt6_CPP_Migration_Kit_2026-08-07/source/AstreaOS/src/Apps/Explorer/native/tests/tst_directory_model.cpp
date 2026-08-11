@@ -20,6 +20,7 @@ private slots:
     void updatesMetadataWithoutResettingUnrelatedEntries();
     void removesPathsWithStableRowsAndGenerationChecks();
     void exposesRecentOnlyRoles();
+    void looksUpEntryByPath();
 };
 
 DirectoryEntry makeEntry(
@@ -286,6 +287,20 @@ void DirectoryModelTest::exposesRecentOnlyRoles()
     const QModelIndex index = model.index(0, 0);
     QCOMPARE(model.data(index, DirectoryModel::LastAccessedRole).toLongLong(), entry.lastAccessed);
     QCOMPARE(model.data(index, DirectoryModel::RecentSourceRole).toString(), entry.recentSource);
+}
+
+void DirectoryModelTest::looksUpEntryByPath()
+{
+    DirectoryModel model;
+    const DirectoryEntry expected = makeEntry(
+        QStringLiteral("notes.txt"), QStringLiteral("/tmp/notes.txt"));
+    QVERIFY(model.applyEntries({expected}, 1));
+
+    DirectoryEntry actual;
+    QVERIFY(model.entryForPath(expected.filePath, &actual));
+    QCOMPARE(actual.fileName, expected.fileName);
+    QCOMPARE(actual.fileUrl, expected.fileUrl);
+    QVERIFY(!model.entryForPath(QStringLiteral("/tmp/missing.txt"), &actual));
 }
 
 QTEST_MAIN(DirectoryModelTest)

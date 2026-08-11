@@ -186,6 +186,23 @@ target_link_libraries(tst_runtime_paths PRIVATE
 
 add_test(NAME runtime_paths COMMAND tst_runtime_paths)
 
+add_library(astrea_explorer_native_recent STATIC
+    src/services/recent_store.h
+    src/services/recent_store.cpp
+    src/controllers/recent_controller.h
+    src/controllers/recent_controller.cpp
+)
+
+target_include_directories(astrea_explorer_native_recent PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_recent PUBLIC
+    Qt6::Core
+    astrea_explorer_native_backend
+    astrea_explorer_native_operations
+)
+
 add_library(astrea_explorer_native_navigation STATIC
     src/services/directory_watch_service.h
     src/services/directory_watch_service.cpp
@@ -193,8 +210,6 @@ add_library(astrea_explorer_native_navigation STATIC
     src/controllers/navigation_controller.cpp
     src/controllers/selection_controller.h
     src/controllers/selection_controller.cpp
-    src/controllers/recent_controller.h
-    src/controllers/recent_controller.cpp
     src/controllers/preview_controller.h
     src/controllers/preview_controller.cpp
     src/controllers/device_controller.h
@@ -212,6 +227,7 @@ target_link_libraries(astrea_explorer_native_navigation PUBLIC
     astrea_explorer_native_backend
     astrea_explorer_native_settings
     astrea_explorer_native_operations
+    astrea_explorer_native_recent
 )
 
 target_link_libraries(astrea-explorer PRIVATE
@@ -368,6 +384,22 @@ target_link_libraries(tst_recent_controller PRIVATE
 )
 
 add_test(NAME recent_controller COMMAND tst_recent_controller)
+
+qt_add_executable(tst_recent_store
+    tests/tst_recent_store.cpp
+)
+
+target_include_directories(tst_recent_store PRIVATE
+    src
+)
+
+target_link_libraries(tst_recent_store PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_recent
+)
+
+add_test(NAME recent_store COMMAND tst_recent_store)
 
 qt_add_executable(tst_preview_controller
     tests/tst_preview_controller.cpp

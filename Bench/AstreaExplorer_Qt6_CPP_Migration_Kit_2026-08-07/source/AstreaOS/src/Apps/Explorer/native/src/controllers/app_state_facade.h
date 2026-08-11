@@ -8,6 +8,7 @@
 #include "controllers/device_controller.h"
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
+#include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "runtime/explorer_runtime_paths.h"
 #include "services/settings_service.h"
@@ -94,7 +95,8 @@ public:
         Services::SettingsService *settingsService = nullptr,
         FileOperationsController *fileOperations = nullptr,
         DeviceController *devices = nullptr,
-        Runtime::ExplorerRuntimePaths runtimePaths = {});
+        Runtime::ExplorerRuntimePaths runtimePaths = {},
+        RecentController *recentController = nullptr);
 
     QAbstractItemModel *fileModel() const;
     QString homePath() const;
@@ -199,6 +201,11 @@ public:
     Q_INVOKABLE int tabIndexById(int tabId) const;
     Q_INVOKABLE void moveTab(int fromIndex, int toIndex);
     Q_INVOKABLE BackendRequestId refreshCurrentFolder();
+    Q_INVOKABLE void loadRecent();
+    Q_INVOKABLE void recordRecentAccess(
+        const QString &path,
+        bool isDirectory,
+        const QString &fileUrl = QString());
     Q_INVOKABLE bool replaceFileModel(const QVariantList &items);
     Q_INVOKABLE int updateFileModelMetadata(const QVariantList &items);
     Q_INVOKABLE int removePathsFromFileModel(const QStringList &paths);
@@ -317,6 +324,7 @@ private:
     Services::SettingsService *m_settingsService = nullptr;
     FileOperationsController *m_fileOperations = nullptr;
     DeviceController *m_devices = nullptr;
+    RecentController *m_recentController = nullptr;
     Runtime::ExplorerRuntimePaths m_runtimePaths;
     Services::ExplorerSettings m_settings;
     int m_fileModelRevision = 0;

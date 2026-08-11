@@ -154,6 +154,10 @@ QtObject {
     function goBack() { facade.goBack() }
     function goForward() { facade.goForward() }
     function refreshCurrentFolder() { return facade.refreshCurrentFolder() }
+    function loadRecent() { facade.loadRecent() }
+    function recordRecentAccess(path, isDirectory, fileUrl) {
+        facade.recordRecentAccess(path, isDirectory, fileUrl || "")
+    }
     function replaceFileModel(items) { return facade.replaceFileModel(items) }
     function updateFileModelMetadata(items) { return facade.updateFileModelMetadata(items) }
     function removePathsFromFileModel(paths) { return facade.removePathsFromFileModel(paths) }

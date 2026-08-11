@@ -256,6 +256,24 @@ void NavigationController::setRecentController(
 {
     m_recentController = controller;
     m_recentSourcePaths = sourcePaths;
+    if (m_recentController == nullptr) {
+        return;
+    }
+    connect(
+        m_recentController,
+        &RecentController::recentReady,
+        this,
+        &NavigationController::handleRecentReady);
+    connect(
+        m_recentController,
+        &RecentController::recentFailed,
+        this,
+        &NavigationController::handleRecentFailed);
+    connect(
+        m_recentController,
+        &RecentController::projectionChanged,
+        this,
+        &NavigationController::handleRecentProjectionChanged);
 }
 
 BackendRequestId NavigationController::navigateTo(const QString &path)
@@ -508,21 +526,29 @@ BackendRequestId NavigationController::startList(const QString &path)
     emit remoteStateChanged();
     updateWatcher();
 
-    m_model->applyEntries({}, generation);
     if (path == QStringLiteral("recent://")) {
         if (m_recentController == nullptr) {
+            m_model->applyEntries({}, generation);
             setLoading(false);
             setLoadError(QStringLiteral("Recent controller unavailable"));
             return 0;
         }
 
-        const QVector<DirectoryEntry> entries = m_recentController->load(m_recentSourcePaths);
+        const QVector<DirectoryEntry> entries = m_recentController->currentEntries();
         updateRemoteState(entries);
         m_model->applyEntries(entries, generation);
-        setLoading(false);
-        setLoadError(QString());
-        return 0;
+        const BackendRequestId requestId = m_recentController->loadAsync();
+        if (requestId == 0) {
+            setLoading(false);
+            setLoadError(QStringLiteral("Recent controller unavailable"));
+            return 0;
+        }
+        m_pendingRequests.insert(requestId, {generation, path, RequestKind::Recent});
+        m_activeRequest = requestId;
+        return requestId;
     }
+
+    m_model->applyEntries({}, generation);
 
     ListRequest request;
     request.path = path;
@@ -569,9 +595,19 @@ void NavigationController::cancelActiveRequest()
     }
 
     const BackendRequestId requestId = m_activeRequest;
+    const auto pendingIt = m_pendingRequests.constFind(requestId);
+    bool cancelBackendRequest = true;
+    if (pendingIt != m_pendingRequests.constEnd()
+        && pendingIt->kind == RequestKind::Recent
+        && m_recentController != nullptr) {
+        m_recentController->cancelLoad(requestId);
+        cancelBackendRequest = false;
+    }
     m_activeRequest = 0;
     m_pendingRequests.remove(requestId);
-    m_client->cancel(requestId);
+    if (cancelBackendRequest) {
+        m_client->cancel(requestId);
+    }
 }
 
 void NavigationController::clearSearchState()
@@ -770,6 +806,66 @@ void NavigationController::handleSearchReady(
     m_model->applyEntries(entries, pending.generation);
     setLoading(false);
     setLoadError(QString());
+}
+
+void NavigationController::handleRecentReady(
+    BackendRequestId requestId,
+    const QVector<DirectoryEntry> &entries)
+{
+    const auto pendingIt = m_pendingRequests.find(requestId);
+    if (pendingIt == m_pendingRequests.end() || pendingIt->kind != RequestKind::Recent) {
+        return;
+    }
+    const PendingRequest pending = pendingIt.value();
+    m_pendingRequests.erase(pendingIt);
+    if (requestId != m_activeRequest || pending.generation != m_generation
+        || pending.path != m_currentPath || m_currentPath != QStringLiteral("recent://")) {
+        return;
+    }
+
+    m_activeRequest = 0;
+    updateRemoteState(entries);
+    m_model->applyEntries(entries, pending.generation);
+    setLoading(false);
+    setLoadError(QString());
+}
+
+void NavigationController::handleRecentFailed(
+    BackendRequestId requestId,
+    const QString &message)
+{
+    const auto pendingIt = m_pendingRequests.find(requestId);
+    if (pendingIt == m_pendingRequests.end() || pendingIt->kind != RequestKind::Recent) {
+        return;
+    }
+    const PendingRequest pending = pendingIt.value();
+    m_pendingRequests.erase(pendingIt);
+    if (requestId != m_activeRequest || pending.generation != m_generation
+        || pending.path != m_currentPath || m_currentPath != QStringLiteral("recent://")) {
+        return;
+    }
+
+    m_activeRequest = 0;
+    const QVector<DirectoryEntry> entries = m_recentController->currentEntries();
+    updateRemoteState(entries);
+    m_model->applyEntries(entries, pending.generation);
+    setLoading(false);
+    setLoadError(message);
+    BackendError error;
+    error.code = QStringLiteral("recent_load_failed");
+    error.message = message;
+    error.requestId = requestId;
+    emit navigationFailed(error);
+}
+
+void NavigationController::handleRecentProjectionChanged()
+{
+    if (m_recentController == nullptr || m_currentPath != QStringLiteral("recent://")) {
+        return;
+    }
+    const QVector<DirectoryEntry> entries = m_recentController->currentEntries();
+    updateRemoteState(entries);
+    m_model->applyEntries(entries, m_generation);
 }
 
 void NavigationController::handleBackendFailure(const BackendError &error)

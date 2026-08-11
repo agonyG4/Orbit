@@ -1,3 +1,5 @@
+#include <functional>
+
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -23,6 +25,7 @@ private slots:
     void debouncesLocalWatcherChanges();
     void suppressesWatcherForRemotePath();
     void loadsRecentPathWithoutBackendListingAndPreservesHistory();
+    void ignoresRecentCompletionAfterNavigationAway();
     void honorsConfiguredRemotePrefixesAtPathBoundaries();
     void forwardsListingOptionsToBackend();
 };
@@ -36,6 +39,17 @@ DirectoryEntry navigationEntry(const QString &name, const QString &path)
     entry.fileKind = QStringLiteral("TXT");
     return entry;
 }
+
+class NavigationManualDispatch final
+{
+public:
+    void operator()(std::function<void()> job)
+    {
+        jobs.append(std::move(job));
+    }
+
+    QVector<std::function<void()>> jobs;
+};
 
 void NavigationControllerTest::rejectsLateNavigationResult()
 {
@@ -226,15 +240,26 @@ void NavigationControllerTest::loadsRecentPathWithoutBackendListingAndPreservesH
     FakeRustBackendClient client;
     DirectoryModel model;
     DirectoryWatchService watcher;
-    RecentController recent;
+    NavigationManualDispatch dispatch;
+    RecentStore store(
+        RecentSourcePaths {finderPath, QString(), QString(), 60},
+        nullptr,
+        std::ref(dispatch));
+    RecentController recent(&store);
     NavigationController navigation(&client, &model, &watcher);
     RecentSourcePaths sources;
     sources.finderPath = finderPath;
     sources.limit = 60;
     navigation.setRecentController(&recent, sources);
 
-    QCOMPARE(navigation.navigateTo(QStringLiteral("recent://")), BackendRequestId(0));
+    const BackendRequestId recentRequest = navigation.navigateTo(QStringLiteral("recent://"));
+    QVERIFY(recentRequest != 0);
     QCOMPARE(client.listRequests().size(), 0);
+    QCOMPARE(navigation.loading(), true);
+    QCOMPARE(dispatch.jobs.size(), 1);
+    dispatch.jobs.first()();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
     QCOMPARE(navigation.loading(), false);
     QCOMPARE(navigation.loadError(), QString());
     QCOMPARE(navigation.currentPath(), QStringLiteral("recent://"));
@@ -243,7 +268,12 @@ void NavigationControllerTest::loadsRecentPathWithoutBackendListingAndPreservesH
     QCOMPARE(model.count(), 1);
     QCOMPARE(model.data(model.index(0, 0), DirectoryModel::FilePathRole).toString(), recentFile);
 
-    QCOMPARE(navigation.refreshCurrentFolder(), BackendRequestId(0));
+    const BackendRequestId refreshRequest = navigation.refreshCurrentFolder();
+    QVERIFY(refreshRequest != 0);
+    QCOMPARE(dispatch.jobs.size(), 2);
+    dispatch.jobs.last()();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
     QCOMPARE(client.listRequests().size(), 0);
 
     const BackendRequestId homeRequest = navigation.navigateTo(QStringLiteral("/home"));
@@ -251,12 +281,60 @@ void NavigationControllerTest::loadsRecentPathWithoutBackendListingAndPreservesH
     navigation.goBack();
     QCOMPARE(navigation.currentPath(), QStringLiteral("recent://"));
     QCOMPARE(navigation.historyIndex(), 0);
+    QVERIFY(dispatch.jobs.size() >= 3);
+    dispatch.jobs.last()();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
     QCOMPARE(navigation.loading(), false);
     QCOMPARE(model.count(), 1);
     QCOMPARE(client.listRequests().size(), 1);
     navigation.goForward();
     QCOMPARE(navigation.currentPath(), QStringLiteral("/home"));
     QCOMPARE(navigation.historyIndex(), 1);
+}
+
+void NavigationControllerTest::ignoresRecentCompletionAfterNavigationAway()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString recentFile = directory.filePath(QStringLiteral("recent.txt"));
+    QFile fixtureFile(recentFile);
+    QVERIFY(fixtureFile.open(QIODevice::WriteOnly));
+    fixtureFile.write("recent fixture");
+    fixtureFile.close();
+    const QString finderPath = directory.filePath(QStringLiteral("finder.json"));
+    QFile finder(finderPath);
+    QVERIFY(finder.open(QIODevice::WriteOnly));
+    finder.write(QStringLiteral("[{\"filePath\":\"%1\",\"lastAccessed\":100}]\n")
+                     .arg(recentFile)
+                     .toUtf8());
+    finder.close();
+
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationManualDispatch dispatch;
+    RecentStore store(
+        RecentSourcePaths {finderPath, QString(), QString(), 60},
+        nullptr,
+        std::ref(dispatch));
+    RecentController recent(&store);
+    NavigationController navigation(&client, &model, &watcher);
+    navigation.setRecentController(&recent);
+
+    const BackendRequestId recentRequest = navigation.navigateTo(QStringLiteral("recent://"));
+    QVERIFY(recentRequest != 0);
+    const BackendRequestId homeRequest = navigation.navigateTo(QStringLiteral("/home"));
+    QVERIFY(homeRequest != 0);
+    client.completeList(homeRequest, {navigationEntry(QStringLiteral("home.txt"), QStringLiteral("/home/home.txt"))});
+    QVERIFY(!dispatch.jobs.isEmpty());
+    dispatch.jobs.first()();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    QCOMPARE(navigation.currentPath(), QStringLiteral("/home"));
+    QCOMPARE(model.paths(), QVector<QString>({QStringLiteral("/home/home.txt")}));
+    QVERIFY(navigation.loading() == false);
 }
 
 void NavigationControllerTest::honorsConfiguredRemotePrefixesAtPathBoundaries()

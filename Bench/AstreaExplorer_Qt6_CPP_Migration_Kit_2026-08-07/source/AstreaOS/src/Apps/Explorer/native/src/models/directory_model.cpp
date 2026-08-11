@@ -278,6 +278,22 @@ QVariantMap DirectoryModel::get(int row) const
     return result;
 }
 
+bool DirectoryModel::entryForPath(const QString &filePath, DirectoryEntry *entry) const
+{
+    if (filePath.isEmpty() || entry == nullptr) {
+        return false;
+    }
+
+    for (const DirectoryEntry &candidate : m_entries) {
+        if (candidate.filePath != filePath) {
+            continue;
+        }
+        *entry = candidate;
+        return true;
+    }
+    return false;
+}
+
 void DirectoryModel::setEntries(QVector<DirectoryEntry> entries, quint64 generation)
 {
     applyEntries(std::move(entries), generation);
