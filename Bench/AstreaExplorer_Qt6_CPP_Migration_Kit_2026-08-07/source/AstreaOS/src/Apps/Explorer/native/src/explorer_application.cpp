@@ -100,7 +100,6 @@ int ExplorerApplication::run(int argc, char **argv)
         &directoryModel,
         &directoryWatcher,
         &application);
-    RecentController recentController;
     RecentSourcePaths recentSources;
     recentSources.finderPath = QDir(QDir::homePath()).filePath(
         QStringLiteral(".local/state/Astrea/finder-recents.json"));
@@ -109,6 +108,8 @@ int ExplorerApplication::run(int argc, char **argv)
     recentSources.xbelPath = QDir(QDir::homePath()).filePath(
         QStringLiteral(".local/share/recently-used.xbel"));
     recentSources.limit = 60;
+    RecentStore recentStore(recentSources, &application);
+    RecentController recentController(&recentStore, &application);
     navigation.setRecentController(&recentController, recentSources);
     SelectionController selection(&directoryModel, &application);
     AppStateFacade appState(
@@ -119,7 +120,8 @@ int ExplorerApplication::run(int argc, char **argv)
         &settings,
         &fileOperations,
         &devices,
-        runtimePaths);
+        runtimePaths,
+        &recentController);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,

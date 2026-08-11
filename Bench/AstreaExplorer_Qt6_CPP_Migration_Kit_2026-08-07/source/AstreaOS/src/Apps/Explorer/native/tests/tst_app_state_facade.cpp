@@ -1,12 +1,15 @@
+#include <functional>
 #include <QTemporaryDir>
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
 #include "controllers/app_state_facade.h"
 #include "controllers/navigation_controller.h"
+#include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "models/directory_model.h"
 #include "services/directory_watch_service.h"
+#include "services/recent_store.h"
 #include "services/settings_service.h"
 
 using namespace Astrea::Explorer::Native::Backend;
@@ -24,6 +27,7 @@ private slots:
     void propagatesNavigationAndBackendFailure();
     void preservesSelectionAcrossModelRefresh();
     void delegatesQmlModelMutationsToNativeBoundary();
+    void routesRecentOperationsToNativeBoundary();
 };
 
 struct FacadeFixture
@@ -267,6 +271,57 @@ void AppStateFacadeTest::delegatesQmlModelMutationsToNativeBoundary()
     QCOMPARE(fixture.model.count(), 1);
     QVERIFY(facade.selectedFiles().isEmpty());
     QCOMPARE(facade.selectedFile(), QString());
+}
+
+void AppStateFacadeTest::routesRecentOperationsToNativeBoundary()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    RecentSourcePaths paths;
+    paths.finderPath = QDir(directory.path()).filePath(QStringLiteral("finder.json"));
+    paths.launchHistoryPath = QDir(directory.path()).filePath(QStringLiteral("history.jsonl"));
+    paths.xbelPath = QDir(directory.path()).filePath(QStringLiteral("recent.xbel"));
+
+    QVector<std::function<void()>> jobs;
+    RecentStore store(
+        paths,
+        nullptr,
+        [&jobs](std::function<void()> job) { jobs.append(std::move(job)); });
+    RecentController recent(&store);
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        &recent);
+
+    DirectoryEntry entry;
+    entry.fileName = QStringLiteral("notes.txt");
+    entry.filePath = QStringLiteral("/fixture/notes.txt");
+    entry.fileUrl = QUrl::fromLocalFile(entry.filePath);
+    entry.fileSize = 42;
+    entry.fileKind = QStringLiteral("TXT");
+    QVERIFY(fixture.model.applyEntries({entry}, 1));
+
+    facade.loadRecent();
+    QCOMPARE(jobs.size(), 1);
+
+    facade.recordRecentAccess(entry.filePath, false, entry.fileUrl.toString());
+    QCOMPARE(recent.currentEntries().size(), 1);
+    QCOMPARE(recent.currentEntries().constFirst().fileName, entry.fileName);
+    QCOMPARE(recent.currentEntries().constFirst().fileSize, entry.fileSize);
+
+    facade.recordRecentAccess(QStringLiteral("recent://"), false, QString());
+    QCOMPARE(recent.currentEntries().size(), 1);
+    facade.setDialogActive(true);
+    facade.recordRecentAccess(QStringLiteral("/fixture/other.txt"), false, QString());
+    QCOMPARE(recent.currentEntries().size(), 1);
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

@@ -45,6 +45,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE QVariantMap get(int row) const;
+    bool entryForPath(const QString &filePath, DirectoryEntry *entry) const;
 
     void setEntries(QVector<DirectoryEntry> entries, quint64 generation);
     bool applyEntries(QVector<DirectoryEntry> entries, quint64 generation);

@@ -51,6 +51,29 @@ OpenWithController::OpenWithController(
 {
 }
 
+OpenWithController::DesktopCatalog OpenWithController::buildDesktopCatalog(
+    const QStringList &roots)
+{
+    const QStringList applicationRoots = roots.isEmpty()
+        ? QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation)
+        : roots;
+    DesktopCatalog catalog;
+    for (const QString &root : applicationRoots) {
+        if (root.isEmpty()) {
+            continue;
+        }
+        QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
+                              QDirIterator::Subdirectories);
+        while (iterator.hasNext()) {
+            const OpenWithApplication application = readDesktopEntry(iterator.next());
+            if (!application.desktopFile.isEmpty()) {
+                catalog.insert(application.id, application);
+            }
+        }
+    }
+    return catalog;
+}
+
 QVector<OpenWithApplication> OpenWithController::applications() const
 {
     return m_applications;
@@ -97,7 +120,9 @@ QString OpenWithController::error() const
     return m_error;
 }
 
-OpenWithApplication OpenWithController::resolveDesktopEntry(const QString &desktopId)
+OpenWithApplication OpenWithController::resolveDesktopEntry(
+    const QString &desktopId,
+    const DesktopCatalog *catalog)
 {
     const QFileInfo candidate(desktopId);
     if (candidate.isFile()) {
@@ -110,6 +135,14 @@ OpenWithApplication OpenWithController::resolveDesktopEntry(const QString &deskt
     }
     if (!fileName.endsWith(QStringLiteral(".desktop"))) {
         fileName += QStringLiteral(".desktop");
+    }
+
+    if (catalog != nullptr) {
+        const QString id = QFileInfo(fileName).completeBaseName();
+        const auto found = catalog->constFind(id);
+        if (found != catalog->constEnd()) {
+            return found.value();
+        }
     }
 
     const QStringList applicationRoots = QStandardPaths::standardLocations(

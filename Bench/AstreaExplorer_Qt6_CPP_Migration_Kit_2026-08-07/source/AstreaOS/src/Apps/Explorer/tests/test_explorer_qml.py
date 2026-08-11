@@ -40,6 +40,19 @@ class ExplorerQmlShortcutWiringTests(unittest.TestCase):
 
 
 class ExplorerRecentPersistenceTests(unittest.TestCase):
+    def test_native_runtime_owns_recent_load_and_recording(self):
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        adapter = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(encoding="utf-8")
+        recent_qml = (APP_ROOT / "state" / "RecentState.qml").read_text(encoding="utf-8")
+
+        self.assertIn("nativeAppState.loadRecent()", app_state)
+        self.assertIn("nativeAppState.recordRecentAccess", app_state)
+        self.assertIn("function loadRecent()", adapter)
+        self.assertIn("function recordRecentAccess", adapter)
+        self.assertIn("readonly property bool nativeOwned", recent_qml)
+        self.assertIn("if (nativeOwned)", recent_qml)
+        self.assertIn("if (recent.nativeOwned)", recent_qml)
+
     def test_recent_refresh_waits_for_latest_persistence_completion(self):
         recent_qml = (APP_ROOT / "state" / "RecentState.qml").read_text(encoding="utf-8")
 

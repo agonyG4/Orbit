@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <functional>
 
 #include <QDir>
 #include <QDateTime>
@@ -6,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -62,7 +64,31 @@ private slots:
     void boundsLaunchHistoryCandidatesBeforeFinalMerge();
     void remainsDeterministicUnderRepeatedRecentRefreshes();
     void limitsMergedResults();
+    void publishesLatestAsyncLoadAndRecordsImmediately();
 };
+
+class ControllerManualDispatch final
+{
+public:
+    void operator()(std::function<void()> job)
+    {
+        jobs.append(std::move(job));
+    }
+
+    QVector<std::function<void()>> jobs;
+};
+
+QVector<DirectoryEntry> loadThroughNativeController(const RecentSourcePaths &paths)
+{
+    RecentStore store(paths, nullptr, [](std::function<void()> job) {
+        job();
+    });
+    RecentController controller(&store);
+    controller.loadAsync();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+    return controller.currentEntries();
+}
 
 RecentRecord recentRecord(const QString &path, qint64 lastAccessed, const QString &source)
 {
@@ -153,7 +179,7 @@ void RecentControllerTest::loadsFinderLaunchAndXbelSources()
     paths.finderPath = finderPath;
     paths.launchHistoryPath = launchPath;
     paths.xbelPath = xbelPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 3);
     QCOMPARE(entries.at(0).filePath, xbelFile);
@@ -196,7 +222,7 @@ void RecentControllerTest::loadsDesktopLaunchRecordsAndPreservesAccessMetadata()
 
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 1);
     const DirectoryEntry &entry = entries.constFirst();
@@ -244,7 +270,7 @@ void RecentControllerTest::loadsDesktopRecordsWithMalformedTimestampUsingMtimeFa
 
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 1);
     QCOMPARE(entries.constFirst().filePath, QFileInfo(desktopFile).absoluteFilePath());
@@ -325,7 +351,7 @@ void RecentControllerTest::qualifiesMixedHistoryThroughDirectoryModelAndLauncher
     ScopedEnvironment dataHome("XDG_DATA_HOME", directory.path().toUtf8());
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 2);
     QCOMPARE(entries.at(0).fileName, QStringLiteral("Test Application"));
@@ -392,7 +418,7 @@ void RecentControllerTest::preservesAccessTimestampOverFilesystemModificationTim
 
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
     QCOMPARE(entries.size(), 1);
     QCOMPARE(entries.constFirst().lastAccessed, 1000);
     QCOMPARE(entries.constFirst().fileModified.toMSecsSinceEpoch(), 1000);
@@ -453,7 +479,7 @@ void RecentControllerTest::preservesRecoverableLaunchRecordsAndRejectsInvalidRec
 
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 3);
     auto findEntry = [&entries](const QString &path) -> DirectoryEntry {
@@ -502,7 +528,7 @@ void RecentControllerTest::preservesFinderRecordsWithMissingTargets()
 
     RecentSourcePaths paths;
     paths.finderPath = finderPath;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), 1);
     QCOMPARE(entries.constFirst().filePath, QFileInfo(missingPath).absoluteFilePath());
@@ -594,7 +620,7 @@ void RecentControllerTest::boundsLaunchHistoryCandidatesBeforeFinalMerge()
     RecentSourcePaths paths;
     paths.launchHistoryPath = historyPath;
     paths.limit = 8;
-    const QVector<DirectoryEntry> entries = controller.load(paths);
+    const QVector<DirectoryEntry> entries = loadThroughNativeController(paths);
 
     QCOMPARE(entries.size(), paths.limit);
     QVERIFY(std::none_of(entries.cbegin(), entries.cend(), [&](const DirectoryEntry &entry) {
@@ -609,7 +635,7 @@ void RecentControllerTest::boundsLaunchHistoryCandidatesBeforeFinalMerge()
     for (const DirectoryEntry &entry : entries) {
         firstPaths.append(entry.filePath);
     }
-    const QVector<DirectoryEntry> repeated = controller.load(paths);
+    const QVector<DirectoryEntry> repeated = loadThroughNativeController(paths);
     QVector<QString> repeatedPaths;
     for (const DirectoryEntry &entry : repeated) {
         repeatedPaths.append(entry.filePath);
@@ -665,6 +691,52 @@ void RecentControllerTest::limitsMergedResults()
     QCOMPARE(entries.size(), 2);
     QCOMPARE(entries.at(0).filePath, QStringLiteral("/fixture/two"));
     QCOMPARE(entries.at(1).filePath, QStringLiteral("/fixture/three"));
+}
+
+void RecentControllerTest::publishesLatestAsyncLoadAndRecordsImmediately()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString itemPath = QDir(directory.path()).filePath(QStringLiteral("item.txt"));
+    QFile item(itemPath);
+    QVERIFY(item.open(QIODevice::WriteOnly));
+    item.write("item");
+    item.close();
+    const QString finderPath = QDir(directory.path()).filePath(QStringLiteral("finder.json"));
+    QFile finder(finderPath);
+    QVERIFY(finder.open(QIODevice::WriteOnly));
+    finder.write(QJsonDocument(QJsonArray {
+        QJsonObject {{QStringLiteral("filePath"), itemPath}, {QStringLiteral("lastAccessed"), 400}},
+    }).toJson(QJsonDocument::Compact));
+    finder.close();
+
+    ControllerManualDispatch dispatch;
+    RecentStore store(
+        RecentSourcePaths {finderPath, QString(), QString(), 60},
+        nullptr,
+        std::ref(dispatch));
+    RecentController controller(&store);
+    QSignalSpy ready(&controller, &RecentController::recentReady);
+    const BackendRequestId requestA = controller.loadAsync();
+    const BackendRequestId requestB = controller.loadAsync();
+    QVERIFY(requestB > requestA);
+    QCOMPARE(dispatch.jobs.size(), 2);
+
+    dispatch.jobs[1]();
+    QCoreApplication::processEvents();
+    dispatch.jobs[0]();
+    QCoreApplication::processEvents();
+    QCOMPARE(ready.count(), 1);
+    QCOMPARE(ready.at(0).at(0).toULongLong(), requestB);
+
+    DirectoryEntry recordEntry;
+    recordEntry.filePath = QDir(directory.path()).filePath(QStringLiteral("new.txt"));
+    recordEntry.fileName = QStringLiteral("new.txt");
+    recordEntry.fileUrl = QUrl::fromLocalFile(recordEntry.filePath);
+    controller.recordAccess(recordEntry);
+    const QVector<DirectoryEntry> current = controller.currentEntries();
+    QVERIFY(!current.isEmpty());
+    QCOMPARE(current.constFirst().filePath, recordEntry.filePath);
 }
 
 QTEST_GUILESS_MAIN(RecentControllerTest)

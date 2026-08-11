@@ -1,48 +1,81 @@
 #include "controllers/recent_controller.h"
-#include "controllers/open_with_controller.h"
 
 #include <algorithm>
 #include <utility>
 
 #include <QDateTime>
-#include <QFile>
-#include <QFileInfo>
-#include <QHash>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
-#include <QSet>
-#include <QUrl>
-#include <QXmlStreamReader>
 
 namespace Astrea::Explorer::Native::Backend {
 
-namespace {
-
-qint64 objectInteger(const QJsonObject &object, const QString &key, qint64 fallback)
+RecentController::RecentController(RecentStore *store, QObject *parent)
+    : QObject(parent)
+    , m_store(store)
 {
-    const QJsonValue value = object.value(key);
-    if (value.isDouble()) {
-        return value.toInteger();
+    if (m_store == nullptr) {
+        return;
     }
-    return value.toString().toLongLong();
+    connect(
+        m_store,
+        &RecentStore::loadReady,
+        this,
+        &RecentController::handleStoreLoadReady);
+    connect(
+        m_store,
+        &RecentStore::recordsChanged,
+        this,
+        &RecentController::handleStoreRecordsChanged);
+    connect(
+        m_store,
+        &RecentStore::saveFinished,
+        this,
+        &RecentController::handleStoreSaveFinished);
 }
 
-bool objectBoolean(const QJsonObject &object, const QString &key, bool fallback)
+BackendRequestId RecentController::loadAsync()
 {
-    const QJsonValue value = object.value(key);
-    return value.isUndefined() ? fallback : value.toBool(fallback);
+    if (m_store == nullptr) {
+        return 0;
+    }
+    if (m_activeStoreRequestId != 0) {
+        m_store->cancelLoad(m_activeStoreRequestId);
+        m_storeRequests.remove(m_activeStoreRequestId);
+    }
+    const BackendRequestId requestId = ++m_nextRequestId;
+    const quint64 storeRequestId = m_store->load();
+    m_storeRequests.insert(storeRequestId, requestId);
+    m_activeRequestId = requestId;
+    m_activeStoreRequestId = storeRequestId;
+    return requestId;
 }
 
-} // namespace
-
-QVector<DirectoryEntry> RecentController::load(const RecentSourcePaths &paths) const
+void RecentController::cancelLoad(BackendRequestId requestId)
 {
-    QVector<RecentRecord> records = loadFinder(paths.finderPath);
-    records += loadLaunchHistory(paths.launchHistoryPath, paths.limit);
-    records += loadXbel(paths.xbelPath);
-    return merge(records, paths.limit);
+    if (requestId == 0 || requestId != m_activeRequestId) {
+        return;
+    }
+    m_store->cancelLoad(m_activeStoreRequestId);
+    m_storeRequests.remove(m_activeStoreRequestId);
+    m_activeRequestId = 0;
+    m_activeStoreRequestId = 0;
+}
+
+void RecentController::recordAccess(const DirectoryEntry &entry)
+{
+    if (m_store == nullptr || entry.filePath.isEmpty()) {
+        return;
+    }
+    RecentRecord record;
+    record.entry = entry;
+    record.lastAccessed = QDateTime::currentMSecsSinceEpoch();
+    record.entry.lastAccessed = record.lastAccessed;
+    record.entry.fileModified = QDateTime::fromMSecsSinceEpoch(record.lastAccessed);
+    record.source = QStringLiteral("finder");
+    m_store->recordAccess(record);
+}
+
+QVector<DirectoryEntry> RecentController::currentEntries() const
+{
+    return m_currentEntries;
 }
 
 QVector<DirectoryEntry> RecentController::merge(
@@ -80,8 +113,6 @@ QVector<DirectoryEntry> RecentController::merge(
         DirectoryEntry entry = unique.at(i).entry;
         entry.lastAccessed = unique.at(i).lastAccessed;
         if (entry.lastAccessed > 0) {
-            // `fileModified` is the existing Recent UI contract. It is an
-            // access timestamp here, not the filesystem mtime.
             entry.fileModified = QDateTime::fromMSecsSinceEpoch(entry.lastAccessed);
         }
         entry.recentSource = unique.at(i).source;
@@ -90,301 +121,55 @@ QVector<DirectoryEntry> RecentController::merge(
     return result;
 }
 
-RecentRecord RecentController::recordFromPath(
-    const QString &path,
-    qint64 lastAccessed,
-    const QString &source,
-    const QString &kind)
+void RecentController::handleStoreLoadReady(
+    quint64 storeRequestId,
+    const QVector<RecentRecord> &records,
+    quintptr workerThreadId)
 {
-    RecentRecord record;
-    const QFileInfo info(path);
-    if (!info.exists()) {
-        return record;
+    Q_UNUSED(workerThreadId);
+    const auto requestIt = m_storeRequests.constFind(storeRequestId);
+    if (requestIt == m_storeRequests.constEnd()
+        || storeRequestId != m_activeStoreRequestId) {
+        return;
     }
-
-    const QString cleanPath = info.absoluteFilePath();
-    const bool isDirectory = info.isDir();
-    record.entry.fileName = info.fileName().isEmpty() ? cleanPath : info.fileName();
-    record.entry.filePath = cleanPath;
-    record.entry.fileUrl = QUrl::fromLocalFile(cleanPath);
-    record.entry.fileIsDir = isDirectory;
-    record.entry.fileExecutable = !isDirectory
-        && (info.permissions() & (QFile::ExeOwner | QFile::ExeGroup | QFile::ExeOther));
-    record.entry.fileHidden = record.entry.fileName.startsWith(QLatin1Char('.'));
-    record.entry.fileSize = isDirectory ? 0 : info.size();
-    record.entry.fileKind = kind.isEmpty()
-        ? (isDirectory
-               ? QStringLiteral("Pasta")
-               : (info.suffix().isEmpty() ? QStringLiteral("Arquivo") : info.suffix().toUpper()))
-        : kind;
-    if (isPreviewablePath(cleanPath, isDirectory)) {
-        record.entry.filePreviewUrl = record.entry.fileUrl;
-    }
-    record.lastAccessed = lastAccessed > 0
-        ? lastAccessed
-        : info.lastModified().toMSecsSinceEpoch();
-    record.entry.fileModified = QDateTime::fromMSecsSinceEpoch(record.lastAccessed);
-    record.source = source;
-    return record;
+    const BackendRequestId requestId = requestIt.value();
+    m_storeRequests.remove(storeRequestId);
+    m_activeStoreRequestId = 0;
+    m_activeRequestId = 0;
+    m_currentEntries = merge(records, m_store->limit());
+    emit recentReady(requestId, m_currentEntries);
+    emit projectionChanged();
 }
 
-RecentRecord RecentController::recordFromObject(
-    const QJsonObject &object,
-    const QString &source)
+void RecentController::handleStoreRecordsChanged()
 {
-    const QString path = object.value(QStringLiteral("filePath")).toString();
-    RecentRecord record = recordFromPath(
-        path,
-        objectInteger(object, QStringLiteral("lastAccessed"), 0),
-        source,
-        object.value(QStringLiteral("fileKind")).toString());
-    if (record.entry.filePath.isEmpty()) {
-        const QFileInfo info(path);
-        if (path.trimmed().isEmpty()) {
-            return record;
-        }
-
-        // Finder's legacy loader preserves serialized entries even after the
-        // target disappears. Keep the identity and serialized metadata while
-        // still rejecting records with no usable path.
-        record.entry.filePath = info.absoluteFilePath();
-        record.entry.fileName = info.fileName().isEmpty() ? path : info.fileName();
-        record.entry.fileUrl = QUrl::fromLocalFile(record.entry.filePath);
-        record.entry.fileIsDir = objectBoolean(
-            object,
-            QStringLiteral("fileIsDir"),
-            false);
-        record.entry.fileExecutable = objectBoolean(
-            object,
-            QStringLiteral("fileExecutable"),
-            false);
-        record.entry.fileHidden = objectBoolean(
-            object,
-            QStringLiteral("fileHidden"),
-            record.entry.fileName.startsWith(QLatin1Char('.')));
-        record.entry.fileSize = objectInteger(
-            object,
-            QStringLiteral("fileSize"),
-            -1);
-        record.entry.fileKind = object.value(QStringLiteral("fileKind")).toString();
-        record.lastAccessed = objectInteger(object, QStringLiteral("lastAccessed"), 0);
-        record.entry.fileModified = record.lastAccessed > 0
-            ? QDateTime::fromMSecsSinceEpoch(record.lastAccessed)
-            : QDateTime();
-        record.source = source;
+    if (m_store == nullptr) {
+        return;
     }
-
-    record.entry.fileName = object.value(QStringLiteral("fileName"))
-                                .toString(record.entry.fileName);
-    record.entry.fileUrl = QUrl(object.value(QStringLiteral("fileUrl"))
-                                    .toString(record.entry.fileUrl.toString()));
-    record.entry.fileExecutable = objectBoolean(
-        object,
-        QStringLiteral("fileExecutable"),
-        record.entry.fileExecutable);
-    record.entry.fileHidden = objectBoolean(
-        object,
-        QStringLiteral("fileHidden"),
-        record.entry.fileHidden);
-    if (object.contains(QStringLiteral("fileSize"))) {
-        record.entry.fileSize = objectInteger(
-            object,
-            QStringLiteral("fileSize"),
-            record.entry.fileSize);
-    }
-    const QString preview = object.value(QStringLiteral("filePreviewUrl")).toString();
-    if (!preview.isEmpty()) {
-        record.entry.filePreviewUrl = QUrl(preview);
-    }
-    record.entry.fileIconName = object.value(QStringLiteral("fileIconName")).toString();
-    record.source = object.value(QStringLiteral("recentSource")).toString(source);
-    return record;
+    m_currentEntries = merge(m_store->records(), m_store->limit());
+    emit projectionChanged();
 }
 
-RecentRecord RecentController::recordFromDesktop(
-    const QString &desktopId,
-    const QJsonArray &argv,
-    qint64 lastAccessed,
-    const QString &source,
-    QHash<QString, QString> *desktopPathCache)
+void RecentController::handleStoreSaveFinished(
+    quint64 generation,
+    bool success,
+    const QString &message,
+    quintptr workerThreadId)
 {
-    QString desktopPath;
-    for (const QJsonValue &value : argv) {
-        const QString argument = value.toString();
-        if (!argument.endsWith(QStringLiteral(".desktop"))) {
-            continue;
-        }
-        if (QFileInfo(argument).isFile()) {
-            desktopPath = argument;
-            break;
-        }
+    Q_UNUSED(generation);
+    Q_UNUSED(workerThreadId);
+    if (!success) {
+        emit persistenceFailed(message);
     }
-
-    const QString lookup = desktopPath.isEmpty() ? desktopId : desktopPath;
-    OpenWithApplication application;
-    if (desktopPathCache != nullptr && desktopPathCache->contains(lookup)) {
-        application = OpenWithController::resolveDesktopEntry(desktopPathCache->value(lookup));
-    } else {
-        application = OpenWithController::resolveDesktopEntry(lookup);
-        if (desktopPathCache != nullptr && !application.desktopFile.isEmpty()) {
-            desktopPathCache->insert(lookup, application.desktopFile);
-        }
-    }
-    if (application.desktopFile.isEmpty()) {
-        return {};
-    }
-
-    RecentRecord record = recordFromPath(
-        application.desktopFile,
-        lastAccessed,
-        source,
-        QStringLiteral("Aplicativo"));
-    if (record.entry.filePath.isEmpty()) {
-        return {};
-    }
-    record.entry.fileName = application.name;
-    record.entry.fileExecutable = true;
-    record.entry.filePreviewUrl = QUrl();
-    record.entry.fileIconName = application.icon;
-    return record;
 }
 
-bool RecentController::isPreviewablePath(const QString &path, bool isDirectory)
+void RecentController::rebuildProjection()
 {
-    if (isDirectory) {
-        return false;
+    if (m_store == nullptr) {
+        m_currentEntries.clear();
+        return;
     }
-    const QString lower = path.toLower();
-    return lower.endsWith(QStringLiteral(".jpg")) || lower.endsWith(QStringLiteral(".jpeg"))
-        || lower.endsWith(QStringLiteral(".png")) || lower.endsWith(QStringLiteral(".gif"))
-        || lower.endsWith(QStringLiteral(".bmp")) || lower.endsWith(QStringLiteral(".webp"))
-        || lower.endsWith(QStringLiteral(".svg")) || lower.endsWith(QStringLiteral(".avif"))
-        || lower.endsWith(QStringLiteral(".heic")) || lower.endsWith(QStringLiteral(".heif"))
-        || lower.endsWith(QStringLiteral(".tiff")) || lower.endsWith(QStringLiteral(".tif"));
-}
-
-qint64 RecentController::parseTimestamp(const QString &value)
-{
-    if (value.isEmpty()) {
-        return 0;
-    }
-    return QDateTime::fromString(value, Qt::ISODate).toMSecsSinceEpoch();
-}
-
-QVector<RecentRecord> RecentController::loadFinder(const QString &path)
-{
-    if (path.trimmed().isEmpty()) {
-        return {};
-    }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    QJsonParseError error;
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
-    if (error.error != QJsonParseError::NoError || !document.isArray()) {
-        return {};
-    }
-
-    QVector<RecentRecord> records;
-    for (const QJsonValue &value : document.array()) {
-        if (value.isObject()) {
-            records.append(recordFromObject(value.toObject(), QStringLiteral("finder")));
-        }
-    }
-    return records;
-}
-
-QVector<RecentRecord> RecentController::loadLaunchHistory(const QString &path, int limit)
-{
-    if (path.trimmed().isEmpty() || limit <= 0) {
-        return {};
-    }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-
-    QVector<RecentRecord> records;
-    QSet<QString> seenPaths;
-    QHash<QString, QString> desktopPathCache;
-    const QList<QByteArray> lines = file.readAll().split('\n');
-    for (auto it = lines.crbegin(); it != lines.crend(); ++it) {
-        const QByteArray line = it->trimmed();
-        if (line.isEmpty()) {
-            continue;
-        }
-        const QJsonDocument document = QJsonDocument::fromJson(line);
-        if (!document.isObject()) {
-            continue;
-        }
-        const QJsonObject object = document.object();
-        if (object.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
-            continue;
-        }
-        const QString kind = object.value(QStringLiteral("kind")).toString();
-        if (kind != QStringLiteral("file") && kind != QStringLiteral("desktop")) {
-            continue;
-        }
-        const qint64 timestamp = objectInteger(object, QStringLiteral("timestamp_ms"), 0);
-        const RecentRecord record = kind == QStringLiteral("desktop")
-            ? recordFromDesktop(
-                  object.value(QStringLiteral("target")).toString(),
-                  object.value(QStringLiteral("argv")).toArray(),
-                  timestamp,
-                  QStringLiteral("launch"),
-                  &desktopPathCache)
-            : recordFromPath(
-                  object.value(QStringLiteral("target")).toString(),
-                  timestamp,
-                  QStringLiteral("launch"));
-        if (record.entry.filePath.isEmpty() || seenPaths.contains(record.entry.filePath)) {
-            continue;
-        }
-        records.append(record);
-        seenPaths.insert(record.entry.filePath);
-        if (seenPaths.size() >= limit) {
-            break;
-        }
-    }
-    return records;
-}
-
-QVector<RecentRecord> RecentController::loadXbel(const QString &path)
-{
-    if (path.trimmed().isEmpty()) {
-        return {};
-    }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    QXmlStreamReader reader(&file);
-    QVector<RecentRecord> records;
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (!reader.isStartElement() || reader.name() != QStringLiteral("bookmark")) {
-            continue;
-        }
-        const QString href = reader.attributes().value(QStringLiteral("href")).toString();
-        const QUrl url(href);
-        if (!url.isLocalFile()) {
-            continue;
-        }
-        const qint64 timestamp = std::max({
-            parseTimestamp(reader.attributes().value(QStringLiteral("visited")).toString()),
-            parseTimestamp(reader.attributes().value(QStringLiteral("modified")).toString()),
-            parseTimestamp(reader.attributes().value(QStringLiteral("added")).toString()),
-        });
-        const RecentRecord record = recordFromPath(
-            url.toLocalFile(),
-            timestamp,
-            QStringLiteral("xbel"));
-        if (!record.entry.filePath.isEmpty()) {
-            records.append(record);
-        }
-    }
-    return records;
+    m_currentEntries = merge(m_store->records(), m_store->limit());
 }
 
 } // namespace Astrea::Explorer::Native::Backend

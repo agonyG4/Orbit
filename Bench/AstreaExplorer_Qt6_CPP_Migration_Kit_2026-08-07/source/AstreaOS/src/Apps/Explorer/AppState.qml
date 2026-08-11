@@ -319,7 +319,10 @@ QtObject {
         interval: 650
         repeat: false
         onTriggered: {
-            recent.load()
+            if (state.nativeNavigationActive)
+                nativeAppState.loadRecent()
+            else
+                recent.load()
             deviceNet.loadSavedAutoMounts()
             deviceNet.scheduleStartupDeviceRefresh()
             preview.enableStartupWork()
@@ -434,8 +437,15 @@ QtObject {
     function thumbnailScale() { return preview.thumbnailScale() }
     function openShellScript(path) { preview.openShellScript(path) }
     function openItem(path, isDir, fileUrl) { preview.openItem(path, isDir, fileUrl) }
-    function recordRecentItem(path, isDir, fileUrl) { recent.recordAccess(path, isDir, fileUrl) }
-    function recentModelItems() { return recent.recentModelItems() }
+    function recordRecentItem(path, isDir, fileUrl) {
+        if (nativeNavigationActive)
+            nativeAppState.recordRecentAccess(path, isDir, fileUrl || "")
+        else
+            recent.recordAccess(path, isDir, fileUrl)
+    }
+    function recentModelItems() {
+        return nativeNavigationActive ? [] : recent.recentModelItems()
+    }
 
     signal contextMenuOpening(string owner)
 

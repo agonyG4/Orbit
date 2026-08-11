@@ -12,6 +12,7 @@ QtObject {
     property int saveGeneration: 0
     property int loadGeneration: 0
     readonly property int maxItems: 60
+    readonly property bool nativeOwned: Boolean(app && app.nativeNavigationActive)
     readonly property string storagePath: Quickshell.env("HOME") + "/.local/state/Astrea/finder-recents.json"
     readonly property string launchHistoryPath: Quickshell.env("HOME") + "/.local/state/Astrea/launch/history.jsonl"
     readonly property string xbelRecentPath: Quickshell.env("HOME") + "/.local/share/recently-used.xbel"
@@ -76,6 +77,8 @@ QtObject {
     }
 
     function startSave() {
+        if (nativeOwned)
+            return
         saveGeneration = persistenceGeneration
         saveProc.command = [
             "python3",
@@ -88,12 +91,16 @@ QtObject {
     }
 
     function persist() {
+        if (nativeOwned)
+            return
         persistenceGeneration += 1
         if (!saveProc.running)
             startSave()
     }
 
     function load() {
+        if (nativeOwned)
+            return
         loadGeneration = persistenceGeneration
         loadBuffer = ""
         loadProc.running = false
@@ -101,6 +108,8 @@ QtObject {
     }
 
     function recordAccess(path, isDir, fileUrl) {
+        if (nativeOwned)
+            return
         if (!path || app.isRecentPath(path) || app.isTrashPath(path) || app.dialogActive)
             return
 
@@ -165,6 +174,8 @@ QtObject {
             onRead: data => recent.loadBuffer += data
         }
         onExited: function(code) {
+            if (recent.nativeOwned)
+                return
             if (code !== 0 || recent.loadGeneration !== recent.persistenceGeneration) {
                 return
             }
@@ -189,6 +200,8 @@ QtObject {
         command: []
         running: false
         onExited: function(code) {
+            if (recent.nativeOwned)
+                return
             if (recent.saveGeneration < recent.persistenceGeneration) {
                 recent.startSave()
                 return

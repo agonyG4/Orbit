@@ -22,7 +22,8 @@ AppStateFacade::AppStateFacade(
     Services::SettingsService *settingsService,
     FileOperationsController *fileOperations,
     DeviceController *devices,
-    Runtime::ExplorerRuntimePaths runtimePaths)
+    Runtime::ExplorerRuntimePaths runtimePaths,
+    RecentController *recentController)
     : QObject(parent)
     , m_navigation(navigation)
     , m_selection(selection)
@@ -30,6 +31,7 @@ AppStateFacade::AppStateFacade(
     , m_settingsService(settingsService)
     , m_fileOperations(fileOperations)
     , m_devices(devices)
+    , m_recentController(recentController)
     , m_runtimePaths(std::move(runtimePaths))
 {
     Q_ASSERT(m_navigation != nullptr);
@@ -873,6 +875,48 @@ void AppStateFacade::moveTab(int fromIndex, int toIndex)
 BackendRequestId AppStateFacade::refreshCurrentFolder()
 {
     return m_navigation->refreshCurrentFolder();
+}
+
+void AppStateFacade::loadRecent()
+{
+    if (m_recentController != nullptr) {
+        m_recentController->loadAsync();
+    }
+}
+
+void AppStateFacade::recordRecentAccess(
+    const QString &path,
+    bool isDirectory,
+    const QString &fileUrl)
+{
+    if (m_recentController == nullptr || path.isEmpty() || isRecentPath(path)
+        || isTrashPath(path) || dialogActive()) {
+        return;
+    }
+
+    DirectoryEntry entry;
+    if (!m_model->entryForPath(path, &entry)) {
+        const QFileInfo fileInfo(path);
+        entry.fileName = fileInfo.fileName().isEmpty() ? path : fileInfo.fileName();
+        entry.filePath = path;
+        entry.fileUrl = fileUrl.isEmpty() ? QUrl::fromLocalFile(path) : QUrl(fileUrl);
+        entry.fileIsDir = isDirectory;
+        entry.fileExecutable = !isDirectory && fileInfo.isExecutable();
+        entry.fileHidden = entry.fileName.startsWith(QLatin1Char('.'));
+        entry.fileSize = fileInfo.exists() && !isDirectory ? fileInfo.size() : -1;
+        entry.fileModified = fileInfo.exists() ? fileInfo.lastModified() : QDateTime();
+        entry.fileKind = isDirectory
+            ? QStringLiteral("Folder")
+            : fileInfo.suffix().toUpper();
+    }
+    if (!fileUrl.isEmpty() && entry.fileUrl.isEmpty()) {
+        entry.fileUrl = QUrl(fileUrl);
+    }
+    if (entry.fileUrl.isEmpty()) {
+        entry.fileUrl = QUrl::fromLocalFile(path);
+    }
+    entry.fileIsDir = isDirectory || entry.fileIsDir;
+    m_recentController->recordAccess(entry);
 }
 
 bool AppStateFacade::replaceFileModel(const QVariantList &items)

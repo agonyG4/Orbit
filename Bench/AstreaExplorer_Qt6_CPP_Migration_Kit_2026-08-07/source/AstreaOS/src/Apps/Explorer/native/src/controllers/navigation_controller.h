@@ -108,6 +108,11 @@ private slots:
     void handleSearchReady(
         BackendRequestId requestId,
         const QVector<DirectoryEntry> &entries);
+    void handleRecentReady(
+        BackendRequestId requestId,
+        const QVector<DirectoryEntry> &entries);
+    void handleRecentFailed(BackendRequestId requestId, const QString &message);
+    void handleRecentProjectionChanged();
     void handleBackendFailure(const BackendError &error);
     void handleDirectoryChanged(const QString &path);
 
@@ -116,6 +121,7 @@ private:
     {
         List,
         Search,
+        Recent,
     };
 
     struct PendingRequest
