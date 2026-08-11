@@ -9,6 +9,26 @@
 
 namespace Astrea::Explorer::Native::Backend {
 
+namespace {
+
+void writeCancellation(QProcess *worker, BackendRequestId requestId)
+{
+    if (worker == nullptr || worker->state() != QProcess::Running) {
+        return;
+    }
+    const QJsonObject request {
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("id"), QStringLiteral("cancel-%1").arg(requestId)},
+        {QStringLiteral("arguments"), QJsonArray {
+            QStringLiteral("cancel"),
+            QString::number(requestId),
+        }},
+    };
+    worker->write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
+}
+
+} // namespace
+
 PersistentWorkerTransport::PersistentWorkerTransport(
     const PersistentWorkerTransportOptions &options,
     QObject *parent)
@@ -78,6 +98,7 @@ void PersistentWorkerTransport::cancel(BackendRequestId requestId)
     error.code = QStringLiteral("cancelled");
     error.message = QStringLiteral("request cancelled");
     error.requestId = requestId;
+    writeCancellation(m_worker, requestId);
     emitFailed(requestId, error);
     if (it->timeout != nullptr) {
         it->timeout->deleteLater();
@@ -191,6 +212,7 @@ void PersistentWorkerTransport::handleTimeout(BackendRequestId requestId)
     error.code = QStringLiteral("timeout");
     error.message = QStringLiteral("persistent backend request timed out");
     error.requestId = requestId;
+    writeCancellation(m_worker, requestId);
     emitFailed(requestId, error);
     it->timeout->deleteLater();
     m_pending.erase(it);
