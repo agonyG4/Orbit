@@ -20,7 +20,7 @@ normal native runtime uses one persistent backend worker.
 | System launcher | `astrea-explorer` with no checkout path |
 | Portal launcher | `astrea-explorer --portal`; no `qs` |
 | Static source gate | PASS (`scripts/verify_native_migration_gate.py`) |
-| Persistent worker smoke | PASS: JSONL directory listing completed |
+| Persistent worker smoke | PASS: JSONL listing and child cancellation completed |
 | Installed normal startup smoke | PASS with `QML2_IMPORT_PATH` unset and no Quickshell plugin |
 | Installed portal startup smoke | PASS: `astrea-explorer --portal --self-test` |
 
