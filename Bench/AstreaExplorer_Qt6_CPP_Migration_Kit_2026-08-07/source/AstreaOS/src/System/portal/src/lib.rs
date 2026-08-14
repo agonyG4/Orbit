@@ -1,16 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::fs;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::fs as async_fs;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+use tokio::sync::watch;
+use tokio::time::sleep;
 use zvariant::OwnedValue;
 
 pub const RESULT_PREFIX: &str = "__ASTREA_FILE_DIALOG__";
+const MAX_DIALOG_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_RESULT_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortalError {
@@ -285,19 +288,21 @@ pub fn default_run_config() -> DialogRunConfig {
     }
 }
 
-pub fn run_dialog(
+pub async fn run_dialog(
     mode: DialogMode,
     title: &str,
     options: &PortalOptions,
+    cancellation: watch::Receiver<bool>,
 ) -> Result<PortalSelection, PortalError> {
-    run_dialog_with_config(mode, title, options, &default_run_config())
+    run_dialog_with_config(mode, title, options, &default_run_config(), cancellation).await
 }
 
-pub fn run_dialog_with_config(
+pub async fn run_dialog_with_config(
     mode: DialogMode,
     title: &str,
     options: &PortalOptions,
     config: &DialogRunConfig,
+    mut cancellation: watch::Receiver<bool>,
 ) -> Result<PortalSelection, PortalError> {
     let result_file = tempfile::Builder::new()
         .prefix("astrea_file_dialog_result_")
@@ -310,6 +315,7 @@ pub fn run_dialog_with_config(
         .map_err(|err| PortalError::new(format!("serialize dialog options: {err}")))?;
 
     let mut child = Command::new(&config.explorer_bin)
+        .kill_on_drop(true)
         .arg("--portal")
         .env("ASTREA_FILE_DIALOG_OPTIONS", &dialog_options_json)
         .env("ASTREA_FILE_DIALOG_RESULT_FILE", &result_path)
@@ -320,96 +326,115 @@ pub fn run_dialog_with_config(
         .spawn()
         .map_err(|err| PortalError::new(format!("start portal dialog: {err}")))?;
 
-    let (line_tx, line_rx) = mpsc::channel();
-    spawn_reader_thread(child.stdout.take(), line_tx.clone());
-    spawn_reader_thread(child.stderr.take(), line_tx);
-
-    let deadline = Instant::now() + config.timeout;
-    let mut output = String::new();
-    let mut result = None;
-    while Instant::now() < deadline {
-        if let Some(selection) = read_result_file(&result_path)? {
-            result = Some(selection);
-            break;
-        }
-
-        drain_output(&line_rx, &mut output);
-        if let Some(selection) = parse_result_from_text(&output)? {
-            result = Some(selection);
-            break;
-        }
-
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                result = final_child_result(&result_path, &line_rx, &mut output)?;
-                break;
-            }
-            Ok(None) => {}
-            Err(err) => return Err(PortalError::new(format!("poll portal dialog: {err}"))),
-        }
-
-        thread::sleep(Duration::from_millis(50));
+    if *cancellation.borrow() {
+        return Err(PortalError::new("dialog cancelled"));
     }
 
-    terminate_child(&mut child);
-    Ok(result.unwrap_or_default())
+    let stdout_reader = tokio::spawn(read_bounded_output(child.stdout.take(), "stdout"));
+    let stderr_reader = tokio::spawn(read_bounded_output(child.stderr.take(), "stderr"));
+    let mut wait_task = tokio::spawn(async move {
+        child
+            .wait()
+            .await
+            .map_err(|err| PortalError::new(format!("wait for portal dialog: {err}")))
+    });
+    let status = tokio::select! {
+        result = &mut wait_task => result
+            .map_err(|err| PortalError::new(format!("join dialog process waiter: {err}")))??,
+        _ = sleep(config.timeout) => {
+            wait_task.abort();
+            stdout_reader.abort();
+            stderr_reader.abort();
+            return Err(PortalError::new("dialog timed out"));
+        }
+        changed = cancellation.changed() => {
+            if changed.is_err() || *cancellation.borrow() {
+                wait_task.abort();
+                stdout_reader.abort();
+                stderr_reader.abort();
+                return Err(PortalError::new("dialog cancelled"));
+            }
+            return Err(PortalError::new("dialog cancellation state failed"));
+        }
+    };
+
+    let stdout = stdout_reader
+        .await
+        .map_err(|err| PortalError::new(format!("join dialog stdout reader: {err}")))??;
+    let stderr = stderr_reader
+        .await
+        .map_err(|err| PortalError::new(format!("join dialog stderr reader: {err}")))??;
+
+    if !status.success() {
+        return Err(PortalError::new(format!(
+            "portal dialog exited with status {status}"
+        )));
+    }
+
+    if let Some(selection) = read_result_file(&result_path).await? {
+        return Ok(selection);
+    }
+    let output = format!("{stdout}\n{stderr}");
+    Ok(parse_result_from_text(&output)?.unwrap_or_default())
 }
 
-fn spawn_reader_thread<R>(reader: Option<R>, sender: mpsc::Sender<String>)
+async fn read_bounded_output<R>(
+    reader: Option<R>,
+    stream_name: &'static str,
+) -> Result<String, PortalError>
 where
-    R: Read + Send + 'static,
+    R: AsyncRead + Send + Unpin + 'static,
 {
-    if let Some(reader) = reader {
-        thread::spawn(move || {
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                let _ = sender.send(format!("{line}\n"));
-            }
-        });
-    }
-}
-
-fn drain_output(receiver: &mpsc::Receiver<String>, output: &mut String) {
-    while let Ok(line) = receiver.try_recv() {
-        output.push_str(&line);
-    }
-}
-
-fn final_child_result(
-    result_path: &Path,
-    receiver: &mpsc::Receiver<String>,
-    output: &mut String,
-) -> Result<Option<PortalSelection>, PortalError> {
-    for _ in 0..40 {
-        if let Some(selection) = read_result_file(result_path)? {
-            return Ok(Some(selection));
+    let Some(mut reader) = reader else {
+        return Ok(String::new());
+    };
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let mut total_bytes = 0_usize;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|err| PortalError::new(format!("read dialog {stream_name}: {err}")))?;
+        if count == 0 {
+            break;
         }
-        drain_output(receiver, output);
-        if let Some(selection) = parse_result_from_text(output)? {
-            return Ok(Some(selection));
+        total_bytes = total_bytes.saturating_add(count);
+        if output.len() < MAX_DIALOG_OUTPUT_BYTES {
+            let remaining = MAX_DIALOG_OUTPUT_BYTES - output.len();
+            output.extend_from_slice(&buffer[..count.min(remaining)]);
         }
-        thread::sleep(Duration::from_millis(50));
     }
-    Ok(None)
+    if total_bytes > MAX_DIALOG_OUTPUT_BYTES {
+        return Err(PortalError::new(format!(
+            "dialog {stream_name} output exceeded limit"
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
-fn read_result_file(path: &Path) -> Result<Option<PortalSelection>, PortalError> {
-    let metadata = fs::metadata(path)
-        .map_err(|err| PortalError::new(format!("read dialog result metadata: {err}")))?;
+async fn read_result_file(path: &Path) -> Result<Option<PortalSelection>, PortalError> {
+    let metadata = match async_fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(PortalError::new(format!(
+                "read dialog result metadata: {err}"
+            )));
+        }
+    };
     if metadata.len() == 0 {
         return Ok(None);
     }
-    let text = fs::read_to_string(path)
+    if metadata.len() > MAX_RESULT_FILE_BYTES {
+        return Err(PortalError::new("dialog result file exceeded limit"));
+    }
+    let text = async_fs::read_to_string(path)
+        .await
         .map_err(|err| PortalError::new(format!("read dialog result file: {err}")))?;
     let selection = serde_json::from_str(&text)
         .map_err(|err| PortalError::new(format!("parse dialog result file: {err}")))?;
     Ok(Some(selection))
-}
-
-fn terminate_child(child: &mut Child) {
-    if matches!(child.try_wait(), Ok(None)) {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
 }
 
 pub fn dialog_options_from_request(
@@ -619,8 +644,8 @@ mod tests {
         assert_eq!(selection.file_path.as_deref(), Some("/tmp/a.txt"));
     }
 
-    #[test]
-    fn run_dialog_reads_json_result_file_written_by_child() {
+    #[tokio::test]
+    async fn run_dialog_reads_json_result_file_written_by_child() {
         let temp = tempfile::tempdir().unwrap();
         let fake_explorer = temp.path().join("fake-explorer");
         fs::write(
@@ -636,10 +661,51 @@ mod tests {
             explorer_bin: fake_explorer,
             timeout: Duration::from_secs(2),
         };
-        let selection =
-            run_dialog_with_config(DialogMode::OpenFile, "Open", &HashMap::new(), &config).unwrap();
+        let selection = run_dialog_with_config(
+            DialogMode::OpenFile,
+            "Open",
+            &HashMap::new(),
+            &config,
+            tokio::sync::watch::channel(false).1,
+        )
+        .await
+        .unwrap();
 
         assert!(selection.accepted);
         assert_eq!(selection.file_path.as_deref(), Some("/tmp/from-child.txt"));
+    }
+
+    #[tokio::test]
+    async fn run_dialog_cancellation_stops_child_without_blocking() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_explorer = temp.path().join("fake-explorer");
+        fs::write(&fake_explorer, "#!/usr/bin/env sh\nsleep 10\n").unwrap();
+        let mut permissions = fs::metadata(&fake_explorer).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_explorer, permissions).unwrap();
+
+        let config = DialogRunConfig {
+            explorer_bin: fake_explorer,
+            timeout: Duration::from_secs(5),
+        };
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            run_dialog_with_config(
+                DialogMode::OpenFile,
+                "Open",
+                &HashMap::new(),
+                &config,
+                cancellation,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.send(true).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
     }
 }

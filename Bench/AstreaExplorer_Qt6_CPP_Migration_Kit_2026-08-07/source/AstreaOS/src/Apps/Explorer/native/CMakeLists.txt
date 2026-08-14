@@ -233,6 +233,22 @@ target_link_libraries(tst_backend_client PRIVATE
 
 add_test(NAME backend_client COMMAND tst_backend_client)
 
+qt_add_executable(tst_persistent_worker_transport
+    tests/tst_persistent_worker_transport.cpp
+)
+
+target_include_directories(tst_persistent_worker_transport PRIVATE
+    src
+)
+
+target_link_libraries(tst_persistent_worker_transport PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_backend
+)
+
+add_test(NAME persistent_worker_transport COMMAND tst_persistent_worker_transport)
+
 qt_add_executable(tst_directory_model
     tests/tst_directory_model.cpp
 )
