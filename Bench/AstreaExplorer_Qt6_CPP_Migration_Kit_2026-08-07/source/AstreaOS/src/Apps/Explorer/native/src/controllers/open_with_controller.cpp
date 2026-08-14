@@ -42,7 +42,7 @@ OpenWithApplication readDesktopEntry(
                                       .toString()
                                       .split(QLatin1Char(';'), Qt::SkipEmptyParts);
     const OpenWithApplication application {
-        id.isEmpty() ? info.fileName() : id,
+        id,
         settings.value(QStringLiteral("Name"), id).toString(),
         settings.value(QStringLiteral("Icon")).toString(),
         info.absoluteFilePath(),

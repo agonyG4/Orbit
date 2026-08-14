@@ -2,7 +2,6 @@
 
 #include <QDir>
 #include <QFileInfo>
-#include <QStandardPaths>
 
 namespace Astrea::Explorer::Native::Services {
 
@@ -33,7 +32,7 @@ QString DesktopFileId::fromPath(
         return normalize(relative);
     }
 
-    return normalize(fileInfo.fileName());
+    return {};
 }
 
 QString DesktopFileId::normalize(const QString &desktopId)
@@ -49,20 +48,18 @@ QString DesktopFileId::normalize(const QString &desktopId)
     if (!normalized.endsWith(QStringLiteral(".desktop"))) {
         normalized += QStringLiteral(".desktop");
     }
+    normalized.replace(QLatin1Char('/'), QLatin1Char('-'));
     return normalized;
 }
 
 QStringList DesktopFileId::applicationRoots()
 {
-    QStringList roots;
-    for (const QString &root : QStandardPaths::standardLocations(
-             QStandardPaths::ApplicationsLocation)) {
-        const QString normalized = QDir::cleanPath(root);
-        if (!normalized.isEmpty() && !roots.contains(normalized)) {
-            roots.append(normalized);
-        }
-    }
-    return roots;
+    return applicationRoots(XdgPaths::fromEnvironment());
+}
+
+QStringList DesktopFileId::applicationRoots(const XdgPaths &paths)
+{
+    return paths.applicationRoots();
 }
 
 } // namespace Astrea::Explorer::Native::Services

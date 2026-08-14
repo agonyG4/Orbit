@@ -2,13 +2,13 @@
 """Deterministic production-source gate for the native Explorer migration."""
 
 from pathlib import Path
-import os
 import sys
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ROOTS = [
     KIT_ROOT / "source/AstreaOS/src/Apps/Explorer",
+    KIT_ROOT / "source/AstreaOS/src/System/launch",
     KIT_ROOT / "source/AstreaOS/src/System/portal",
     KIT_ROOT / "source/AstreaOS/config/hypr/system/programs.conf",
 ]
@@ -29,7 +29,9 @@ FORBIDDEN = (
 )
 
 REQUIRED_FILES = (
-    KIT_ROOT / "source/AstreaOS/src/bin/astrea-launch",
+    KIT_ROOT / "source/AstreaOS/src/System/launch/Cargo.toml",
+    KIT_ROOT / "source/AstreaOS/src/System/launch/src/main.rs",
+    KIT_ROOT / "source/AstreaOS/src/System/launch/src/lib.rs",
     KIT_ROOT / "source/AstreaOS/src/Apps/Explorer/native/src/services/mime_apps_service.cpp",
     KIT_ROOT / "source/AstreaOS/src/Apps/Explorer/native/src/services/desktop_file_id.cpp",
 )
@@ -39,7 +41,8 @@ REQUIRED_MARKERS = {
         "astrea_explorer_rust_components",
         "ASTREA_EXPLORER_BACKEND_ARTIFACT",
         "ASTREA_EXPLORER_PORTAL_ARTIFACT",
-        "ASTREA_EXPLORER_LAUNCH_PROGRAM",
+        "ASTREA_EXPLORER_LAUNCH_ROOT",
+        "ASTREA_EXPLORER_LAUNCH_ARTIFACT",
     ),
     KIT_ROOT / "source/AstreaOS/src/Apps/Explorer/native/src/runtime/explorer_runtime_paths.h": (
         "resourceRootValid",
@@ -51,6 +54,11 @@ REQUIRED_MARKERS = {
         "QSaveFile",
         "[Default Applications]",
         "[Added Associations]",
+        "[Removed Associations]",
+        "mimeAppsSearchPaths",
+    ),
+    KIT_ROOT / "source/AstreaOS/src/Apps/Explorer/native/src/services/desktop_file_id.cpp": (
+        "XdgPaths",
     ),
     KIT_ROOT / "source/AstreaOS/src/System/portal/src/main.rs": (
         "org.freedesktop.impl.portal.Request",
@@ -77,9 +85,17 @@ def main() -> int:
     for path in REQUIRED_FILES:
         if not path.is_file():
             violations.append(f"missing required production file: {path}")
-    launch_provider = KIT_ROOT / "source/AstreaOS/src/bin/astrea-launch"
-    if launch_provider.is_file() and not os.access(launch_provider, os.X_OK):
-        violations.append(f"required launch provider is not executable: {launch_provider}")
+    legacy_launch_provider = KIT_ROOT / "source/AstreaOS/src/bin/astrea-launch"
+    if legacy_launch_provider.is_file():
+        try:
+            header = legacy_launch_provider.read_bytes()[:4]
+        except OSError as error:
+            violations.append(f"could not inspect legacy launch provider: {error}")
+        else:
+            if header == b"\x7fELF":
+                violations.append(
+                    "tracked precompiled src/bin/astrea-launch is forbidden; use System/launch source"
+                )
 
     for path, markers in REQUIRED_MARKERS.items():
         try:

@@ -114,6 +114,7 @@ private slots:
     void explicitEmptyRootIsRejectedWithoutFallback();
     void invalidExplicitRootIsRejectedWithoutFallback();
     void invalidInstalledRootFallsThroughToDevelopment();
+    void installedPrefixRootBeatsUserAndDevelopment();
     void validInstalledRootBeatsDevelopment();
     void developmentRootIsFoundFromExecutableAncestors();
     void optionalRuntimePathsStayUnderResolvedRoot();
@@ -196,6 +197,28 @@ void RuntimePathsTest::invalidInstalledRootFallsThroughToDevelopment()
 
     QVERIFY(result.valid);
     QCOMPARE(result.root, QDir::cleanPath(developmentRoot));
+}
+
+void RuntimePathsTest::installedPrefixRootBeatsUserAndDevelopment()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString prefix = fixture.filePath(QStringLiteral("prefix"));
+    const QString prefixRoot = QDir(prefix).filePath(QStringLiteral("share/Astrea"));
+    const QString userRoot = fixture.filePath(QStringLiteral("home/.local/share/Astrea"));
+    const QString developmentRoot = fixture.filePath(QStringLiteral("checkout/runtime"));
+    QVERIFY(QDir().mkpath(QDir(prefix).filePath(QStringLiteral("bin"))));
+    createRuntimeRoot(prefixRoot);
+    createRuntimeRoot(userRoot);
+    createRuntimeRoot(developmentRoot);
+
+    const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
+        QDir(prefix).filePath(QStringLiteral("bin")),
+        fixture.filePath(QStringLiteral("home")),
+        environmentWithoutRoot());
+
+    QVERIFY(result.valid);
+    QCOMPARE(result.root, QDir::cleanPath(prefixRoot));
 }
 
 void RuntimePathsTest::validInstalledRootBeatsDevelopment()

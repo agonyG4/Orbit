@@ -54,7 +54,7 @@ void OpenWithControllerTest::resolvesDesktopEntryForRecentHistory()
 
     const OpenWithApplication application =
         OpenWithController::resolveDesktopEntry(desktopFile);
-    QCOMPARE(application.id, QStringLiteral("example.desktop"));
+    QVERIFY(application.id.isEmpty());
     QCOMPARE(application.name, QStringLiteral("Example Application"));
     QCOMPARE(application.icon, QStringLiteral("example-icon"));
     QCOMPARE(application.desktopFile, QFileInfo(desktopFile).absoluteFilePath());
@@ -116,7 +116,7 @@ void OpenWithControllerTest::derivesNestedIdsAndPreservesXdgPrecedence()
         OpenWithController::buildDesktopCatalog({userRoot, systemRoot});
 
     QCOMPARE(catalog.value(QStringLiteral("foo.desktop")).name, QStringLiteral("User"));
-    QCOMPARE(catalog.value(QStringLiteral("foo/bar.desktop")).name, QStringLiteral("Nested"));
+    QCOMPARE(catalog.value(QStringLiteral("foo-bar.desktop")).name, QStringLiteral("Nested"));
     QCOMPARE(catalog.size(), 2);
 }
 

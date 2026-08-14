@@ -14,6 +14,7 @@ use zvariant::OwnedValue;
 pub const RESULT_PREFIX: &str = "__ASTREA_FILE_DIALOG__";
 const MAX_DIALOG_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_RESULT_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_DIALOG_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortalError {
@@ -21,7 +22,7 @@ pub struct PortalError {
 }
 
 impl PortalError {
-    fn new(message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -327,31 +328,34 @@ pub async fn run_dialog_with_config(
         .map_err(|err| PortalError::new(format!("start portal dialog: {err}")))?;
 
     if *cancellation.borrow() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
         return Err(PortalError::new("dialog cancelled"));
     }
 
     let stdout_reader = tokio::spawn(read_bounded_output(child.stdout.take(), "stdout"));
     let stderr_reader = tokio::spawn(read_bounded_output(child.stderr.take(), "stderr"));
-    let mut wait_task = tokio::spawn(async move {
-        child
-            .wait()
-            .await
-            .map_err(|err| PortalError::new(format!("wait for portal dialog: {err}")))
-    });
+    let timeout = config.timeout.min(MAX_DIALOG_TIMEOUT);
     let status = tokio::select! {
-        result = &mut wait_task => result
-            .map_err(|err| PortalError::new(format!("join dialog process waiter: {err}")))??,
-        _ = sleep(config.timeout) => {
-            wait_task.abort();
+        result = child.wait() => result
+            .map_err(|err| PortalError::new(format!("wait for portal dialog: {err}")))?,
+        _ = sleep(timeout) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             stdout_reader.abort();
             stderr_reader.abort();
+            let _ = stdout_reader.await;
+            let _ = stderr_reader.await;
             return Err(PortalError::new("dialog timed out"));
         }
         changed = cancellation.changed() => {
             if changed.is_err() || *cancellation.borrow() {
-                wait_task.abort();
+                let _ = child.kill().await;
+                let _ = child.wait().await;
                 stdout_reader.abort();
                 stderr_reader.abort();
+                let _ = stdout_reader.await;
+                let _ = stderr_reader.await;
                 return Err(PortalError::new("dialog cancelled"));
             }
             return Err(PortalError::new("dialog cancellation state failed"));
