@@ -9,11 +9,15 @@
 
 #include <algorithm>
 
+#include "services/desktop_file_id.h"
+
 namespace Astrea::Explorer::Native::Backend {
 
 namespace {
 
-OpenWithApplication readDesktopEntry(const QString &desktopFile)
+OpenWithApplication readDesktopEntry(
+    const QString &desktopFile,
+    const QStringList &applicationRoots = {})
 {
     const QFileInfo info(desktopFile);
     if (!info.isFile()) {
@@ -31,12 +35,14 @@ OpenWithApplication readDesktopEntry(const QString &desktopFile)
         return {};
     }
 
-    const QString id = info.completeBaseName();
+    const QString id = Services::DesktopFileId::fromPath(
+        info.absoluteFilePath(),
+        applicationRoots);
     const QStringList mimeTypes = settings.value(QStringLiteral("MimeType"))
                                       .toString()
                                       .split(QLatin1Char(';'), Qt::SkipEmptyParts);
     const OpenWithApplication application {
-        id,
+        id.isEmpty() ? info.fileName() : id,
         settings.value(QStringLiteral("Name"), id).toString(),
         settings.value(QStringLiteral("Icon")).toString(),
         info.absoluteFilePath(),
@@ -54,6 +60,8 @@ OpenWithController::OpenWithController(
     QObject *parent)
     : QObject(parent)
     , m_launchService(launchService)
+    , m_ownedMimeAppsService(std::make_unique<Services::MimeAppsService>())
+    , m_mimeAppsService(m_ownedMimeAppsService.get())
 {
 }
 
@@ -65,11 +73,20 @@ OpenWithController::~OpenWithController()
     }
 }
 
+void OpenWithController::setMimeAppsService(Services::MimeAppsService *mimeAppsService)
+{
+    if (mimeAppsService == nullptr || mimeAppsService == m_mimeAppsService) {
+        return;
+    }
+    m_ownedMimeAppsService.reset();
+    m_mimeAppsService = mimeAppsService;
+}
+
 OpenWithController::DesktopCatalog OpenWithController::buildDesktopCatalog(
     const QStringList &roots)
 {
     const QStringList applicationRoots = roots.isEmpty()
-        ? QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation)
+        ? Services::DesktopFileId::applicationRoots()
         : roots;
     DesktopCatalog catalog;
     for (const QString &root : applicationRoots) {
@@ -79,8 +96,11 @@ OpenWithController::DesktopCatalog OpenWithController::buildDesktopCatalog(
         QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
                               QDirIterator::Subdirectories);
         while (iterator.hasNext()) {
-            const OpenWithApplication application = readDesktopEntry(iterator.next());
-            if (!application.desktopFile.isEmpty()) {
+            const OpenWithApplication application = readDesktopEntry(
+                iterator.next(),
+                {root});
+            if (!application.desktopFile.isEmpty()
+                && !catalog.contains(application.id)) {
                 catalog.insert(application.id, application);
             }
         }
@@ -140,37 +160,39 @@ OpenWithApplication OpenWithController::resolveDesktopEntry(
 {
     const QFileInfo candidate(desktopId);
     if (candidate.isFile()) {
-        return readDesktopEntry(candidate.absoluteFilePath());
+        return readDesktopEntry(
+            candidate.absoluteFilePath(),
+            Services::DesktopFileId::applicationRoots());
     }
 
     QString fileName = desktopId.trimmed();
     if (fileName.isEmpty()) {
         return {};
     }
-    if (!fileName.endsWith(QStringLiteral(".desktop"))) {
-        fileName += QStringLiteral(".desktop");
-    }
+    fileName = Services::DesktopFileId::normalize(fileName);
 
     if (catalog != nullptr) {
-        const QString id = QFileInfo(fileName).completeBaseName();
-        const auto found = catalog->constFind(id);
+        const auto found = catalog->constFind(fileName);
         if (found != catalog->constEnd()) {
             return found.value();
         }
     }
 
-    const QStringList applicationRoots = QStandardPaths::standardLocations(
-        QStandardPaths::ApplicationsLocation);
+    const QStringList applicationRoots = Services::DesktopFileId::applicationRoots();
     for (const QString &root : applicationRoots) {
         if (root.isEmpty()) {
             continue;
+        }
+        const QString directPath = QDir(root).filePath(fileName);
+        if (QFileInfo(directPath).isFile()) {
+            return readDesktopEntry(directPath, {root});
         }
         QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
                               QDirIterator::Subdirectories);
         while (iterator.hasNext()) {
             const QString desktopFile = iterator.next();
-            if (QFileInfo(desktopFile).fileName() == fileName) {
-                return readDesktopEntry(desktopFile);
+            if (Services::DesktopFileId::fromPath(desktopFile, {root}) == fileName) {
+                return readDesktopEntry(desktopFile, {root});
             }
         }
     }
@@ -213,18 +235,10 @@ void OpenWithController::discover(const QString &path)
         m_catalogReady = true;
         QVector<OpenWithApplication> discovered;
         discovered.reserve(m_catalog.size());
-        const QString defaultId = [&mime]() {
-            const QString configPath = QStandardPaths::writableLocation(
-                QStandardPaths::ConfigLocation)
-                + QStringLiteral("/mimeapps.list");
-            QSettings settings(configPath, QSettings::IniFormat);
-            settings.beginGroup(QStringLiteral("Default Applications"));
-            const QString value = settings.value(mime).toString();
-            settings.endGroup();
-            return value.split(QLatin1Char(';'), Qt::SkipEmptyParts).value(0)
-                .trimmed()
-                .remove(QStringLiteral(".desktop"));
-        }();
+        const QString defaultId = m_mimeAppsService == nullptr
+            ? QString()
+            : Services::DesktopFileId::normalize(
+                  m_mimeAppsService->defaultsForMime(mime).value(0));
 
         for (const OpenWithApplication &candidate : m_catalog) {
             if (!mimeMatches(candidate.mimeTypes, mime)) {

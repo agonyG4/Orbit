@@ -125,7 +125,8 @@ public:
         Services::FilesystemService *filesystemService = nullptr,
         OpenWithController *openWith = nullptr,
         Services::LaunchService *launchService = nullptr,
-        Services::WallpaperService *wallpaperService = nullptr);
+        Services::WallpaperService *wallpaperService = nullptr,
+        Services::MimeAppsService *mimeAppsService = nullptr);
 
     QAbstractItemModel *fileModel() const;
     QString homePath() const;
@@ -446,6 +447,7 @@ private:
     OpenWithController *m_openWith = nullptr;
     Services::LaunchService *m_launchService = nullptr;
     Services::WallpaperService *m_wallpaperService = nullptr;
+    Services::MimeAppsService *m_mimeAppsService = nullptr;
     QString m_openWithPath;
     Runtime::ExplorerRuntimePaths m_runtimePaths;
     Services::ExplorerSettings m_settings;

@@ -89,6 +89,10 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
         QFile file(runtime.filePath(relativePath));
         QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(relativePath));
         file.write("fixture");
+        if (relativePath != QStringLiteral("System/scripts/astrea-windows-run")) {
+            QVERIFY(file.setPermissions(
+                QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        }
     }
 }
 
@@ -113,6 +117,8 @@ private slots:
     void validInstalledRootBeatsDevelopment();
     void developmentRootIsFoundFromExecutableAncestors();
     void optionalRuntimePathsStayUnderResolvedRoot();
+    void resourceAndExecutableCapabilitiesAreSeparate();
+    void missingBackendDoesNotReportNormalRuntimeReady();
 };
 
 void RuntimePathsTest::explicitRootWins()
@@ -246,8 +252,55 @@ void RuntimePathsTest::optionalRuntimePathsStayUnderResolvedRoot()
     QVERIFY(result.valid);
     QVERIFY(result.backendProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
     QVERIFY(result.launcherProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
-    QVERIFY(result.windowsRunnerProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
+    QVERIFY(result.windowsRunnerProgram.isEmpty());
+    QVERIFY(!result.windowsRunnerAvailable);
     QVERIFY(!result.importPaths.isEmpty());
+}
+
+void RuntimePathsTest::resourceAndExecutableCapabilitiesAreSeparate()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString root = fixture.filePath(QStringLiteral("runtime"));
+    createRuntimeRoot(root);
+    QVERIFY(QFile::remove(QDir(root).filePath(QStringLiteral("System/scripts/astrea-windows-run"))));
+
+    QProcessEnvironment environment = environmentWithoutRoot();
+    environment.insert(QStringLiteral("ASTREA_ROOT"), root);
+    const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
+        fixture.filePath(QStringLiteral("unused")),
+        fixture.filePath(QStringLiteral("unused-home")),
+        environment);
+
+    QVERIFY(result.resourceRootValid);
+    QVERIFY(result.backendAvailable);
+    QVERIFY(result.launchAvailable);
+    QVERIFY(!result.windowsRunnerAvailable);
+    QVERIFY(result.normalRuntimeReady);
+    QVERIFY(result.portalRuntimeReady);
+}
+
+void RuntimePathsTest::missingBackendDoesNotReportNormalRuntimeReady()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString root = fixture.filePath(QStringLiteral("runtime"));
+    createRuntimeRoot(root);
+    QVERIFY(QFile::remove(QDir(root).filePath(QStringLiteral("Core/bridge/apps/explorer_backend"))));
+
+    QProcessEnvironment environment = environmentWithoutRoot();
+    environment.insert(QStringLiteral("ASTREA_ROOT"), root);
+    const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
+        fixture.filePath(QStringLiteral("unused")),
+        fixture.filePath(QStringLiteral("unused-home")),
+        environment);
+
+    QVERIFY(result.resourceRootValid);
+    QVERIFY(result.valid);
+    QVERIFY(!result.backendAvailable);
+    QVERIFY(!result.normalRuntimeReady);
+    QVERIFY(!result.portalRuntimeReady);
+    QVERIFY(result.diagnostics.join(QLatin1Char('\n')).contains(QStringLiteral("backend")));
 }
 
 QTEST_APPLESS_MAIN(RuntimePathsTest)

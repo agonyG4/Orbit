@@ -16,6 +16,7 @@ private slots:
     void exposesTypedApplicationCatalogAndSelection();
     void resolvesDesktopEntryForRecentHistory();
     void resolvesManyDesktopEntriesThroughOneIndexedCatalog();
+    void derivesNestedIdsAndPreservesXdgPrecedence();
 };
 
 void OpenWithControllerTest::exposesTypedApplicationCatalogAndSelection()
@@ -53,7 +54,7 @@ void OpenWithControllerTest::resolvesDesktopEntryForRecentHistory()
 
     const OpenWithApplication application =
         OpenWithController::resolveDesktopEntry(desktopFile);
-    QCOMPARE(application.id, QStringLiteral("example"));
+    QCOMPARE(application.id, QStringLiteral("example.desktop"));
     QCOMPARE(application.name, QStringLiteral("Example Application"));
     QCOMPARE(application.icon, QStringLiteral("example-icon"));
     QCOMPARE(application.desktopFile, QFileInfo(desktopFile).absoluteFilePath());
@@ -87,6 +88,36 @@ void OpenWithControllerTest::resolvesManyDesktopEntriesThroughOneIndexedCatalog(
         QCOMPARE(application.name, QStringLiteral("Example %1").arg(index));
         QCOMPARE(application.icon, QStringLiteral("example-%1").arg(index));
     }
+}
+
+void OpenWithControllerTest::derivesNestedIdsAndPreservesXdgPrecedence()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString userRoot = QDir(fixture.path()).filePath(QStringLiteral("user/applications"));
+    const QString systemRoot = QDir(fixture.path()).filePath(QStringLiteral("system/applications"));
+    QVERIFY(QDir().mkpath(QDir(userRoot).filePath(QStringLiteral("foo"))));
+    QVERIFY(QDir().mkpath(systemRoot));
+
+    auto writeDesktop = [](const QString &path, const QString &name) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(QStringLiteral(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=%1\n"
+            "Exec=example\n").arg(name).toUtf8()) > 0);
+    };
+    writeDesktop(QDir(userRoot).filePath(QStringLiteral("foo.desktop")), QStringLiteral("User"));
+    writeDesktop(QDir(systemRoot).filePath(QStringLiteral("foo.desktop")), QStringLiteral("System"));
+    writeDesktop(QDir(userRoot).filePath(QStringLiteral("foo/bar.desktop")), QStringLiteral("Nested"));
+
+    const OpenWithController::DesktopCatalog catalog =
+        OpenWithController::buildDesktopCatalog({userRoot, systemRoot});
+
+    QCOMPARE(catalog.value(QStringLiteral("foo.desktop")).name, QStringLiteral("User"));
+    QCOMPARE(catalog.value(QStringLiteral("foo/bar.desktop")).name, QStringLiteral("Nested"));
+    QCOMPARE(catalog.size(), 2);
 }
 
 QTEST_GUILESS_MAIN(OpenWithControllerTest)
