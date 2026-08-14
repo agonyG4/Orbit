@@ -31,11 +31,14 @@ public:
 private:
     struct PendingRequest
     {
+        QStringList arguments;
         QTimer *timeout = nullptr;
     };
 
     QString resolveBackendProgram() const;
     bool ensureWorker();
+    void handleWorkerStarted();
+    void sendRequest(BackendRequestId requestId);
     void handleReadyRead();
     void handleWorkerError(QProcess::ProcessError error);
     void handleWorkerFinished(int exitCode, QProcess::ExitStatus status);
@@ -46,6 +49,7 @@ private:
     QProcess *m_worker = nullptr;
     QByteArray m_readBuffer;
     QHash<BackendRequestId, PendingRequest> m_pending;
+    QVector<BackendRequestId> m_waitingRequests;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

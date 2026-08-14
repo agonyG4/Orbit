@@ -7,6 +7,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <utility>
+
 namespace Astrea::Explorer::Native::Backend {
 
 namespace {
@@ -37,6 +39,7 @@ PersistentWorkerTransport::PersistentWorkerTransport(
     , m_worker(new QProcess(this))
 {
     m_worker->setProcessChannelMode(QProcess::SeparateChannels);
+    connect(m_worker, &QProcess::started, this, &PersistentWorkerTransport::handleWorkerStarted);
     connect(m_worker, &QProcess::readyReadStandardOutput, this, &PersistentWorkerTransport::handleReadyRead);
     connect(m_worker, &QProcess::errorOccurred, this, &PersistentWorkerTransport::handleWorkerError);
     connect(m_worker, &QProcess::finished, this, &PersistentWorkerTransport::handleWorkerFinished);
@@ -57,27 +60,8 @@ PersistentWorkerTransport::~PersistentWorkerTransport()
 BackendRequestId PersistentWorkerTransport::start(const QStringList &arguments)
 {
     const BackendRequestId requestId = allocateRequestId();
-    if (!ensureWorker()) {
-        BackendTransportError error;
-        error.code = QStringLiteral("worker_start_failed");
-        error.message = QStringLiteral("could not start persistent Explorer backend worker");
-        error.requestId = requestId;
-        emitFailed(requestId, error);
-        return requestId;
-    }
-
-    QJsonArray encodedArguments;
-    for (const QString &argument : arguments) {
-        encodedArguments.append(argument);
-    }
-    const QJsonObject request {
-        {QStringLiteral("version"), 1},
-        {QStringLiteral("id"), QString::number(requestId)},
-        {QStringLiteral("arguments"), encodedArguments},
-    };
-    m_worker->write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
-
     PendingRequest pending;
+    pending.arguments = arguments;
     pending.timeout = new QTimer(this);
     pending.timeout->setSingleShot(true);
     connect(pending.timeout, &QTimer::timeout, this, [this, requestId]() {
@@ -85,6 +69,15 @@ BackendRequestId PersistentWorkerTransport::start(const QStringList &arguments)
     });
     m_pending.insert(requestId, pending);
     pending.timeout->start(m_options.requestTimeoutMs);
+
+    if (!ensureWorker()) {
+        handleWorkerError(QProcess::FailedToStart);
+        return requestId;
+    }
+    m_waitingRequests.append(requestId);
+    if (m_worker->state() == QProcess::Running) {
+        handleWorkerStarted();
+    }
     return requestId;
 }
 
@@ -100,6 +93,7 @@ void PersistentWorkerTransport::cancel(BackendRequestId requestId)
     error.requestId = requestId;
     writeCancellation(m_worker, requestId);
     emitFailed(requestId, error);
+    m_waitingRequests.removeAll(requestId);
     if (it->timeout != nullptr) {
         it->timeout->deleteLater();
     }
@@ -127,13 +121,39 @@ QString PersistentWorkerTransport::resolveBackendProgram() const
 
 bool PersistentWorkerTransport::ensureWorker()
 {
-    if (m_worker->state() == QProcess::Running) {
+    if (m_worker->state() != QProcess::NotRunning) {
         return true;
     }
     m_worker->setProgram(resolveBackendProgram());
     m_worker->setArguments({QStringLiteral("serve")});
     m_worker->start();
-    return m_worker->waitForStarted(2000);
+    return true;
+}
+
+void PersistentWorkerTransport::handleWorkerStarted()
+{
+    const QVector<BackendRequestId> waiting = std::exchange(m_waitingRequests, {});
+    for (const BackendRequestId requestId : waiting) {
+        sendRequest(requestId);
+    }
+}
+
+void PersistentWorkerTransport::sendRequest(BackendRequestId requestId)
+{
+    if (m_worker->state() != QProcess::Running || !m_pending.contains(requestId)) {
+        return;
+    }
+    const PendingRequest pending = m_pending.value(requestId);
+    QJsonArray encodedArguments;
+    for (const QString &argument : pending.arguments) {
+        encodedArguments.append(argument);
+    }
+    const QJsonObject request {
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("id"), QString::number(requestId)},
+        {QStringLiteral("arguments"), encodedArguments},
+    };
+    m_worker->write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
 }
 
 void PersistentWorkerTransport::handleReadyRead()
@@ -200,6 +220,7 @@ void PersistentWorkerTransport::handleWorkerFinished(int exitCode, QProcess::Exi
         failAll(QStringLiteral("worker_crashed"), QStringLiteral("backend worker exited unexpectedly"));
     }
     m_readBuffer.clear();
+    m_waitingRequests.clear();
 }
 
 void PersistentWorkerTransport::handleTimeout(BackendRequestId requestId)
@@ -214,6 +235,7 @@ void PersistentWorkerTransport::handleTimeout(BackendRequestId requestId)
     error.requestId = requestId;
     writeCancellation(m_worker, requestId);
     emitFailed(requestId, error);
+    m_waitingRequests.removeAll(requestId);
     it->timeout->deleteLater();
     m_pending.erase(it);
 }
@@ -234,6 +256,7 @@ void PersistentWorkerTransport::failAll(const QString &code, const QString &mess
         if (it->timeout != nullptr) {
             it->timeout->deleteLater();
         }
+        m_waitingRequests.removeAll(requestId);
         m_pending.erase(it);
     }
 }
