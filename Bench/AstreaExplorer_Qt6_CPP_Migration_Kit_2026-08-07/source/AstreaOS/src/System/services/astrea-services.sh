@@ -230,16 +230,20 @@ install_weather_binaries() {
 
 install_launch_binary() {
 	if [[ ! -f "${launch_backend_dir}/Cargo.toml" ]]; then
-		warn "launch backend manifest not found; leaving existing astrea-launch in place: ${launch_backend_dir}/Cargo.toml"
+		if [[ -x "${astrea_bin_dir}/astrea-launch" ]]; then
+			info "using installed source-built astrea-launch: ${astrea_bin_dir}/astrea-launch"
+			return 0
+		fi
+		warn "launch backend manifest and required astrea-launch are missing"
 		return 1
 	fi
 	if ! command -v cargo >/dev/null 2>&1; then
-		warn 'cargo not found; leaving existing astrea-launch binary in place'
+		warn 'cargo not found; cannot build required astrea-launch'
 		return 1
 	fi
 
 	if ! cargo build --manifest-path "${launch_backend_dir}/Cargo.toml" --release; then
-		warn 'failed to build astrea-launch; leaving existing binary in place'
+		warn 'failed to build required astrea-launch'
 		return 1
 	fi
 
@@ -299,7 +303,8 @@ install_services() {
 	fi
 	write_latency_unit
 	if ! install_launch_binary; then
-		warn 'astrea-launch was not rebuilt during install.'
+		warn 'required astrea-launch install/build failed; refusing to install services'
+		return 1
 	fi
 	write_launch_unit
 	if ! install_weather_binaries; then
@@ -429,8 +434,7 @@ verify_core_services() {
 			failed=1
 		fi
 	else
-		warn "missing launch backend manifest: ${launch_backend_dir}/Cargo.toml"
-		failed=1
+		warn "launch backend source is not installed; verifying the already-built runtime provider"
 	fi
 
 	if [[ ! -x "${astrea_bin_dir}/astrea-launch" ]]; then

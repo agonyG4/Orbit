@@ -13,6 +13,8 @@ qt_standard_project_setup(REQUIRES 6.11)
 
 enable_testing()
 
+find_program(ASTREA_DBUS_RUN_SESSION dbus-run-session REQUIRED)
+
 set(ASTREA_EXPLORER_BIN "${CMAKE_BINARY_DIR}/astrea-explorer")
 set(ASTREA_EXPLORER_RUNTIME_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src")
@@ -20,8 +22,8 @@ set(ASTREA_EXPLORER_RUST_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
 set(ASTREA_EXPLORER_PORTAL_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../System/portal")
-set(ASTREA_EXPLORER_LAUNCH_PROGRAM
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../bin/astrea-launch")
+set(ASTREA_EXPLORER_LAUNCH_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../System/launch")
 
 find_program(ASTREA_CARGO_EXECUTABLE cargo REQUIRED)
 
@@ -38,6 +40,8 @@ set(ASTREA_EXPLORER_BACKEND_ARTIFACT
     "${ASTREA_RUST_TARGET_DIR}/${ASTREA_RUST_PROFILE_DIR}/explorer_backend")
 set(ASTREA_EXPLORER_PORTAL_ARTIFACT
     "${ASTREA_RUST_TARGET_DIR}/${ASTREA_RUST_PROFILE_DIR}/astrea-filechooser-portal")
+set(ASTREA_EXPLORER_LAUNCH_ARTIFACT
+    "${ASTREA_RUST_TARGET_DIR}/${ASTREA_RUST_PROFILE_DIR}/astrea-launch")
 
 file(GLOB_RECURSE ASTREA_EXPLORER_RUST_SOURCES CONFIGURE_DEPENDS
     "${ASTREA_EXPLORER_RUST_ROOT}/*.rs"
@@ -47,6 +51,10 @@ file(GLOB_RECURSE ASTREA_EXPLORER_PORTAL_RUST_SOURCES CONFIGURE_DEPENDS
     "${ASTREA_EXPLORER_PORTAL_ROOT}/*.rs"
     "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.toml"
     "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.lock")
+file(GLOB_RECURSE ASTREA_EXPLORER_LAUNCH_RUST_SOURCES CONFIGURE_DEPENDS
+    "${ASTREA_EXPLORER_LAUNCH_ROOT}/*.rs"
+    "${ASTREA_EXPLORER_LAUNCH_ROOT}/Cargo.toml"
+    "${ASTREA_EXPLORER_LAUNCH_ROOT}/Cargo.lock")
 
 add_custom_command(
     OUTPUT "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
@@ -72,15 +80,23 @@ add_custom_command(
     COMMENT "Building the Astrea FileChooser portal"
     VERBATIM)
 
+add_custom_command(
+    OUTPUT "${ASTREA_EXPLORER_LAUNCH_ARTIFACT}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "CARGO_TARGET_DIR=${ASTREA_RUST_TARGET_DIR}"
+        "${ASTREA_CARGO_EXECUTABLE}" build
+        --manifest-path "${ASTREA_EXPLORER_LAUNCH_ROOT}/Cargo.toml"
+        ${ASTREA_RUST_PROFILE_ARG}
+    WORKING_DIRECTORY "${ASTREA_EXPLORER_LAUNCH_ROOT}"
+    DEPENDS ${ASTREA_EXPLORER_LAUNCH_RUST_SOURCES}
+    COMMENT "Building the Astrea launch provider"
+    VERBATIM)
+
 add_custom_target(astrea_explorer_rust_components
     DEPENDS
         "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
-        "${ASTREA_EXPLORER_PORTAL_ARTIFACT}")
-
-if (NOT EXISTS "${ASTREA_EXPLORER_LAUNCH_PROGRAM}")
-    message(FATAL_ERROR
-        "Required Astrea launch provider is missing: ${ASTREA_EXPLORER_LAUNCH_PROGRAM}")
-endif()
+        "${ASTREA_EXPLORER_PORTAL_ARTIFACT}"
+        "${ASTREA_EXPLORER_LAUNCH_ARTIFACT}")
 
 add_library(astrea_explorer_native_backend STATIC
     src/backend/backend_types.h
@@ -123,6 +139,7 @@ add_library(astrea_explorer_native_operations STATIC
     src/services/filesystem_service.cpp
     src/services/desktop_file_id.h
     src/services/desktop_file_id.cpp
+    src/services/xdg_paths.h
     src/services/mime_apps_service.h
     src/services/mime_apps_service.cpp
     src/services/wallpaper_service.h
@@ -381,6 +398,15 @@ target_link_libraries(tst_mime_apps_service PRIVATE
 
 add_test(NAME mime_apps_service COMMAND tst_mime_apps_service)
 
+add_test(
+    NAME portal_private_dbus
+    COMMAND "${ASTREA_DBUS_RUN_SESSION}" --
+        "${ASTREA_CARGO_EXECUTABLE}" test
+        --manifest-path "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.toml"
+        --offline tests::private_dbus_request_lifecycle -- --exact)
+set_tests_properties(portal_private_dbus PROPERTIES
+    WORKING_DIRECTORY "${ASTREA_EXPLORER_PORTAL_ROOT}")
+
 qt_add_executable(tst_portal_controller
     tests/tst_portal_controller.cpp
 )
@@ -633,7 +659,7 @@ install(PROGRAMS "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
 install(PROGRAMS "${ASTREA_EXPLORER_PORTAL_ARTIFACT}"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/bin"
     RENAME astrea-filechooser-portal)
-install(PROGRAMS "${ASTREA_EXPLORER_LAUNCH_PROGRAM}"
+install(PROGRAMS "${ASTREA_EXPLORER_LAUNCH_ARTIFACT}"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/bin"
     RENAME astrea-launch)
 install(PROGRAMS

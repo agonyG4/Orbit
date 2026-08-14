@@ -3,6 +3,8 @@ use astrea_filechooser_portal::{
     run_dialog_with_config, save_file_names_from_options, uris_for_save_files, uris_from_selection,
 };
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, watch};
 use zbus::connection;
@@ -25,6 +27,40 @@ struct PortalRequest {
     parent_window: String,
 }
 
+type DialogFuture<'a> = Pin<Box<dyn Future<Output = Result<PortalSelection, PortalError>> + Send + 'a>>;
+
+trait DialogRunner: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        mode: DialogMode,
+        title: &'a str,
+        options: &'a PortalOptions,
+        cancellation: watch::Receiver<bool>,
+    ) -> DialogFuture<'a>;
+}
+
+struct ProcessDialogRunner {
+    run_config: DialogRunConfig,
+}
+
+impl DialogRunner for ProcessDialogRunner {
+    fn run<'a>(
+        &'a self,
+        mode: DialogMode,
+        title: &'a str,
+        options: &'a PortalOptions,
+        cancellation: watch::Receiver<bool>,
+    ) -> DialogFuture<'a> {
+        Box::pin(run_dialog_with_config(
+            mode,
+            title,
+            options,
+            &self.run_config,
+            cancellation,
+        ))
+    }
+}
+
 #[zbus::interface(name = "org.freedesktop.impl.portal.Request")]
 impl PortalRequest {
     async fn close(&self) -> zbus::fdo::Result<()> {
@@ -35,14 +71,35 @@ impl PortalRequest {
 
 struct AstreaFileChooser {
     dialog_slots: Arc<Semaphore>,
-    run_config: DialogRunConfig,
+    dialog_runner: Arc<dyn DialogRunner>,
+    shutdown: watch::Receiver<bool>,
+    _shutdown_sender: Option<watch::Sender<bool>>,
 }
 
 impl AstreaFileChooser {
-    fn new() -> Self {
+    #[cfg(test)]
+    fn with_runner(dialog_runner: Arc<dyn DialogRunner>) -> Self {
+        let (shutdown_sender, shutdown) = watch::channel(false);
+        Self::with_runner_and_sender(dialog_runner, shutdown, Some(shutdown_sender))
+    }
+
+    fn with_runner_and_shutdown(
+        dialog_runner: Arc<dyn DialogRunner>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Self {
+        Self::with_runner_and_sender(dialog_runner, shutdown, None)
+    }
+
+    fn with_runner_and_sender(
+        dialog_runner: Arc<dyn DialogRunner>,
+        shutdown: watch::Receiver<bool>,
+        shutdown_sender: Option<watch::Sender<bool>>,
+    ) -> Self {
         Self {
             dialog_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIALOGS)),
-            run_config: default_run_config(),
+            dialog_runner,
+            shutdown,
+            _shutdown_sender: shutdown_sender,
         }
     }
 
@@ -60,6 +117,11 @@ impl AstreaFileChooser {
             zbus::fdo::Error::Failed("too many concurrent file dialogs".to_string())
         })?;
         let (cancel, cancellation) = watch::channel(false);
+        if *self.shutdown.borrow() {
+            return Err(zbus::fdo::Error::Failed("portal is shutting down".to_string()));
+        }
+        let mut shutdown = self.shutdown.clone();
+        let cancel_for_shutdown = cancel.clone();
         object_server
             .at(
                 handle.clone(),
@@ -72,8 +134,18 @@ impl AstreaFileChooser {
             .await
             .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
 
-        let result =
-            run_dialog_with_config(mode, &title, &options, &self.run_config, cancellation).await;
+        let mut dialog = Box::pin(self.dialog_runner.run(mode, &title, &options, cancellation));
+        let result = tokio::select! {
+            result = &mut dialog => result,
+            changed = shutdown.changed() => {
+                if changed.is_ok() && *shutdown.borrow() {
+                    let _ = cancel_for_shutdown.send(true);
+                    dialog.await
+                } else {
+                    Err(PortalError::new("portal shutdown state failed"))
+                }
+            }
+        };
         let _ = object_server.remove::<PortalRequest, _>(handle).await;
         drop(slot);
         Ok(result)
@@ -192,11 +264,137 @@ fn cancelled_response() -> PortalResponse {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
+    let (shutdown, shutdown_receiver) = watch::channel(false);
     let _connection = connection::Builder::session()?
         .name(BUS_NAME)?
-        .serve_at(OBJECT_PATH, AstreaFileChooser::new())?
+        .serve_at(OBJECT_PATH, {
+            let run_config = default_run_config();
+            AstreaFileChooser::with_runner_and_shutdown(
+                Arc::new(ProcessDialogRunner { run_config }),
+                shutdown_receiver,
+            )
+        })?
         .build()
         .await?;
-    std::future::pending::<()>().await;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            let _ = shutdown.send(true);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        _ = std::future::pending::<()>() => {}
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::{Duration, sleep, timeout};
+    use zbus::Proxy;
+
+    struct FakeDialogRunner {
+        calls: AtomicUsize,
+    }
+
+    impl DialogRunner for FakeDialogRunner {
+        fn run<'a>(
+            &'a self,
+            _mode: DialogMode,
+            _title: &'a str,
+            _options: &'a PortalOptions,
+            mut cancellation: watch::Receiver<bool>,
+        ) -> DialogFuture<'a> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if call == 0 {
+                    if !*cancellation.borrow() {
+                        let _ = cancellation.changed().await;
+                    }
+                    return Err(PortalError::new("dialog cancelled"));
+                }
+                Ok(PortalSelection {
+                    accepted: true,
+                    file_path: Some("/tmp/fake-dialog.txt".to_string()),
+                    ..PortalSelection::default()
+                })
+            })
+        }
+    }
+
+    async fn close_request(
+        connection: &zbus::Connection,
+        path: &str,
+    ) -> zbus::Result<()> {
+        let proxy = Proxy::new(
+            connection,
+            BUS_NAME,
+            path,
+            "org.freedesktop.impl.portal.Request",
+        )
+        .await?;
+        proxy.call("Close", &()).await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn private_dbus_request_lifecycle() -> zbus::Result<()> {
+        let runner = Arc::new(FakeDialogRunner {
+            calls: AtomicUsize::new(0),
+        });
+        let connection = connection::Builder::session()?
+            .name(BUS_NAME)?
+            .serve_at(OBJECT_PATH, AstreaFileChooser::with_runner(runner))?
+            .build()
+            .await?;
+        let chooser = Proxy::new(
+            &connection,
+            BUS_NAME,
+            OBJECT_PATH,
+            "org.freedesktop.impl.portal.FileChooser",
+        )
+        .await?;
+
+        let first_path = "/org/freedesktop/portal/desktop/request/first";
+        let first_handle = OwnedObjectPath::try_from(first_path).unwrap();
+        let first_args = (
+            first_handle,
+            "org.astrea.Test".to_string(),
+            "".to_string(),
+            "Open".to_string(),
+            HashMap::<String, OwnedValue>::new(),
+        );
+        let first_chooser = chooser.clone();
+        let first_call = tokio::spawn(async move {
+            let response: PortalResponse = first_chooser.call("OpenFile", &first_args).await?;
+            Ok::<PortalResponse, zbus::Error>(response)
+        });
+
+        let _close_result = timeout(Duration::from_secs(2), async {
+            loop {
+                match close_request(&connection, first_path).await {
+                    Ok(()) => break,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("request must be exported");
+        let first_response = first_call.await.unwrap()?;
+        assert_eq!(first_response.0, RESPONSE_CANCELLED);
+        assert!(close_request(&connection, first_path).await.is_err());
+
+        let second_path = "/org/freedesktop/portal/desktop/request/second";
+        let second_args = (
+            OwnedObjectPath::try_from(second_path).unwrap(),
+            "org.astrea.Test".to_string(),
+            "".to_string(),
+            "Open".to_string(),
+            HashMap::<String, OwnedValue>::new(),
+        );
+        let second_response: PortalResponse = chooser.call("OpenFile", &second_args).await?;
+        assert_eq!(second_response.0, RESPONSE_SUCCESS);
+        assert!(second_response.1.contains_key("uris"));
+        assert!(close_request(&connection, second_path).await.is_err());
+        Ok(())
+    }
 }

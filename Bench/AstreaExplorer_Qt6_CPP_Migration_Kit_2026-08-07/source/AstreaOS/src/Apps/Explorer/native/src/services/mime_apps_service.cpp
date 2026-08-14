@@ -1,25 +1,19 @@
 #include "services/mime_apps_service.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QLockFile>
 #include <QSaveFile>
-#include <QStandardPaths>
+#include <QSettings>
 
-#include <algorithm>
 #include <utility>
 
 #include "services/desktop_file_id.h"
 
 namespace Astrea::Explorer::Native::Services {
 namespace {
-
-QString defaultMimeAppsPath()
-{
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation))
-        .filePath(QStringLiteral("mimeapps.list"));
-}
 
 QStringList normalizeIds(const QStringList &values)
 {
@@ -52,25 +46,45 @@ int sectionEnd(const QStringList &lines, int sectionStart)
     return lines.size();
 }
 
-} // namespace
-
-MimeAppsService::MimeAppsService(QString filePath, int lockTimeoutMs)
-    : m_filePath(filePath.trimmed().isEmpty() ? defaultMimeAppsPath() : std::move(filePath))
-    , m_lockTimeoutMs(lockTimeoutMs)
+bool desktopEntryCanHandle(const QString &path)
 {
+    QSettings settings(path, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("Desktop Entry"));
+    const bool valid = settings.value(QStringLiteral("Type")).toString()
+                           == QStringLiteral("Application")
+        && !settings.value(QStringLiteral("Hidden"), false).toBool()
+        && !settings.value(QStringLiteral("Exec")).toString().trimmed().isEmpty();
+    settings.endGroup();
+    return valid;
 }
 
-QStringList MimeAppsService::readLines() const
+} // namespace
+
+MimeAppsService::MimeAppsService(QString filePath, int lockTimeoutMs, XdgPaths paths)
+    : m_filePathWasExplicit(!filePath.trimmed().isEmpty())
+    , m_lockTimeoutMs(lockTimeoutMs)
+    , m_paths(std::move(paths))
 {
-    QFile file(m_filePath);
+    m_filePath = m_filePathWasExplicit
+        ? std::move(filePath)
+        : QDir(m_paths.configHome).filePath(QStringLiteral("mimeapps.list"));
+}
+
+QStringList MimeAppsService::searchPaths() const
+{
+    return m_filePathWasExplicit ? QStringList {m_filePath} : m_paths.mimeAppsSearchPaths();
+}
+
+QStringList MimeAppsService::readLines(const QString &path) const
+{
+    QFile file(path);
     if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
         return {};
     }
     const QByteArray content = file.readAll();
-    if (content.isEmpty()) {
-        return {};
-    }
-    return QString::fromUtf8(content).split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+    return content.isEmpty()
+        ? QStringList {}
+        : QString::fromUtf8(content).split(QLatin1Char('\n'), Qt::KeepEmptyParts);
 }
 
 QStringList MimeAppsService::valuesFor(
@@ -100,12 +114,82 @@ QStringList MimeAppsService::valuesFor(
         if (equals < 0 || line.left(equals).trimmed() != mime) {
             continue;
         }
-        const QStringList rawValues = line.mid(equals + 1).split(
-            QLatin1Char(';'),
-            Qt::SkipEmptyParts);
-        return normalizeIds(rawValues);
+        return normalizeIds(line.mid(equals + 1).split(
+            QLatin1Char(';'), Qt::SkipEmptyParts));
     }
     return {};
+}
+
+bool MimeAppsService::isValidDesktopId(const QString &desktopId) const
+{
+    const QString normalizedId = DesktopFileId::normalize(desktopId);
+    if (normalizedId.isEmpty()) {
+        return false;
+    }
+
+    for (const QString &root : m_paths.applicationRoots()) {
+        if (!QFileInfo(root).isDir()) {
+            continue;
+        }
+        QDirIterator iterator(root, {QStringLiteral("*.desktop")}, QDir::Files,
+                              QDirIterator::Subdirectories);
+        while (iterator.hasNext()) {
+            const QString path = iterator.next();
+            if (DesktopFileId::fromPath(path, {root}) == normalizedId
+                && desktopEntryCanHandle(path)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+QStringList MimeAppsService::validDesktopIds(const QStringList &ids) const
+{
+    QStringList valid;
+    for (const QString &id : normalizeIds(ids)) {
+        if (isValidDesktopId(id)) {
+            valid.append(id);
+        }
+    }
+    return valid;
+}
+
+QStringList MimeAppsService::effectiveAssociations(const QString &mime) const
+{
+    QStringList associations;
+    const QStringList paths = searchPaths();
+    for (auto path = paths.crbegin(); path != paths.crend(); ++path) {
+        const QStringList lines = readLines(*path);
+        for (const QString &removed : valuesFor(
+                 lines, QStringLiteral("[Removed Associations]"), mime)) {
+            associations.removeAll(removed);
+        }
+        const QStringList added = valuesFor(
+            lines, QStringLiteral("[Added Associations]"), mime);
+        for (auto addedId = added.crbegin(); addedId != added.crend(); ++addedId) {
+            associations.removeAll(*addedId);
+            associations.prepend(*addedId);
+        }
+    }
+    return validDesktopIds(associations);
+}
+
+QStringList MimeAppsService::defaultsForMime(const QString &mime) const
+{
+    for (const QString &path : searchPaths()) {
+        const QStringList defaults = validDesktopIds(valuesFor(
+            readLines(path), QStringLiteral("[Default Applications]"), mime));
+        if (!defaults.isEmpty()) {
+            return defaults;
+        }
+    }
+    return effectiveAssociations(mime);
+}
+
+QStringList MimeAppsService::associationsForMime(const QString &mime) const
+{
+    return effectiveAssociations(mime);
 }
 
 bool MimeAppsService::updateValue(
@@ -150,27 +234,11 @@ bool MimeAppsService::updateValue(
     return true;
 }
 
-QStringList MimeAppsService::defaultsForMime(const QString &mime) const
-{
-    return valuesFor(
-        readLines(),
-        QStringLiteral("[Default Applications]"),
-        mime);
-}
-
-QStringList MimeAppsService::associationsForMime(const QString &mime) const
-{
-    return valuesFor(
-        readLines(),
-        QStringLiteral("[Added Associations]"),
-        mime);
-}
-
 bool MimeAppsService::setDefault(const QString &mime, const QString &desktopId) const
 {
     const QString normalizedMime = mime.trimmed();
     const QString normalizedId = DesktopFileId::normalize(desktopId);
-    if (normalizedMime.isEmpty() || normalizedId.isEmpty()) {
+    if (normalizedMime.isEmpty() || normalizedId.isEmpty() || !isValidDesktopId(normalizedId)) {
         return false;
     }
 
@@ -185,20 +253,20 @@ bool MimeAppsService::setDefault(const QString &mime, const QString &desktopId) 
         return false;
     }
 
-    QStringList lines = readLines();
+    QStringList lines = readLines(m_filePath);
     QStringList defaults = valuesFor(
-        lines,
-        QStringLiteral("[Default Applications]"),
-        normalizedMime);
+        lines, QStringLiteral("[Default Applications]"), normalizedMime);
     defaults.removeAll(normalizedId);
     defaults.prepend(normalizedId);
 
     QStringList associations = valuesFor(
-        lines,
-        QStringLiteral("[Added Associations]"),
-        normalizedMime);
+        lines, QStringLiteral("[Added Associations]"), normalizedMime);
     associations.removeAll(normalizedId);
     associations.prepend(normalizedId);
+
+    QStringList removed = valuesFor(
+        lines, QStringLiteral("[Removed Associations]"), normalizedMime);
+    removed.removeAll(normalizedId);
 
     if (!updateValue(
             &lines,
@@ -209,7 +277,12 @@ bool MimeAppsService::setDefault(const QString &mime, const QString &desktopId) 
             &lines,
             QStringLiteral("[Added Associations]"),
             normalizedMime,
-            associations)) {
+            associations)
+        || !updateValue(
+            &lines,
+            QStringLiteral("[Removed Associations]"),
+            normalizedMime,
+            removed)) {
         return false;
     }
 
@@ -219,7 +292,7 @@ bool MimeAppsService::setDefault(const QString &mime, const QString &desktopId) 
     }
     const QByteArray content = (lines.join(QLatin1Char('\n'))
         + (lines.isEmpty() || !lines.constLast().isEmpty() ? QStringLiteral("\n") : QString()))
-                                    .toUtf8();
+                                   .toUtf8();
     if (output.write(content) != content.size()) {
         return false;
     }

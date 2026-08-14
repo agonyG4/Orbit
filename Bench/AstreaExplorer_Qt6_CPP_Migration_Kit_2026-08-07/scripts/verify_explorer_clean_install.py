@@ -61,10 +61,42 @@ def assert_clean_prefix(prefix: Path) -> None:
             raise SystemExit(f"compiled Python artifact leaked into install prefix: {path}")
 
 
-def smoke(binary: Path, runtime: Path, *, portal: bool = False) -> None:
+def smoke(binary: Path, isolated_root: Path, *, portal: bool = False) -> None:
     environment = os.environ.copy()
-    environment.pop("QML2_IMPORT_PATH", None)
-    environment["ASTREA_ROOT"] = str(runtime)
+    for name in (
+        "ASTREA_ROOT",
+        "ASTREA_EXPLORER_BIN",
+        "ASTREA_EXPLORER_START_PATH",
+        "ASTREA_EXPLORER_REMOTE_PREFIXES",
+        "ASTREA_FILE_DIALOG_OPTIONS",
+        "ASTREA_FILE_DIALOG_RESULT_FILE",
+        "QML2_IMPORT_PATH",
+        "QML_IMPORT_PATH",
+    ):
+        environment.pop(name, None)
+    home = isolated_root / "home"
+    config = isolated_root / "xdg-config"
+    data = isolated_root / "xdg-data"
+    state = isolated_root / "xdg-state"
+    cache = isolated_root / "xdg-cache"
+    runtime_dir = isolated_root / "xdg-runtime"
+    applications = data / "applications"
+    for directory in (home, config, data, state, cache, runtime_dir, applications):
+        directory.mkdir(parents=True, exist_ok=True)
+    runtime_dir.chmod(0o700)
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(config),
+            "XDG_CONFIG_DIRS": str(config / "system-config"),
+            "XDG_DATA_HOME": str(data),
+            "XDG_DATA_DIRS": str(data / "system-data"),
+            "XDG_STATE_HOME": str(state),
+            "XDG_CACHE_HOME": str(cache),
+            "XDG_RUNTIME_DIR": str(runtime_dir),
+            "XDG_CURRENT_DESKTOP": "AstreaTest",
+        }
+    )
     environment["QT_QPA_PLATFORM"] = "offscreen"
     command = [str(binary)]
     if portal:
@@ -97,10 +129,9 @@ def main() -> int:
         run([cmake, "--install", str(build)])
 
         assert_clean_prefix(prefix)
-        runtime = prefix / "share/Astrea"
         binary = prefix / "bin/astrea-explorer"
-        smoke(binary, runtime)
-        smoke(binary, runtime, portal=True)
+        smoke(binary, root)
+        smoke(binary, root, portal=True)
 
     print("clean Explorer install: PASS")
     return 0

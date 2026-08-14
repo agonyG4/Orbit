@@ -220,6 +220,17 @@ ExplorerRuntimePaths ExplorerRuntimeResolver::resolve(
         return result;
     }
 
+    const QString installedPrefixRoot = QDir(executableDirectory).filePath(
+        QStringLiteral("../share/Astrea"));
+    ExplorerRuntimePaths prefixInstalled = fromCandidate(
+        installedPrefixRoot,
+        QStringLiteral("installed prefix Astrea root"),
+        &diagnostics);
+    if (prefixInstalled.valid) {
+        prefixInstalled.diagnostics = std::move(diagnostics);
+        return prefixInstalled;
+    }
+
     const QString installedRoot = QDir(homeDirectory).filePath(QStringLiteral(".local/share/Astrea"));
     ExplorerRuntimePaths installed = fromCandidate(
         installedRoot,

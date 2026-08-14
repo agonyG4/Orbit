@@ -61,9 +61,9 @@ does not provide a Quickshell or Python fallback.
 
 ## Production packaging closure — 2026-08-14
 
-- CMake now owns the required Rust backend and portal builds, installs both
-  under the canonical Astrea runtime root, installs the tracked `astrea-launch`
-  provider, and fails configuration/build when a required component is absent.
+- CMake now owns the required Rust backend, portal, and source-owned
+  `astrea-launch` builds, installs them under the canonical Astrea runtime root,
+  and fails configuration/build when a required component is absent.
   The service installer validates those installed executables and uses
   `RequiresMountsFor` for the runtime root.
 - Runtime resolution reports resource-root, backend, launcher, and portal
@@ -77,8 +77,8 @@ does not provide a Quickshell or Python fallback.
   process starts. The portal uses Tokio async child I/O, bounded stdout/stderr
   and result-file reads, per-request `Request.Close` cancellation, and a
   bounded dialog semaphore.
-- Validation completed with 24/24 Debug CTest, 24/24 Release CTest, 41/41 Rust
-  backend tests, 8/8 portal tests, the strengthened static source gate, and a
+- Validation completed with 25/25 Debug CTest, 25/25 Release CTest, 41/41 Rust
+  backend tests, 9/9 portal tests, the strengthened static source gate, and a
   fresh-prefix clean-install harness covering normal and portal self-tests.
 
 ## Validation record
@@ -87,3 +87,48 @@ The final qualification report is in
 `native/docs/FINAL_NATIVE_MIGRATION_QUALIFICATION.md`. The final source audit
 must be run with `python3 scripts/verify_native_migration_gate.py`; the QML
 dependency audit must report zero process nodes and zero Quickshell imports.
+
+## Final source closure — 2026-08-14
+
+- Orbit history contained the restored `src/bin/astrea-launch` ELF but no
+  provider source. The matching source-owned Rust provider was recovered from
+  the deployed Astrea source tree at `src/System/launch`, brought into the
+  checkout with its manifest, lockfile, implementation, and tests, and wired
+  into CMake. The ELF was removed; no production target or gate depends on a
+  precompiled launch artifact.
+- The provider preserves the observed `LaunchRequest` contract: desktop,
+  file, URL, Steam, shell-command, JSON argv, daemon/launchd, doctor, and
+  history forms. Launch history remains bounded JSONL under XDG state, and
+  daemon requests use a private user Unix socket with safe argv transport.
+- XDG behavior is now represented by injectable `XdgPaths`: config/data
+  homes, config/data search dirs, current desktop, and HOME all have explicit
+  environment-backed defaults. Nested desktop IDs canonicalize `/` to `-`,
+  outside-root files do not receive fabricated IDs, and user application roots
+  win over system roots.
+- MimeApps resolution covers desktop-specific and generic files across the
+  user/system XDG locations, applies default/added/removed association
+  semantics, validates candidates against application entries, falls back to
+  valid associations, and writes only the user config file with lock/re-read
+  and atomic replacement.
+- Runtime resolution order is explicit `ASTREA_ROOT`, installed
+  `<prefix>/share/Astrea` from `<prefix>/bin/astrea-explorer`, user install,
+  then development traversal. The clean-install harness isolates HOME,
+  XDG config/data/state/cache/runtime directories and performs installed smoke
+  without forcing ASTREA_ROOT.
+- Portal process cancellation, timeout, and error paths explicitly terminate
+  and reap children. An injectable runner is exercised through a private
+  `dbus-run-session`: a known request handle is exported, `Request.Close`
+  cancels it and removes the object, the service handles a subsequent request,
+  and normal completion returns a file URI.
+- `/home/agony/GitHub/zip_astrea_explorer_migration_kit.py` now uses
+  path-aware generated-directory pruning, retains source `bin`/`obj`/`out`,
+  preserves executable modes and internal symlinks, rejects unsafe/dangling
+  symlinks, validates compiled-payload exclusion and required source closure,
+  and performs atomic deterministic archive generation. Synthetic ZIP tests
+  pass 3/3.
+- Final evidence: Debug CTest 25/25, Release CTest 25/25, Explorer Rust
+  backend 41/41, launch Rust 13/13, portal Rust 9/9, Explorer Python/QML
+  20/20, the migration gate PASS, service `bash -n` PASS, and the canonical
+  archive 287-entry verification PASS. Fresh extraction then passed the source
+  gate and isolated clean-install build/self-test. This is the first point at
+  which checkout-to-source-ZIP-to-extraction reproducibility is qualified.
