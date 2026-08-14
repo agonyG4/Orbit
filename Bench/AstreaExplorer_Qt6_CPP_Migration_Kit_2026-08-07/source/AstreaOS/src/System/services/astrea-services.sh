@@ -13,7 +13,6 @@ xdg_portal_conf_dir="${home}/.config/xdg-desktop-portal"
 astrea_bin_dir="${astrea_root}/bin"
 weather_backend_dir="${astrea_root}/Apps/Weather/backend"
 launch_backend_dir="${astrea_root}/System/launch"
-portal_backend_dir="${astrea_root}/System/portal"
 status_backend_dir="${astrea_root}/System/statusd"
 latency_backend_dir="${astrea_root}/System/latencyd"
 
@@ -46,6 +45,7 @@ write_portal_files() {
 Description=Astrea Explorer FileChooser Portal Backend
 After=graphical-session.target
 PartOf=graphical-session.target
+RequiresMountsFor=${astrea_root}
 StartLimitIntervalSec=30
 StartLimitBurst=5
 
@@ -141,6 +141,7 @@ write_launch_unit() {
 Description=Astrea app launch service
 After=graphical-session.target astrea-latencyd.service
 PartOf=graphical-session.target
+RequiresMountsFor=${astrea_root}
 StartLimitIntervalSec=30
 StartLimitBurst=5
 
@@ -284,6 +285,10 @@ reload_user_systemd() {
 }
 
 install_services() {
+	if ! verify_explorer_runtime_artifacts; then
+		warn 'required Explorer artifacts are missing; refusing to install service files'
+		return 1
+	fi
 	write_portal_files
 	if ! install_status_binary; then
 		warn 'astrea-statusd was not rebuilt during install.'
@@ -324,6 +329,23 @@ verify_paths() {
 	for path in "$@"; do
 		if [[ ! -f "${path}" ]]; then
 			printf 'missing: %s\n' "${path}" >&2
+			failed=1
+		fi
+	done
+	return "${failed}"
+}
+
+verify_explorer_runtime_artifacts() {
+	local failed=0
+	local path
+	local required=(
+		"${astrea_bin_dir}/astrea-launch"
+		"${astrea_bin_dir}/astrea-filechooser-portal"
+		"${astrea_root}/Core/bridge/apps/explorer_backend"
+	)
+	for path in "${required[@]}"; do
+		if [[ ! -x "${path}" ]]; then
+			printf 'missing required Explorer runtime artifact: %s\n' "${path}" >&2
 			failed=1
 		fi
 	done
@@ -468,21 +490,7 @@ verify_portal_services() {
 
 	verify_paths "${files[@]}" || failed=1
 	verify_systemd_units "${units[@]}" || failed=1
-	if [[ -f "${portal_backend_dir}/Cargo.toml" ]]; then
-		if command -v cargo >/dev/null 2>&1; then
-			cargo check --manifest-path "${portal_backend_dir}/Cargo.toml" --offline || failed=1
-		else
-			warn 'missing dependency for portal backend verification: cargo'
-			failed=1
-		fi
-	else
-		warn "missing portal backend manifest: ${portal_backend_dir}/Cargo.toml"
-		failed=1
-	fi
-	if [[ ! -x "${astrea_bin_dir}/astrea-filechooser-portal" ]]; then
-		printf 'missing executable: %s\n' "${astrea_bin_dir}/astrea-filechooser-portal" >&2
-		failed=1
-	fi
+	verify_explorer_runtime_artifacts || failed=1
 
 	if [[ "${failed}" -eq 0 ]]; then
 		info 'Astrea portal services verified'

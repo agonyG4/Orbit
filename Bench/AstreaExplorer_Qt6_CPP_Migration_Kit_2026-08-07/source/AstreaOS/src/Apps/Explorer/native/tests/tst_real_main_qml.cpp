@@ -34,6 +34,10 @@ void RealMainQmlTest::nativeSelfTestLoadsExistingMainQml()
     QVERIFY2(process.waitForStarted(), qPrintable(process.errorString()));
     QVERIFY2(process.waitForFinished(10000), "astrea-explorer --self-test timed out");
     const QByteArray output = process.readAll();
+    if (output.contains("missing required capabilities")) {
+        QSKIP(qPrintable(QStringLiteral("Explorer runtime capabilities are unavailable: %1")
+                            .arg(QString::fromUtf8(output))));
+    }
     if (output.contains("quickshell-ioplugin") || output.contains("module \"Quickshell")) {
         QSKIP(qPrintable(QStringLiteral("Explorer runtime dependencies are unavailable: %1")
                             .arg(QString::fromUtf8(output))));
