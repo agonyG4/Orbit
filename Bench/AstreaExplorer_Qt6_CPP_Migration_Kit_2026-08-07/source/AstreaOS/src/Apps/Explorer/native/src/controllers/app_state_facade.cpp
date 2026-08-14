@@ -7,9 +7,7 @@
 #include <QJsonObject>
 #include <QMimeDatabase>
 #include <QRegularExpression>
-#include <QSettings>
 #include <QSaveFile>
-#include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -31,7 +29,8 @@ AppStateFacade::AppStateFacade(
     Services::FilesystemService *filesystemService,
     OpenWithController *openWith,
     Services::LaunchService *launchService,
-    Services::WallpaperService *wallpaperService)
+    Services::WallpaperService *wallpaperService,
+    Services::MimeAppsService *mimeAppsService)
     : QObject(parent)
     , m_navigation(navigation)
     , m_selection(selection)
@@ -44,6 +43,7 @@ AppStateFacade::AppStateFacade(
     , m_openWith(openWith)
     , m_launchService(launchService)
     , m_wallpaperService(wallpaperService)
+    , m_mimeAppsService(mimeAppsService)
     , m_runtimePaths(std::move(runtimePaths))
 {
     Q_ASSERT(m_navigation != nullptr);
@@ -1260,21 +1260,18 @@ bool AppStateFacade::launchOpenWith(const QString &path, const QString &desktopF
 
 bool AppStateFacade::setDefaultOpenWith(const QString &path, const QString &desktopFile)
 {
-    if (path.isEmpty() || desktopFile.isEmpty()) {
+    if (path.isEmpty() || desktopFile.isEmpty() || m_mimeAppsService == nullptr) {
         return false;
     }
     const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
     if (mime.isEmpty()) {
         return false;
     }
-    const QString configPath = QDir(QStandardPaths::writableLocation(
-        QStandardPaths::ConfigLocation)).filePath(QStringLiteral("mimeapps.list"));
-    QSettings settings(configPath, QSettings::IniFormat);
-    settings.beginGroup(QStringLiteral("Default Applications"));
-    settings.setValue(mime, QFileInfo(desktopFile).fileName() + QLatin1Char(';'));
-    settings.endGroup();
-    settings.sync();
-    return settings.status() == QSettings::NoError;
+    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(desktopFile);
+    if (application.id.isEmpty()) {
+        return false;
+    }
+    return m_mimeAppsService->setDefault(mime, application.id);
 }
 
 void AppStateFacade::openItem(

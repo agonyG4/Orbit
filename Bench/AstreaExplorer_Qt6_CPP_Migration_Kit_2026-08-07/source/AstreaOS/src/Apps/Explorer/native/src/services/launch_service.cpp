@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include <QFileInfo>
 #include <QProcess>
 
 namespace Astrea::Explorer::Native::Services {
@@ -57,6 +58,11 @@ LaunchResult LaunchService::launch(const LaunchSpec &spec) const
 {
     if (!spec.isValid()) {
         return {false, 0, QStringLiteral("invalid_launch_spec")};
+    }
+
+    const QFileInfo programInfo(spec.program);
+    if (programInfo.isAbsolute() && !programInfo.isExecutable()) {
+        return {false, 0, QStringLiteral("launcher_missing")};
     }
 
     qint64 processId = 0;

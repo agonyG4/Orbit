@@ -134,10 +134,20 @@ int ExplorerApplication::run(int argc, char **argv)
         QCoreApplication::applicationDirPath(),
         QDir::homePath(),
         environment);
-    if (!runtimePaths.valid && !useBootstrap) {
+    const bool runtimeReady = usePortal
+        ? runtimePaths.portalRuntimeReady
+        : runtimePaths.normalRuntimeReady;
+    if (!runtimeReady && !useBootstrap) {
         for (const QString &diagnostic : runtimePaths.diagnostics) {
             qCritical().noquote() << diagnostic;
             QTextStream(stderr) << diagnostic << Qt::endl;
+        }
+        if (runtimePaths.resourceRootValid) {
+            QTextStream(stderr)
+                << (usePortal
+                        ? QStringLiteral("Astrea portal runtime is missing required capabilities")
+                        : QStringLiteral("Astrea Explorer runtime is missing required capabilities"))
+                << Qt::endl;
         }
         return 1;
     }
@@ -161,6 +171,7 @@ int ExplorerApplication::run(int argc, char **argv)
     LaunchService launchService(
         runtimePaths.launcherProgram,
         runtimePaths.windowsRunnerProgram);
+    MimeAppsService mimeApps;
     FileOperationService fileOperationService(&backendClient, &application);
     FilesystemService filesystemService(&backendClient, &application);
     FileOperationsController fileOperations(
@@ -172,6 +183,7 @@ int ExplorerApplication::run(int argc, char **argv)
         &application,
         initialSettings.autoMountDeviceIdsJson);
     OpenWithController openWith(&launchService, &application);
+    openWith.setMimeAppsService(&mimeApps);
     WallpaperService wallpaper(&application);
     PortalController portal(&application);
     NavigationController navigation(
@@ -204,7 +216,8 @@ int ExplorerApplication::run(int argc, char **argv)
         &filesystemService,
         &openWith,
         &launchService,
-        &wallpaper);
+        &wallpaper,
+        &mimeApps);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,
@@ -224,7 +237,7 @@ int ExplorerApplication::run(int argc, char **argv)
     application.setProperty("astreaI18nMessages", i18n.messages);
     engine.rootContext()->setContextProperty(
         QStringLiteral("astreaNativeAppStateAvailable"),
-        runtimePaths.valid && !useBootstrap);
+        runtimeReady && !useBootstrap);
 
     if (usePortal) {
         const QByteArray optionsBytes = environment.value(

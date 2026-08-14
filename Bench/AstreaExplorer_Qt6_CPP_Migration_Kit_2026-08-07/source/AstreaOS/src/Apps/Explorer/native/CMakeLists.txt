@@ -16,8 +16,71 @@ enable_testing()
 set(ASTREA_EXPLORER_BIN "${CMAKE_BINARY_DIR}/astrea-explorer")
 set(ASTREA_EXPLORER_RUNTIME_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src")
-set(ASTREA_EXPLORER_BACKEND_PROGRAM "" CACHE FILEPATH
-    "Path to the release explorer_backend binary installed with astrea-explorer")
+set(ASTREA_EXPLORER_RUST_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
+set(ASTREA_EXPLORER_PORTAL_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../System/portal")
+set(ASTREA_EXPLORER_LAUNCH_PROGRAM
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../bin/astrea-launch")
+
+find_program(ASTREA_CARGO_EXECUTABLE cargo REQUIRED)
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(ASTREA_RUST_PROFILE_ARG --release)
+    set(ASTREA_RUST_PROFILE_DIR release)
+else()
+    set(ASTREA_RUST_PROFILE_ARG)
+    set(ASTREA_RUST_PROFILE_DIR debug)
+endif()
+
+set(ASTREA_RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo-target")
+set(ASTREA_EXPLORER_BACKEND_ARTIFACT
+    "${ASTREA_RUST_TARGET_DIR}/${ASTREA_RUST_PROFILE_DIR}/explorer_backend")
+set(ASTREA_EXPLORER_PORTAL_ARTIFACT
+    "${ASTREA_RUST_TARGET_DIR}/${ASTREA_RUST_PROFILE_DIR}/astrea-filechooser-portal")
+
+file(GLOB_RECURSE ASTREA_EXPLORER_RUST_SOURCES CONFIGURE_DEPENDS
+    "${ASTREA_EXPLORER_RUST_ROOT}/*.rs"
+    "${ASTREA_EXPLORER_RUST_ROOT}/Cargo.toml"
+    "${ASTREA_EXPLORER_RUST_ROOT}/Cargo.lock")
+file(GLOB_RECURSE ASTREA_EXPLORER_PORTAL_RUST_SOURCES CONFIGURE_DEPENDS
+    "${ASTREA_EXPLORER_PORTAL_ROOT}/*.rs"
+    "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.toml"
+    "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.lock")
+
+add_custom_command(
+    OUTPUT "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "CARGO_TARGET_DIR=${ASTREA_RUST_TARGET_DIR}"
+        "${ASTREA_CARGO_EXECUTABLE}" build
+        --manifest-path "${ASTREA_EXPLORER_RUST_ROOT}/Cargo.toml"
+        ${ASTREA_RUST_PROFILE_ARG}
+    WORKING_DIRECTORY "${ASTREA_EXPLORER_RUST_ROOT}"
+    DEPENDS ${ASTREA_EXPLORER_RUST_SOURCES}
+    COMMENT "Building the Astrea Explorer Rust backend"
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT "${ASTREA_EXPLORER_PORTAL_ARTIFACT}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "CARGO_TARGET_DIR=${ASTREA_RUST_TARGET_DIR}"
+        "${ASTREA_CARGO_EXECUTABLE}" build
+        --manifest-path "${ASTREA_EXPLORER_PORTAL_ROOT}/Cargo.toml"
+        ${ASTREA_RUST_PROFILE_ARG}
+    WORKING_DIRECTORY "${ASTREA_EXPLORER_PORTAL_ROOT}"
+    DEPENDS ${ASTREA_EXPLORER_PORTAL_RUST_SOURCES}
+    COMMENT "Building the Astrea FileChooser portal"
+    VERBATIM)
+
+add_custom_target(astrea_explorer_rust_components
+    DEPENDS
+        "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
+        "${ASTREA_EXPLORER_PORTAL_ARTIFACT}")
+
+if (NOT EXISTS "${ASTREA_EXPLORER_LAUNCH_PROGRAM}")
+    message(FATAL_ERROR
+        "Required Astrea launch provider is missing: ${ASTREA_EXPLORER_LAUNCH_PROGRAM}")
+endif()
 
 add_library(astrea_explorer_native_backend STATIC
     src/backend/backend_types.h
@@ -58,6 +121,10 @@ add_library(astrea_explorer_native_operations STATIC
     src/services/file_operation_service.cpp
     src/services/filesystem_service.h
     src/services/filesystem_service.cpp
+    src/services/desktop_file_id.h
+    src/services/desktop_file_id.cpp
+    src/services/mime_apps_service.h
+    src/services/mime_apps_service.cpp
     src/services/wallpaper_service.h
     src/services/wallpaper_service.cpp
 )
@@ -126,6 +193,8 @@ qt_add_executable(astrea-explorer
     src/explorer_application.cpp
     src/explorer_application.h
 )
+
+add_dependencies(astrea-explorer astrea_explorer_rust_components)
 
 target_include_directories(astrea-explorer PRIVATE
     src
@@ -279,6 +348,22 @@ target_link_libraries(tst_open_with_controller PRIVATE
 )
 
 add_test(NAME open_with_controller COMMAND tst_open_with_controller)
+
+qt_add_executable(tst_mime_apps_service
+    tests/tst_mime_apps_service.cpp
+)
+
+target_include_directories(tst_mime_apps_service PRIVATE
+    src
+)
+
+target_link_libraries(tst_mime_apps_service PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_operations
+)
+
+add_test(NAME mime_apps_service COMMAND tst_mime_apps_service)
 
 qt_add_executable(tst_portal_controller
     tests/tst_portal_controller.cpp
@@ -461,9 +546,6 @@ target_link_libraries(tst_app_state_facade PRIVATE
 
 add_test(NAME app_state_facade COMMAND tst_app_state_facade)
 
-set(ASTREA_EXPLORER_RUST_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../Core/bridge/apps/explorer")
-
 qt_add_executable(tst_shadow_parity
     tests/parity/fixture_tree.h
     tests/parity/fixture_tree.cpp
@@ -480,7 +562,7 @@ target_include_directories(tst_shadow_parity PRIVATE
 )
 
 target_compile_definitions(tst_shadow_parity PRIVATE
-    ASTREA_EXPLORER_PARITY_BACKEND="${ASTREA_EXPLORER_RUST_ROOT}/target/debug/explorer_backend"
+    ASTREA_EXPLORER_PARITY_BACKEND="${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
 )
 
 target_link_libraries(tst_shadow_parity PRIVATE
@@ -493,10 +575,10 @@ add_test(NAME shadow_parity COMMAND tst_shadow_parity)
 
 add_subdirectory(tests)
 
-# Production installation is rooted at ~/.local/share/Astrea (or the selected
-# CMAKE_INSTALL_PREFIX) so the runtime resolver remains independent of the
-# source checkout. QML is installed as source presentation; the Rust backend
-# is supplied explicitly by the packaging/build pipeline.
+# Production installation is rooted at ${CMAKE_INSTALL_PREFIX}/share/Astrea so
+# the runtime resolver remains independent of the source checkout. QML is
+# installed as source presentation; required Rust and launch artifacts are
+# built or copied as part of this production target.
 install(TARGETS astrea-explorer
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
@@ -529,8 +611,15 @@ install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/System/i18n"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/System"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
         PATTERN "*.json")
-if (ASTREA_EXPLORER_BACKEND_PROGRAM AND EXISTS "${ASTREA_EXPLORER_BACKEND_PROGRAM}")
-    install(PROGRAMS "${ASTREA_EXPLORER_BACKEND_PROGRAM}"
-        DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core/bridge/apps"
-        RENAME explorer_backend)
-endif()
+install(PROGRAMS "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core/bridge/apps"
+    RENAME explorer_backend)
+install(PROGRAMS "${ASTREA_EXPLORER_PORTAL_ARTIFACT}"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/bin"
+    RENAME astrea-filechooser-portal)
+install(PROGRAMS "${ASTREA_EXPLORER_LAUNCH_PROGRAM}"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/bin"
+    RENAME astrea-launch)
+install(PROGRAMS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../System/services/astrea-services.sh"
+    DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/System/services")

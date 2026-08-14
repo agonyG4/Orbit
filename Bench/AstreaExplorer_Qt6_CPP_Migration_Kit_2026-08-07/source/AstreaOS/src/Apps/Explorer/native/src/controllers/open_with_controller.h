@@ -7,6 +7,9 @@
 #include <QVector>
 
 #include "services/launch_service.h"
+#include "services/mime_apps_service.h"
+
+#include <memory>
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -36,6 +39,8 @@ public:
         QObject *parent = nullptr);
     ~OpenWithController() override;
 
+    void setMimeAppsService(Services::MimeAppsService *mimeAppsService);
+
     QVector<OpenWithApplication> applications() const;
     QVariantList applicationList() const;
     QString selectedApplicationId() const;
@@ -64,6 +69,8 @@ private:
     static bool mimeMatches(const QStringList &mimeTypes, const QString &mime);
 
     Services::LaunchService *m_launchService = nullptr;
+    std::unique_ptr<Services::MimeAppsService> m_ownedMimeAppsService;
+    Services::MimeAppsService *m_mimeAppsService = nullptr;
     QVector<OpenWithApplication> m_applications;
     QString m_selectedApplicationId;
     bool m_busy = false;

@@ -14,6 +14,7 @@ private slots:
     void buildsWindowsLaunchArgv();
     void preservesShellCharactersAsOneArgument();
     void rejectsEmptyLaunchPaths();
+    void rejectsMissingAbsoluteLauncherAtLaunchTime();
 };
 
 void LaunchServiceTest::buildsFileLaunchArgv()
@@ -63,6 +64,19 @@ void LaunchServiceTest::rejectsEmptyLaunchPaths()
     QVERIFY(!service.desktopLaunch(QString()).isValid());
     QVERIFY(!service.windowsLaunch(QString()).isValid());
     QVERIFY(!service.launch({}).started);
+}
+
+void LaunchServiceTest::rejectsMissingAbsoluteLauncherAtLaunchTime()
+{
+    LaunchService service(
+        QStringLiteral("/path/that/does/not/exist/astrea-launch"),
+        QStringLiteral("/path/that/does/not/exist/windows-run"));
+
+    const LaunchResult result = service.launch(
+        service.fileLaunch(QStringLiteral("/tmp/example.txt")));
+
+    QVERIFY(!result.started);
+    QCOMPARE(result.error, QStringLiteral("launcher_missing"));
 }
 
 QTEST_GUILESS_MAIN(LaunchServiceTest)
