@@ -130,6 +130,17 @@ int ExplorerApplication::run(int argc, char **argv)
     const bool useBootstrap = application.arguments().contains(
         QString::fromLatin1(kBootstrapArgument));
     const bool usePortal = application.arguments().contains(QStringLiteral("--portal"));
+    const bool useSelfTest = application.arguments().contains(
+        QString::fromLatin1(kSelfTestArgument));
+
+    if (useBootstrap && useSelfTest) {
+        QQmlApplicationEngine engine;
+        if (!loadBootstrap(engine)) {
+            return 1;
+        }
+        return runSelfTest(engine);
+    }
+
     const auto runtimePaths = Astrea::Explorer::Native::Runtime::ExplorerRuntimeResolver::resolve(
         QCoreApplication::applicationDirPath(),
         QDir::homePath(),
@@ -272,7 +283,7 @@ int ExplorerApplication::run(int argc, char **argv)
         return 1;
     }
 
-    if (!usePortal && navigation.currentPath().isEmpty()) {
+    if (!usePortal && !useBootstrap && navigation.currentPath().isEmpty()) {
         const QString requestedStartPath = environment
             .value(QStringLiteral("ASTREA_EXPLORER_START_PATH"))
             .trimmed();
@@ -284,7 +295,7 @@ int ExplorerApplication::run(int argc, char **argv)
                        : initialSettings.currentPath));
     }
 
-    if (application.arguments().contains(QString::fromLatin1(kSelfTestArgument))) {
+    if (useSelfTest) {
         return runSelfTest(engine);
     }
 

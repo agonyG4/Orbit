@@ -59,6 +59,28 @@ does not provide a Quickshell or Python fallback.
   no longer import Quickshell or launch QML processes; the old unused
   Explorer-only QuickshellComponents package is excluded from installation.
 
+## Production packaging closure — 2026-08-14
+
+- CMake now owns the required Rust backend and portal builds, installs both
+  under the canonical Astrea runtime root, installs the tracked `astrea-launch`
+  provider, and fails configuration/build when a required component is absent.
+  The service installer validates those installed executables and uses
+  `RequiresMountsFor` for the runtime root.
+- Runtime resolution reports resource-root, backend, launcher, and portal
+  capabilities explicitly. Normal startup requires the backend and launch
+  provider; portal startup requires the backend and never falls back to a
+  checkout `target/*` binary.
+- Desktop-entry identity is derived from canonical XDG application roots,
+  including nested desktop files. MIME defaults and added associations use a
+  literal-section freedesktop parser with `QLockFile` and `QSaveFile`.
+- Persistent worker startup is asynchronous and queues requests while the
+  process starts. The portal uses Tokio async child I/O, bounded stdout/stderr
+  and result-file reads, per-request `Request.Close` cancellation, and a
+  bounded dialog semaphore.
+- Validation completed with 24/24 Debug CTest, 24/24 Release CTest, 41/41 Rust
+  backend tests, 8/8 portal tests, the strengthened static source gate, and a
+  fresh-prefix clean-install harness covering normal and portal self-tests.
+
 ## Validation record
 
 The final qualification report is in
