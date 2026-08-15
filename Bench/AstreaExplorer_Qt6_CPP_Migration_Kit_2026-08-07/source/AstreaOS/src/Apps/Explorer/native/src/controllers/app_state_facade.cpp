@@ -1249,7 +1249,7 @@ bool AppStateFacade::launchOpenWith(const QString &path, const QString &desktopF
     if (m_launchService == nullptr) {
         return false;
     }
-    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(desktopFile);
+    const OpenWithApplication application = m_openWith->applicationForId(desktopFile);
     if (application.desktopFile.isEmpty()) {
         return false;
     }
@@ -1267,7 +1267,9 @@ bool AppStateFacade::setDefaultOpenWith(const QString &path, const QString &desk
     if (mime.isEmpty()) {
         return false;
     }
-    const OpenWithApplication application = OpenWithController::resolveDesktopEntry(desktopFile);
+    const OpenWithApplication application = m_openWith == nullptr
+        ? OpenWithController::resolveDesktopEntry(desktopFile)
+        : m_openWith->applicationForId(desktopFile);
     if (application.id.isEmpty()) {
         return false;
     }

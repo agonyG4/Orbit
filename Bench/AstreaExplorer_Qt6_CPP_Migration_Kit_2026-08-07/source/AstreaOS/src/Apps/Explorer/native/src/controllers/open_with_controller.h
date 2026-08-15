@@ -8,6 +8,7 @@
 
 #include "services/launch_service.h"
 #include "services/mime_apps_service.h"
+#include "services/desktop_application_catalog.h"
 
 #include <memory>
 
@@ -40,11 +41,13 @@ public:
     ~OpenWithController() override;
 
     void setMimeAppsService(Services::MimeAppsService *mimeAppsService);
+    void setCatalog(Services::DesktopApplicationCatalog *catalog);
 
     QVector<OpenWithApplication> applications() const;
     QVariantList applicationList() const;
     QString selectedApplicationId() const;
     OpenWithApplication selectedApplication() const;
+    OpenWithApplication applicationForId(const QString &desktopId) const;
     bool busy() const;
     QString error() const;
 
@@ -66,11 +69,15 @@ signals:
     void launched(const QString &applicationId);
 
 private:
-    static bool mimeMatches(const QStringList &mimeTypes, const QString &mime);
+    static OpenWithApplication fromCatalogEntry(
+        const Services::DesktopApplication &entry,
+        bool isDefault = false);
 
     Services::LaunchService *m_launchService = nullptr;
     std::unique_ptr<Services::MimeAppsService> m_ownedMimeAppsService;
     Services::MimeAppsService *m_mimeAppsService = nullptr;
+    std::unique_ptr<Services::DesktopApplicationCatalog> m_ownedCatalog;
+    Services::DesktopApplicationCatalog *m_catalogService = nullptr;
     QVector<OpenWithApplication> m_applications;
     QString m_selectedApplicationId;
     bool m_busy = false;

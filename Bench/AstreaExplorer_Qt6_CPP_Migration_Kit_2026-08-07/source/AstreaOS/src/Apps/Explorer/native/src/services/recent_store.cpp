@@ -20,8 +20,6 @@
 #include <QUrl>
 #include <QXmlStreamReader>
 
-#include "controllers/open_with_controller.h"
-
 namespace Astrea::Explorer::Native::Backend {
 
 namespace {
@@ -182,7 +180,7 @@ RecentRecord recordFromDesktop(
     const QJsonArray &argv,
     qint64 lastAccessed,
     const QString &source,
-    const OpenWithController::DesktopCatalog *desktopCatalog)
+    const Services::DesktopApplicationCatalog::Snapshot *desktopCatalog)
 {
     QString desktopPath;
     for (const QJsonValue &value : argv) {
@@ -194,8 +192,11 @@ RecentRecord recordFromDesktop(
     }
 
     const QString lookup = desktopPath.isEmpty() ? desktopId : desktopPath;
-    const OpenWithApplication application =
-        OpenWithController::resolveDesktopEntry(lookup, desktopCatalog);
+    if (desktopCatalog == nullptr) {
+        return {};
+    }
+    const Services::DesktopApplication application =
+        Services::DesktopApplicationCatalog::resolve(lookup, *desktopCatalog);
     if (application.desktopFile.isEmpty()) {
         return {};
     }
@@ -358,7 +359,10 @@ QVector<RecentRecord> loadFinder(const QString &path, int limit)
     return records;
 }
 
-QVector<RecentRecord> loadLaunchHistory(const QString &path, int limit)
+QVector<RecentRecord> loadLaunchHistory(
+    const QString &path,
+    int limit,
+    const Services::DesktopApplicationCatalog::Snapshot *desktopCatalog)
 {
     if (path.trimmed().isEmpty() || limit <= 0) {
         return {};
@@ -370,7 +374,6 @@ QVector<RecentRecord> loadLaunchHistory(const QString &path, int limit)
 
     QVector<RecentRecord> records;
     QSet<QString> seenPaths;
-    std::optional<OpenWithController::DesktopCatalog> desktopCatalog;
     scanLaunchLinesReverse(file, [&](const QByteArray &line) -> bool {
         if (seenPaths.size() >= limit || line.isEmpty()) {
             return seenPaths.size() >= limit;
@@ -390,15 +393,12 @@ QVector<RecentRecord> loadLaunchHistory(const QString &path, int limit)
         const qint64 timestamp = objectInteger(object, QStringLiteral("timestamp_ms"), 0);
         RecentRecord record;
         if (kind == QStringLiteral("desktop")) {
-            if (!desktopCatalog.has_value()) {
-                desktopCatalog = OpenWithController::buildDesktopCatalog();
-            }
             record = recordFromDesktop(
                 object.value(QStringLiteral("target")).toString(),
                 object.value(QStringLiteral("argv")).toArray(),
                 timestamp,
                 QStringLiteral("launch"),
-                &*desktopCatalog);
+                desktopCatalog);
         } else {
             record = recordFromPath(
                 object.value(QStringLiteral("target")).toString(),
@@ -475,10 +475,15 @@ QJsonObject recordToObject(const RecentRecord &record)
 
 } // namespace
 
-RecentStore::RecentStore(RecentSourcePaths paths, QObject *parent, Dispatch dispatch)
+RecentStore::RecentStore(
+    RecentSourcePaths paths,
+    QObject *parent,
+    Dispatch dispatch,
+    Services::DesktopApplicationCatalog *catalog)
     : QObject(parent)
     , m_paths(std::move(paths))
     , m_dispatch(std::move(dispatch))
+    , m_catalog(catalog)
 {
     qRegisterMetaType<RecentRecord>();
     qRegisterMetaType<QVector<RecentRecord>>();
@@ -497,12 +502,15 @@ quint64 RecentStore::load()
     m_activeLoadRequest = requestId;
     m_localRecords.clear();
     const RecentSourcePaths paths = m_paths;
+    const Services::DesktopApplicationCatalog::Snapshot catalog = m_catalog == nullptr
+        ? Services::DesktopApplicationCatalog::build()
+        : m_catalog->snapshot();
     const QPointer<RecentStore> target(this);
-    m_dispatch([target, requestId, paths]() {
+    m_dispatch([target, requestId, paths, catalog]() {
         if (!target) {
             return;
         }
-        QVector<RecentRecord> records = loadSources(paths);
+        QVector<RecentRecord> records = loadSources(paths, catalog);
         const quintptr workerThreadId = reinterpret_cast<quintptr>(QThread::currentThreadId());
         QMetaObject::invokeMethod(
             target.data(),
@@ -562,10 +570,15 @@ quint64 RecentStore::persistenceGeneration() const
     return m_persistenceGeneration;
 }
 
-QVector<RecentRecord> RecentStore::loadSources(const RecentSourcePaths &paths)
+QVector<RecentRecord> RecentStore::loadSources(
+    const RecentSourcePaths &paths,
+    const Services::DesktopApplicationCatalog::Snapshot &catalog)
 {
     QVector<RecentRecord> records = loadFinder(paths.finderPath, paths.limit);
-    records += loadLaunchHistory(paths.launchHistoryPath, paths.limit);
+    records += loadLaunchHistory(
+        paths.launchHistoryPath,
+        paths.limit,
+        &catalog);
     records += loadXbel(paths.xbelPath, paths.limit);
     return mergeRecords(records, paths.limit);
 }

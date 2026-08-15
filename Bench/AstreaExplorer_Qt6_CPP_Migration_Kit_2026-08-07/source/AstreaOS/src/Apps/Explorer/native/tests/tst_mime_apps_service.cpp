@@ -53,6 +53,7 @@ private slots:
     void preservesUnrelatedAndMalformedContent();
     void emptyFileRoundTripsThroughFreshService();
     void resolvesDesktopSpecificXdgFilesWithUserPrecedenceAndFallback();
+    void resolvesAllCurrentDesktopComponentsAndBaseMimeTypes();
 };
 
 void MimeAppsServiceTest::readsLiteralMimeKeysAndLists()
@@ -85,7 +86,8 @@ void MimeAppsServiceTest::readsLiteralMimeKeysAndLists()
         QStringList({QStringLiteral("org.example.Pdf.desktop")}));
     QCOMPARE(
         service.associationsForMime(QStringLiteral("text/plain")),
-        QStringList({QStringLiteral("org.example.Editor.desktop")}));
+        QStringList({QStringLiteral("org.example.Editor.desktop"),
+                     QStringLiteral("org.example.Fallback.desktop")}));
 }
 
 void MimeAppsServiceTest::updatesDefaultAndAssociationsAtomically()
@@ -206,7 +208,7 @@ void MimeAppsServiceTest::resolvesDesktopSpecificXdgFilesWithUserPrecedenceAndFa
     systemMime.close();
 
     QVERIFY(QDir().mkpath(paths.configHome));
-    QFile userMime(QDir(paths.configHome).filePath(QStringLiteral("AstreaTest-mimeapps.list")));
+    QFile userMime(QDir(paths.configHome).filePath(QStringLiteral("astreatest-mimeapps.list")));
     QVERIFY(userMime.open(QIODevice::WriteOnly));
     QVERIFY(userMime.write(QByteArrayLiteral(
         "[Default Applications]\n"
@@ -220,13 +222,46 @@ void MimeAppsServiceTest::resolvesDesktopSpecificXdgFilesWithUserPrecedenceAndFa
     MimeAppsService service({}, 5000, paths);
     QCOMPARE(
         service.defaultsForMime(QStringLiteral("text/plain")),
-        QStringList({QStringLiteral("org.system.Viewer.desktop")}));
+        QStringList({QStringLiteral("org.user.Editor.desktop")}));
     QCOMPARE(
         service.associationsForMime(QStringLiteral("text/plain")),
         QStringList({QStringLiteral("org.user.Editor.desktop")}));
     QCOMPARE(
         service.filePath(),
         QDir(paths.configHome).filePath(QStringLiteral("mimeapps.list")));
+}
+
+void MimeAppsServiceTest::resolvesAllCurrentDesktopComponentsAndBaseMimeTypes()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    XdgPaths paths = testPaths(fixture);
+    paths.currentDesktop = QStringLiteral("GNOME:Astrea:GNOME");
+    writeDesktop(paths, QStringLiteral("org.example.Base.desktop"));
+    const QString basePath = QDir(paths.dataHome).filePath(
+        QStringLiteral("applications/org.example.Base.desktop"));
+    QFile base(basePath);
+    QVERIFY(base.open(QIODevice::WriteOnly));
+    QVERIFY(base.write(QByteArrayLiteral(
+        "[Desktop Entry]\nType=Application\nName=Base\nExec=base\nMimeType=text/plain;\n")) > 0);
+    base.close();
+
+    QVERIFY(QDir().mkpath(paths.configHome));
+    QFile astrea(QDir(paths.configHome).filePath(QStringLiteral("astrea-mimeapps.list")));
+    QVERIFY(astrea.open(QIODevice::WriteOnly));
+    QVERIFY(astrea.write(QByteArrayLiteral(
+        "[Added Associations]\ntext/plain=org.example.Base.desktop;\n")) > 0);
+    astrea.close();
+
+    const QStringList names = paths.desktopNames();
+    QCOMPARE(names, QStringList({QStringLiteral("gnome"), QStringLiteral("astrea")}));
+    const QStringList search = paths.mimeAppsSearchPaths();
+    QVERIFY(search.indexOf(QDir(paths.configHome).filePath(QStringLiteral("gnome-mimeapps.list")))
+            < search.indexOf(QDir(paths.configHome).filePath(QStringLiteral("astrea-mimeapps.list"))));
+
+    MimeAppsService service({}, 5000, paths);
+    QCOMPARE(service.associationsForMime(QStringLiteral("text/plain")),
+             QStringList({QStringLiteral("org.example.Base.desktop")}));
 }
 
 QTEST_GUILESS_MAIN(MimeAppsServiceTest)

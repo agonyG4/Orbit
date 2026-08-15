@@ -4,8 +4,15 @@
 #include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 namespace Astrea::Explorer::Native::Services {
+
+struct MimeAppsLocation
+{
+    QString path;
+    bool desktopSpecific = false;
+};
 
 struct XdgPaths
 {
@@ -63,19 +70,36 @@ struct XdgPaths
         return roots;
     }
 
-    QStringList mimeAppsSearchPaths() const
+    QStringList desktopNames() const
     {
-        QStringList paths;
-        const QString desktop = currentDesktop.split(QLatin1Char(':'), Qt::SkipEmptyParts)
-                                    .value(0).trimmed();
-        const auto appendLocation = [&paths, &desktop](const QString &directory) {
+        QStringList names;
+        for (const QString &raw : currentDesktop.split(QLatin1Char(':'), Qt::SkipEmptyParts)) {
+            const QString name = raw.trimmed().toLower();
+            if (!name.isEmpty() && !names.contains(name)) {
+                names.append(name);
+            }
+        }
+        return names;
+    }
+
+    QVector<MimeAppsLocation> mimeAppsSearchLocations() const
+    {
+        QVector<MimeAppsLocation> locations;
+        const QStringList names = desktopNames();
+        const auto appendLocation = [&locations, &names](const QString &directory) {
             if (directory.trimmed().isEmpty()) {
                 return;
             }
-            if (!desktop.isEmpty()) {
-                paths.append(QDir(directory).filePath(desktop + QStringLiteral("-mimeapps.list")));
+            for (const QString &name : names) {
+                locations.append({
+                    QDir(directory).filePath(name + QStringLiteral("-mimeapps.list")),
+                    true,
+                });
             }
-            paths.append(QDir(directory).filePath(QStringLiteral("mimeapps.list")));
+            locations.append({
+                QDir(directory).filePath(QStringLiteral("mimeapps.list")),
+                false,
+            });
         };
         appendLocation(configHome);
         for (const QString &configDir : configDirs) {
@@ -84,6 +108,15 @@ struct XdgPaths
         appendLocation(QDir(dataHome).filePath(QStringLiteral("applications")));
         for (const QString &dataDir : dataDirs) {
             appendLocation(QDir(dataDir).filePath(QStringLiteral("applications")));
+        }
+        return locations;
+    }
+
+    QStringList mimeAppsSearchPaths() const
+    {
+        QStringList paths;
+        for (const MimeAppsLocation &location : mimeAppsSearchLocations()) {
+            paths.append(location.path);
         }
         return paths;
     }

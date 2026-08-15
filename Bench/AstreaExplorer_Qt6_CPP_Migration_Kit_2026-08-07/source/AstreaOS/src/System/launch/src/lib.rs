@@ -15,9 +15,45 @@ const DEFAULT_BOOST_MS: u64 = 3000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum LaunchTarget {
+    File { path: String },
+    Url { url: String },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesktopLaunchContext {
+    pub targets: Vec<LaunchTarget>,
+    pub files: Vec<String>,
+    pub urls: Vec<String>,
+    pub name: Option<String>,
+    pub icon: Option<String>,
+    pub desktop_file: PathBuf,
+}
+
+impl DesktopLaunchContext {
+    fn from_targets(targets: &[LaunchTarget], desktop_file: &Path) -> Self {
+        let mut context = Self {
+            targets: targets.to_vec(),
+            desktop_file: desktop_file.to_path_buf(),
+            ..Self::default()
+        };
+        for target in targets {
+            match target {
+                LaunchTarget::File { path } => context.files.push(expand_home(path)),
+                LaunchTarget::Url { url } => context.urls.push(url.clone()),
+            }
+        }
+        context
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum LaunchRequest {
     Desktop {
         id: String,
+        #[serde(default)]
+        targets: Vec<LaunchTarget>,
     },
     Command {
         command: String,
@@ -189,7 +225,11 @@ pub fn run_launch(request: LaunchRequest) -> Result<LaunchRecord, String> {
     } else if matches!(request, LaunchRequest::Desktop { .. })
         && !(config.allow_nvidia_env && nvidia_available())
     {
-        prefer_desktop_launcher(&mut command);
+        let targets = match &request {
+            LaunchRequest::Desktop { targets, .. } => targets,
+            _ => &[][..],
+        };
+        prefer_desktop_launcher(&mut command, targets);
     } else if config.allow_nvidia_env && nvidia_available() {
         prepend_env(&mut command, nvidia_env_vars());
     }
@@ -246,6 +286,68 @@ pub fn run_launch_via_daemon(request: LaunchRequest) -> Result<LaunchRecord, Str
     }
 }
 
+pub fn parse_cli_request(args: &[String]) -> Result<LaunchRequest, String> {
+    let Some(command) = args.first().map(String::as_str) else {
+        return Err("missing command".into());
+    };
+    match command {
+        "--desktop" => {
+            let id = args
+                .get(1)
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .ok_or_else(|| "--desktop requires an id".to_string())?;
+            let mut targets = Vec::new();
+            let mut index = 2;
+            while index < args.len() {
+                let flag = &args[index];
+                let value = args
+                    .get(index + 1)
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                    .ok_or_else(|| format!("{flag} requires a value"))?;
+                match flag.as_str() {
+                    "--file" => targets.push(LaunchTarget::File { path: value }),
+                    "--url" => {
+                        validate_url(&value)?;
+                        targets.push(LaunchTarget::Url { url: value });
+                    }
+                    _ => return Err(format!("unknown desktop target option: {flag}")),
+                }
+                index += 2;
+            }
+            Ok(LaunchRequest::Desktop { id, targets })
+        }
+        "--command" => exact_single_arg(args, "--command")
+            .map(|command| LaunchRequest::Command { command }),
+        "--argv-json" => {
+            let json = exact_single_arg(args, "--argv-json")?;
+            let argv = serde_json::from_str::<Vec<String>>(&json)
+                .map_err(|err| format!("--argv-json expects a JSON string array: {err}"))?;
+            Ok(LaunchRequest::Argv {
+                argv,
+                working_dir: None,
+            })
+        }
+        "--file" => exact_single_arg(args, "--file").map(|path| LaunchRequest::File { path }),
+        "--url" => {
+            let url = exact_single_arg(args, "--url")?;
+            validate_url(&url)?;
+            Ok(LaunchRequest::Url { url })
+        }
+        "--steam" => exact_single_arg(args, "--steam").map(|uri| LaunchRequest::Steam { uri }),
+        _ => Err("invalid command".into()),
+    }
+}
+
+fn exact_single_arg(args: &[String], flag: &str) -> Result<String, String> {
+    match args {
+        [command, value] if command == flag && !value.is_empty() => Ok(value.clone()),
+        [command] if command == flag => Err(format!("{flag} requires a value")),
+        _ => Err(format!("{flag} accepts exactly one value")),
+    }
+}
+
 pub fn serve_launchd() -> Result<(), String> {
     let path = launchd_socket_path();
     if let Some(parent) = path.parent() {
@@ -285,10 +387,11 @@ fn prepare_socket_path(path: &Path) -> Result<(), String> {
 
 pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
     match request {
-        LaunchRequest::Desktop { id } => {
+        LaunchRequest::Desktop { id, targets } => {
             let path = resolve_desktop_entry(id)
                 .ok_or_else(|| format!("desktop entry not found: {id}"))?;
-            command_from_desktop_file(&path)
+            let context = DesktopLaunchContext::from_targets(targets, &path);
+            command_from_desktop_file_with_context(&path, &context)
         }
         LaunchRequest::Command { command } => Ok(CommandSpec {
             argv: vec!["sh".into(), "-lc".into(), command.clone()],
@@ -339,6 +442,19 @@ pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
 }
 
 pub fn command_from_desktop_file(path: &Path) -> Result<CommandSpec, String> {
+    command_from_desktop_file_with_context(
+        path,
+        &DesktopLaunchContext {
+            desktop_file: path.to_path_buf(),
+            ..DesktopLaunchContext::default()
+        },
+    )
+}
+
+pub fn command_from_desktop_file_with_context(
+    path: &Path,
+    context: &DesktopLaunchContext,
+) -> Result<CommandSpec, String> {
     let entry = parse_desktop_entry(path)?;
     if entry
         .get("Type")
@@ -356,7 +472,13 @@ pub fn command_from_desktop_file(path: &Path) -> Result<CommandSpec, String> {
     let exec = entry
         .get("Exec")
         .ok_or_else(|| "desktop entry has no Exec".to_string())?;
-    let argv = parse_exec_line(exec)?;
+    let mut effective_context = context.clone();
+    if effective_context.desktop_file.as_os_str().is_empty() {
+        effective_context.desktop_file = path.to_path_buf();
+    }
+    effective_context.name = entry.get("Name").cloned();
+    effective_context.icon = entry.get("Icon").cloned();
+    let argv = parse_exec_line_with_context(exec, &effective_context)?;
     if argv.is_empty() {
         return Err("desktop Exec is empty".into());
     }
@@ -370,19 +492,20 @@ pub fn command_from_desktop_file(path: &Path) -> Result<CommandSpec, String> {
     })
 }
 
-/// Parses a Desktop Entry `Exec` string into argv without shell evaluation.
-///
-/// Desktop field codes that need external context (`%f`, `%F`, `%u`, `%U`,
-/// `%i`, `%c`, and `%k`) are intentionally removed instead of expanded.
-/// Literal `%%`, quoting, escaped characters, and explicit quoted empty
-/// arguments are preserved.
 pub fn parse_exec_line(line: &str) -> Result<Vec<String>, String> {
+    parse_exec_line_with_context(line, &DesktopLaunchContext::default())
+}
+
+pub fn parse_exec_line_with_context(
+    line: &str,
+    context: &DesktopLaunchContext,
+) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut chars = line.chars().peekable();
     let mut quote: Option<char> = None;
     let mut arg_started = false;
-    let mut suppress_arg = false;
+    let mut field_code: Option<char> = None;
 
     while let Some(ch) = chars.next() {
         match ch {
@@ -395,34 +518,51 @@ pub fn parse_exec_line(line: &str) -> Result<Vec<String>, String> {
                 arg_started = true;
             }
             '\\' => {
+                if field_code.is_some() {
+                    return Err("desktop field code must be the only field in its argument".into());
+                }
                 if let Some(next) = chars.next() {
                     current.push(next);
                     arg_started = true;
-                    suppress_arg = false;
                 }
             }
             '%' => {
-                arg_started = true;
                 match chars.next() {
                     Some('%') => {
-                        current.push('%');
-                        suppress_arg = false;
-                    }
-                    Some(code) if "fFuUick".contains(code) => {
-                        if current.is_empty() {
-                            suppress_arg = true;
+                        if field_code.is_some() {
+                            return Err("desktop field code must be the only field in its argument".into());
                         }
+                        current.push('%');
+                        arg_started = true;
                     }
-                    Some(_) | None => {}
+                    Some(code @ ('f' | 'F' | 'u' | 'U' | 'i' | 'c' | 'k')) => {
+                        if field_code.is_some() || !current.is_empty() {
+                            return Err(format!(
+                                "desktop field code %{code} must be the only field in its argument"
+                            ));
+                        }
+                        field_code = Some(code);
+                        arg_started = true;
+                    }
+                    Some(code) => return Err(format!("unknown desktop field code %{code}")),
+                    None => return Err("desktop field code is missing a code".into()),
                 }
             }
             ch if ch.is_whitespace() && quote.is_none() => {
-                finish_exec_arg(&mut args, &mut current, &mut arg_started, &mut suppress_arg);
+                finish_exec_arg_with_context(
+                    &mut args,
+                    &mut current,
+                    &mut arg_started,
+                    &mut field_code,
+                    context,
+                )?;
             }
             _ => {
+                if field_code.is_some() {
+                    return Err("desktop field code must be the only field in its argument".into());
+                }
                 current.push(ch);
                 arg_started = true;
-                suppress_arg = false;
             }
         }
     }
@@ -430,23 +570,80 @@ pub fn parse_exec_line(line: &str) -> Result<Vec<String>, String> {
     if quote.is_some() {
         return Err("unterminated quote in Exec".into());
     }
-    finish_exec_arg(&mut args, &mut current, &mut arg_started, &mut suppress_arg);
+    finish_exec_arg_with_context(
+        &mut args,
+        &mut current,
+        &mut arg_started,
+        &mut field_code,
+        context,
+    )?;
     Ok(args)
 }
 
-fn finish_exec_arg(
+fn finish_exec_arg_with_context(
     args: &mut Vec<String>,
     current: &mut String,
     arg_started: &mut bool,
-    suppress_arg: &mut bool,
-) {
-    if *arg_started && !*suppress_arg {
+    field_code: &mut Option<char>,
+    context: &DesktopLaunchContext,
+) -> Result<(), String> {
+    if let Some(code) = field_code.take() {
+        args.extend(expand_field_code(code, context));
+    } else if *arg_started {
         args.push(std::mem::take(current));
-    } else {
-        current.clear();
     }
+    current.clear();
     *arg_started = false;
-    *suppress_arg = false;
+    Ok(())
+}
+
+fn expand_field_code(code: char, context: &DesktopLaunchContext) -> Vec<String> {
+    match code {
+        'f' => context.files.first().cloned().into_iter().collect(),
+        'F' => context.files.clone(),
+        'u' => uri_targets(context).first().cloned().into_iter().collect(),
+        'U' => uri_targets(context),
+        'i' => context
+            .icon
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(|value| vec!["--icon".into(), value.into()])
+            .unwrap_or_default(),
+        'c' => context
+            .name
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(|value| vec![value.into()])
+            .unwrap_or_default(),
+        'k' => context
+            .desktop_file
+            .to_str()
+            .filter(|value| !value.is_empty())
+            .map(|value| vec![value.into()])
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn uri_targets(context: &DesktopLaunchContext) -> Vec<String> {
+    if !context.targets.is_empty() {
+        return context
+            .targets
+            .iter()
+            .map(|target| match target {
+                LaunchTarget::File { path } => format!("file://{}", path.replace(' ', "%20")),
+                LaunchTarget::Url { url } => url.clone(),
+            })
+            .collect();
+    }
+    let mut targets = context.urls.clone();
+    targets.extend(
+        context
+            .files
+            .iter()
+            .map(|path| format!("file://{}", path.replace(' ', "%20"))),
+    );
+    targets
 }
 
 pub fn matching_rule<'a>(
@@ -456,7 +653,7 @@ pub fn matching_rule<'a>(
     command_text: &str,
 ) -> Option<&'a Rule> {
     let desktop_id = match request {
-        LaunchRequest::Desktop { id } => Some(
+        LaunchRequest::Desktop { id, .. } => Some(
             Path::new(id)
                 .file_name()
                 .and_then(|v| v.to_str())
@@ -633,16 +830,23 @@ fn apply_rule(
     }
 }
 
-fn prefer_desktop_launcher(command: &mut CommandSpec) {
+fn prefer_desktop_launcher(command: &mut CommandSpec, targets: &[LaunchTarget]) {
     let Some(path) = command.desktop_file.as_ref() else {
         return;
     };
     if command_available("gio") {
-        command.argv = vec![
+        let mut argv = vec![
             "gio".into(),
             "launch".into(),
             path.to_string_lossy().to_string(),
         ];
+        for target in targets {
+            match target {
+                LaunchTarget::File { path } => argv.push(expand_home(path)),
+                LaunchTarget::Url { url } => argv.push(url.clone()),
+            }
+        }
+        command.argv = argv;
         command.working_dir = None;
     }
 }
@@ -911,11 +1115,37 @@ fn resolve_desktop_entry(id: &str) -> Option<PathBuf> {
     } else {
         format!("{id}.desktop")
     };
-    application_dirs()
-        .into_iter()
-        .chain([xdg_desktop_dir()])
-        .map(|dir| dir.join(&file_name))
-        .find(|path| path.is_file())
+    for dir in application_dirs().into_iter().chain([xdg_desktop_dir()]) {
+        let direct = dir.join(&file_name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        let root = dir;
+        let mut pending = vec![root.clone()];
+        while let Some(current) = pending.pop() {
+            let Ok(entries) = fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|value| value.to_str()) != Some("desktop") {
+                    continue;
+                }
+                let relative = path.strip_prefix(&root).ok()?;
+                let canonical = relative
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "-");
+                if canonical == file_name {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn application_dirs() -> Vec<PathBuf> {
@@ -1196,7 +1426,7 @@ fn request_kind(request: &LaunchRequest) -> &'static str {
 
 fn request_target(request: &LaunchRequest) -> &str {
     match request {
-        LaunchRequest::Desktop { id } => id,
+        LaunchRequest::Desktop { id, .. } => id,
         LaunchRequest::Command { command } => command,
         LaunchRequest::Argv { argv, .. } => argv.first().map(String::as_str).unwrap_or(""),
         LaunchRequest::File { path } => path,
@@ -1322,4 +1552,3 @@ mod launch_spawn_tests {
         assert_eq!(normalize_launch_pid(1234), Some(1234));
     }
 }
-

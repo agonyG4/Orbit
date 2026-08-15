@@ -140,6 +140,8 @@ add_library(astrea_explorer_native_operations STATIC
     src/services/desktop_file_id.h
     src/services/desktop_file_id.cpp
     src/services/xdg_paths.h
+    src/services/desktop_application_catalog.h
+    src/services/desktop_application_catalog.cpp
     src/services/mime_apps_service.h
     src/services/mime_apps_service.cpp
     src/services/wallpaper_service.h
@@ -504,7 +506,19 @@ target_link_libraries(tst_launch_service PRIVATE
     astrea_explorer_native_launch
 )
 
+add_dependencies(tst_launch_service astrea_explorer_rust_components)
+target_compile_definitions(tst_launch_service PRIVATE
+    ASTREA_LAUNCH_ARTIFACT="${ASTREA_EXPLORER_LAUNCH_ARTIFACT}")
+
 add_test(NAME launch_service COMMAND tst_launch_service)
+
+add_test(
+    NAME launch_provider
+    COMMAND "${ASTREA_CARGO_EXECUTABLE}" test
+        --manifest-path "${ASTREA_EXPLORER_LAUNCH_ROOT}/Cargo.toml"
+        --offline)
+set_tests_properties(launch_provider PROPERTIES
+    WORKING_DIRECTORY "${ASTREA_EXPLORER_LAUNCH_ROOT}")
 
 qt_add_executable(tst_recent_controller
     tests/tst_recent_controller.cpp
@@ -652,7 +666,10 @@ install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Features/Files"
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/System/i18n"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/System"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
-        PATTERN "*.json")
+        PATTERN "*.json"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "*.pyo" EXCLUDE)
 install(PROGRAMS "${ASTREA_EXPLORER_BACKEND_ARTIFACT}"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core/bridge/apps"
     RENAME explorer_backend)
