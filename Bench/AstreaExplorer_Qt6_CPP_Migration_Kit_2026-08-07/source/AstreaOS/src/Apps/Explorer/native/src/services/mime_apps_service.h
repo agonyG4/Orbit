@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "services/desktop_application_catalog.h"
 #include "services/xdg_paths.h"
 
 namespace Astrea::Explorer::Native::Services {
@@ -18,6 +19,7 @@ public:
     QStringList defaultsForMime(const QString &mime) const;
     QStringList associationsForMime(const QString &mime) const;
     bool setDefault(const QString &mime, const QString &desktopId) const;
+    void setCatalog(const DesktopApplicationCatalog *catalog);
 
     QString filePath() const;
 
@@ -30,6 +32,8 @@ private:
     QStringList effectiveAssociations(const QString &mime) const;
     QStringList validDesktopIds(const QStringList &ids) const;
     bool isValidDesktopId(const QString &desktopId) const;
+    const DesktopApplicationCatalog::Snapshot &catalog() const;
+    static bool mimeMatches(const QStringList &mimeTypes, const QString &mime);
     QStringList searchPaths() const;
     bool updateValue(
         QStringList *lines,
@@ -41,6 +45,9 @@ private:
     int m_lockTimeoutMs = 5000;
     XdgPaths m_paths;
     bool m_filePathWasExplicit = false;
+    const DesktopApplicationCatalog *m_catalogService = nullptr;
+    mutable DesktopApplicationCatalog::Snapshot m_fallbackCatalog;
+    mutable bool m_fallbackCatalogReady = false;
 };
 
 } // namespace Astrea::Explorer::Native::Services

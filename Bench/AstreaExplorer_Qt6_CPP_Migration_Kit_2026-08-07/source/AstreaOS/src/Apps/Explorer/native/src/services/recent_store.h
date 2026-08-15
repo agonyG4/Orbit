@@ -11,6 +11,7 @@
 #include <QVector>
 
 #include "backend/backend_types.h"
+#include "services/desktop_application_catalog.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -39,7 +40,8 @@ public:
     explicit RecentStore(
         RecentSourcePaths paths,
         QObject *parent = nullptr,
-        Dispatch dispatch = {});
+        Dispatch dispatch = {},
+        Services::DesktopApplicationCatalog *catalog = nullptr);
 
     quint64 load();
     void cancelLoad(quint64 requestId);
@@ -69,7 +71,9 @@ private:
         QVector<RecentRecord> records;
     };
 
-    static QVector<RecentRecord> loadSources(const RecentSourcePaths &paths);
+    static QVector<RecentRecord> loadSources(
+        const RecentSourcePaths &paths,
+        const Services::DesktopApplicationCatalog::Snapshot &catalog);
     static QVector<RecentRecord> mergeRecords(
         const QVector<RecentRecord> &records,
         int limit);
@@ -95,6 +99,7 @@ private:
 
     RecentSourcePaths m_paths;
     Dispatch m_dispatch;
+    Services::DesktopApplicationCatalog *m_catalog = nullptr;
     QVector<RecentRecord> m_records;
     QHash<QString, RecentRecord> m_localRecords;
     quint64 m_nextLoadRequest = 0;

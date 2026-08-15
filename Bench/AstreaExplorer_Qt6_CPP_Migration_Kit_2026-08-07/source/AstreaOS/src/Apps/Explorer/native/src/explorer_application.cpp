@@ -33,6 +33,7 @@
 #include "runtime/explorer_runtime_paths.h"
 #include "services/clipboard_service.h"
 #include "services/directory_watch_service.h"
+#include "services/desktop_application_catalog.h"
 #include "services/file_operation_service.h"
 #include "services/filesystem_service.h"
 #include "services/launch_service.h"
@@ -182,7 +183,9 @@ int ExplorerApplication::run(int argc, char **argv)
     LaunchService launchService(
         runtimePaths.launcherProgram,
         runtimePaths.windowsRunnerProgram);
+    DesktopApplicationCatalog applicationCatalog({}, &application);
     MimeAppsService mimeApps;
+    mimeApps.setCatalog(&applicationCatalog);
     FileOperationService fileOperationService(&backendClient, &application);
     FilesystemService filesystemService(&backendClient, &application);
     FileOperationsController fileOperations(
@@ -194,6 +197,7 @@ int ExplorerApplication::run(int argc, char **argv)
         &application,
         initialSettings.autoMountDeviceIdsJson);
     OpenWithController openWith(&launchService, &application);
+    openWith.setCatalog(&applicationCatalog);
     openWith.setMimeAppsService(&mimeApps);
     WallpaperService wallpaper(&application);
     PortalController portal(&application);
@@ -210,7 +214,8 @@ int ExplorerApplication::run(int argc, char **argv)
     recentSources.xbelPath = QDir(QDir::homePath()).filePath(
         QStringLiteral(".local/share/recently-used.xbel"));
     recentSources.limit = 60;
-    RecentStore recentStore(recentSources, &application);
+    RecentStore recentStore(recentSources, &application, {}, &applicationCatalog);
+    applicationCatalog.discover();
     RecentController recentController(&recentStore, &application);
     navigation.setRecentController(&recentController, recentSources);
     SelectionController selection(&directoryModel, &application);

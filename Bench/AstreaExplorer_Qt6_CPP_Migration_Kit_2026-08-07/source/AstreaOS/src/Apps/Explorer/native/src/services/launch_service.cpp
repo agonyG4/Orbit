@@ -38,12 +38,35 @@ LaunchSpec LaunchService::desktopLaunch(
     const QString &desktopFile,
     const QString &targetPath) const
 {
-    if (desktopFile.isEmpty() || targetPath.isEmpty()) {
+    return desktopLaunch(desktopFile, {targetPath});
+}
+
+LaunchSpec LaunchService::desktopLaunch(
+    const QString &desktopFile,
+    const QStringList &targetFiles,
+    const QStringList &targetUrls) const
+{
+    if (desktopFile.isEmpty()) {
         return {};
     }
-    return makeSpec(
-        m_astreaLaunchProgram,
-        {QStringLiteral("--desktop"), desktopFile, QStringLiteral("--file"), targetPath});
+    QStringList arguments {QStringLiteral("--desktop"), desktopFile};
+    int targetCount = 0;
+    for (const QString &path : targetFiles) {
+        if (!path.isEmpty()) {
+            arguments << QStringLiteral("--file") << path;
+            ++targetCount;
+        }
+    }
+    for (const QString &url : targetUrls) {
+        if (!url.isEmpty()) {
+            arguments << QStringLiteral("--url") << url;
+            ++targetCount;
+        }
+    }
+    if (targetCount == 0) {
+        return {};
+    }
+    return makeSpec(m_astreaLaunchProgram, arguments);
 }
 
 LaunchSpec LaunchService::windowsLaunch(const QString &path) const

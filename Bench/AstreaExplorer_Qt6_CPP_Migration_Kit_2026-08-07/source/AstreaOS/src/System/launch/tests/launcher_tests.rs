@@ -2,64 +2,114 @@ use std::fs;
 use std::path::Path;
 
 use astrea_launch::{
-    LaunchConfig, LaunchRequest, Rule, command_from_desktop_file, extract_steam_appid,
-    matching_rule, parse_exec_line,
+    DesktopLaunchContext, LaunchConfig, LaunchRequest, LaunchTarget, Rule,
+    command_from_desktop_file, command_from_desktop_file_with_context, extract_steam_appid,
+    matching_rule, parse_cli_request, parse_exec_line_with_context,
 };
 
 #[test]
-fn parses_desktop_exec_without_field_codes() {
-    let args = parse_exec_line(r#"env FOO=bar "my app" --open %U --literal %% --name=%c"#)
-        .expect("exec line should parse");
+fn expands_desktop_exec_field_codes_against_context() {
+    let context = DesktopLaunchContext {
+        targets: vec![
+            LaunchTarget::File {
+                path: "/tmp/one file.txt".into(),
+            },
+            LaunchTarget::File {
+                path: "/tmp/two.txt".into(),
+            },
+            LaunchTarget::Url {
+                url: "https://example.test/item".into(),
+            },
+        ],
+        files: vec!["/tmp/one file.txt".into(), "/tmp/two.txt".into()],
+        urls: vec!["https://example.test/item".into()],
+        name: Some("Example Editor".into()),
+        icon: Some("accessories-text-editor".into()),
+        desktop_file: "/tmp/example.desktop".into(),
+    };
+    let args = parse_exec_line_with_context(
+        r#"editor %F --url %U %i %c %k %%"#,
+        &context,
+    )
+    .expect("exec line should parse");
 
     assert_eq!(
         args,
         vec![
-            "env",
-            "FOO=bar",
-            "my app",
-            "--open",
-            "--literal",
+            "editor",
+            "/tmp/one file.txt",
+            "/tmp/two.txt",
+            "--url",
+            "file:///tmp/one%20file.txt",
+            "file:///tmp/two.txt",
+            "https://example.test/item",
+            "--icon",
+            "accessories-text-editor",
+            "Example Editor",
+            "/tmp/example.desktop",
             "%",
-            "--name=",
         ]
     );
 }
 
 #[test]
-fn parses_desktop_exec_field_code_edge_cases() {
-    let args = parse_exec_line(r#"app --file=%f "%u" escaped\ space %% "quoted arg" --name=%c"#)
-        .expect("exec line should parse");
-
-    assert_eq!(
-        args,
-        vec![
-            "app",
-            "--file=",
-            "escaped space",
-            "%",
-            "quoted arg",
-            "--name=",
-        ]
-    );
+fn rejects_unknown_or_embedded_desktop_field_codes() {
+    assert!(parse_exec_line_with_context(
+        "editor --name=%c",
+        &DesktopLaunchContext::default()
+    )
+    .is_err());
+    assert!(parse_exec_line_with_context(
+        "editor %x",
+        &DesktopLaunchContext::default()
+    )
+    .is_err());
 }
 
 #[test]
-fn parses_desktop_exec_empty_args_and_metadata_field_codes() {
-    let args =
-        parse_exec_line(r#"app "" "escaped \"quote\"" %i %c %k --icon=%i --name=%c --path=%k"#)
-            .expect("exec line should parse");
+fn desktop_command_keeps_ordered_targets() {
+    let dir = std::env::temp_dir().join(format!("astrea-launch-context-{}", std::process::id()));
+    let desktop = dir.join("example.desktop");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        &desktop,
+        "[Desktop Entry]\nType=Application\nName=Example\nIcon=example\nExec=example %F %U %i %c %k\n",
+    )
+    .unwrap();
 
+    let command = command_from_desktop_file_with_context(
+        &desktop,
+        &DesktopLaunchContext {
+            targets: vec![
+                LaunchTarget::File {
+                    path: "/tmp/one".into(),
+                },
+                LaunchTarget::File {
+                    path: "/tmp/two".into(),
+                },
+                LaunchTarget::Url {
+                    url: "https://example.test/item".into(),
+                },
+            ],
+            files: vec!["/tmp/one".into(), "/tmp/two".into()],
+            urls: vec!["https://example.test/item".into()],
+            name: Some("Example".into()),
+            icon: Some("example".into()),
+            desktop_file: desktop.clone(),
+        },
+    )
+    .expect("desktop command");
     assert_eq!(
-        args,
+        command.argv,
         vec![
-            "app",
-            "",
-            "escaped \"quote\"",
-            "--icon=",
-            "--name=",
-            "--path=",
+            "example".to_string(), "/tmp/one".to_string(), "/tmp/two".to_string(),
+            "file:///tmp/one".to_string(), "file:///tmp/two".to_string(),
+            "https://example.test/item".to_string(), "--icon".to_string(),
+            "example".to_string(), "Example".to_string(), desktop.to_string_lossy().to_string()
         ]
     );
+
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -113,7 +163,8 @@ fn matches_rules_by_desktop_executable_command_and_steam_appid() {
         matching_rule(
             &config,
             &LaunchRequest::Desktop {
-                id: "steam.desktop".into()
+                id: "steam.desktop".into(),
+                targets: Vec::new(),
             },
             Some("steam"),
             ""
@@ -169,10 +220,21 @@ fn extracts_steam_appid_from_supported_urls() {
 fn serializes_launch_requests_for_daemon_protocol() {
     let request = LaunchRequest::Desktop {
         id: "org.gnome.Nautilus".into(),
+        targets: vec![
+            LaunchTarget::File {
+                path: "/tmp/one file.txt".into(),
+            },
+            LaunchTarget::Url {
+                url: "https://example.test/item".into(),
+            },
+        ],
     };
     let text = serde_json::to_string(&request).expect("request json");
 
-    assert_eq!(text, r#"{"kind":"desktop","id":"org.gnome.Nautilus"}"#);
+    assert_eq!(
+        text,
+        r#"{"kind":"desktop","id":"org.gnome.Nautilus","targets":[{"kind":"file","path":"/tmp/one file.txt"},{"kind":"url","url":"https://example.test/item"}]}"#
+    );
     assert_eq!(
         serde_json::from_str::<LaunchRequest>(&text).expect("request parse"),
         request
@@ -193,3 +255,28 @@ fn serializes_launch_requests_for_daemon_protocol() {
     );
 }
 
+#[test]
+fn parses_legacy_desktop_request_without_targets() {
+    let request: LaunchRequest =
+        serde_json::from_str(r#"{"kind":"desktop","id":"org.gnome.Nautilus"}"#)
+            .expect("legacy request parse");
+    assert_eq!(
+        request,
+        LaunchRequest::Desktop {
+            id: "org.gnome.Nautilus".into(),
+            targets: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn rejects_trailing_or_unknown_cli_arguments() {
+    assert!(parse_cli_request(&vec!["--file".into(), "/tmp/a".into(), "extra".into()]).is_err());
+    assert!(parse_cli_request(&vec![
+        "--desktop".into(),
+        "org.example.Editor.desktop".into(),
+        "--unknown".into(),
+        "value".into(),
+    ])
+    .is_err());
+}

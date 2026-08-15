@@ -1,51 +1,28 @@
 use astrea_launch::{
-    LaunchRequest, config_path, default_config_text, ensure_default_config, history_path,
-    launchd_socket_path, load_config, read_history, run_launch_via_daemon, serve_launchd,
+    config_path, default_config_text, ensure_default_config, history_path,
+    launchd_socket_path, load_config, parse_cli_request, read_history, run_launch_via_daemon,
+    serve_launchd,
 };
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let result = match args.next().as_deref() {
-        Some("--desktop") => args
-            .next()
-            .map(|id| run_launch_via_daemon(LaunchRequest::Desktop { id }))
-            .unwrap_or_else(|| Err("--desktop requires an id".into())),
-        Some("--command") => args
-            .next()
-            .map(|command| run_launch_via_daemon(LaunchRequest::Command { command }))
-            .unwrap_or_else(|| Err("--command requires a command string".into())),
-        Some("--argv-json") => args
-            .next()
-            .map(|json| match serde_json::from_str::<Vec<String>>(&json) {
-                Ok(argv) => run_launch_via_daemon(LaunchRequest::Argv {
-                    argv,
-                    working_dir: None,
-                }),
-                Err(err) => Err(format!("--argv-json expects a JSON string array: {err}")),
-            })
-            .unwrap_or_else(|| Err("--argv-json requires a JSON array".into())),
-        Some("--file") => args
-            .next()
-            .map(|path| run_launch_via_daemon(LaunchRequest::File { path }))
-            .unwrap_or_else(|| Err("--file requires a path".into())),
-        Some("--url") => args
-            .next()
-            .map(|url| run_launch_via_daemon(LaunchRequest::Url { url }))
-            .unwrap_or_else(|| Err("--url requires a URL".into())),
-        Some("--steam") => args
-            .next()
-            .map(|uri| run_launch_via_daemon(LaunchRequest::Steam { uri }))
-            .unwrap_or_else(|| Err("--steam requires a Steam URI".into())),
-        Some("daemon") | Some("launchd") => serve_launchd().map(|_| empty_record()),
-        Some("doctor") => {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
+        Some("daemon") | Some("launchd") if args.len() == 1 => {
+            serve_launchd().map(|_| empty_record())
+        }
+        Some("doctor") if args.len() == 1 => {
             doctor();
             Ok(empty_record())
         }
-        Some("history") => {
+        Some("history") if args.len() == 1 => {
             for line in read_history(40) {
                 println!("{line}");
             }
             Ok(empty_record())
+        }
+        Some("--desktop") | Some("--command") | Some("--argv-json") | Some("--file")
+        | Some("--url") | Some("--steam") => {
+            parse_cli_request(&args).and_then(run_launch_via_daemon)
         }
         _ => {
             usage();
@@ -110,7 +87,7 @@ fn doctor() {
 
 fn usage() {
     eprintln!("Usage:");
-    eprintln!("  astrea-launch --desktop <desktop-id>");
+    eprintln!("  astrea-launch --desktop <desktop-id> [--file <path>]... [--url <uri>]...");
     eprintln!("  astrea-launch --command <cmd>");
     eprintln!("  astrea-launch --argv-json '[\"program\",\"arg\"]'");
     eprintln!("  astrea-launch --file <path>");
@@ -132,4 +109,3 @@ fn empty_record() -> astrea_launch::LaunchRecord {
         detail: String::new(),
     }
 }
-
