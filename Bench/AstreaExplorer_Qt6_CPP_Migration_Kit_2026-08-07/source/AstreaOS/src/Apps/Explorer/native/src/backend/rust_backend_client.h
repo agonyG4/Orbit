@@ -86,6 +86,7 @@ private:
     struct PendingRequest
     {
         RequestKind kind = RequestKind::List;
+        int streamedProgressCount = 0;
     };
 
     QStringList listArguments(const ListRequest &request) const;
@@ -109,6 +110,14 @@ private:
         const QByteArray &payload,
         BackendError *error,
         QVector<FileOperationProgress> *progresses) const;
+    bool decodeFileOperationProgress(
+        BackendRequestId requestId,
+        const QJsonObject &object,
+        FileOperationProgress *progress,
+        BackendError *error) const;
+    void handleStreamed(
+        BackendRequestId requestId,
+        const QByteArray &payload);
     UtilityResult decodeUtility(
         BackendRequestId requestId,
         const QByteArray &payload,

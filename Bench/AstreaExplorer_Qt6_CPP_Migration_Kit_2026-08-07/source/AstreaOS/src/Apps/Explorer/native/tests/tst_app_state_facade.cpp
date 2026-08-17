@@ -1,4 +1,5 @@
 #include <functional>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -9,6 +10,7 @@
 #include "controllers/selection_controller.h"
 #include "models/directory_model.h"
 #include "services/directory_watch_service.h"
+#include "services/filesystem_service.h"
 #include "services/recent_store.h"
 #include "services/settings_service.h"
 
@@ -22,12 +24,14 @@ class AppStateFacadeTest final : public QObject
 private slots:
     void exposesPersistedSettingsAndNavigationOptions();
     void writesSettingsThroughCompatibilityProperties();
+    void persistsUnifiedFavoriteOrder();
     void exposesCoreQmlContract();
     void exposesResolverAndDialogCompatibility();
     void propagatesNavigationAndBackendFailure();
     void preservesSelectionAcrossModelRefresh();
     void delegatesQmlModelMutationsToNativeBoundary();
     void routesRecentOperationsToNativeBoundary();
+    void retainsSelectionWhenDeleteFails();
 };
 
 struct FacadeFixture
@@ -38,6 +42,15 @@ struct FacadeFixture
     NavigationController navigation {&client, &model, &watcher};
     SelectionController selection {&model};
 };
+
+DirectoryEntry facadeSelectionEntry(const QString &name, const QString &path)
+{
+    DirectoryEntry entry;
+    entry.fileName = name;
+    entry.filePath = path;
+    entry.fileUrl = QUrl::fromLocalFile(path);
+    return entry;
+}
 
 void AppStateFacadeTest::exposesPersistedSettingsAndNavigationOptions()
 {
@@ -115,6 +128,39 @@ void AppStateFacadeTest::writesSettingsThroughCompatibilityProperties()
     QCOMPARE(loaded.autoMountDeviceIdsJson, QStringLiteral("[\"usb-1\"]"));
     QCOMPARE(loaded.sidebarFavoritesJson, QStringLiteral("[\"/fixture\"]"));
     QCOMPARE(loaded.sidebarHiddenDefaultFavoritesJson, QStringLiteral("[\"/fixture/Hidden\"]"));
+}
+
+void AppStateFacadeTest::persistsUnifiedFavoriteOrder()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    SettingsService settings(QDir(directory.path()).filePath(QStringLiteral("explorer.conf")));
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        &settings);
+
+    facade.setSidebarFavoritesJson(QStringLiteral(
+        "[{\"path\":\"/fixture/one\",\"label\":\"One\"},"
+        "{\"path\":\"/fixture/two\",\"label\":\"Two\"}]"));
+    QCOMPARE(
+        facade.sidebarFavorites().constFirst().toMap().value(QStringLiteral("path")).toString(),
+        QStringLiteral("/fixture/one"));
+
+    facade.moveSidebarFavorite(QStringLiteral("/fixture/two"), 0);
+
+    const QJsonDocument persisted = QJsonDocument::fromJson(
+        settings.load().sidebarFavoritesJson.toUtf8());
+    QVERIFY(persisted.isArray());
+    QCOMPARE(
+        persisted.array().at(0).toObject().value(QStringLiteral("path")).toString(),
+        QStringLiteral("/fixture/two"));
+    QCOMPARE(
+        facade.sidebarFavorites().constFirst().toMap().value(QStringLiteral("path")).toString(),
+        QStringLiteral("/fixture/two"));
 }
 
 void AppStateFacadeTest::exposesCoreQmlContract()
@@ -322,6 +368,39 @@ void AppStateFacadeTest::routesRecentOperationsToNativeBoundary()
     facade.setDialogActive(true);
     facade.recordRecentAccess(QStringLiteral("/fixture/other.txt"), false, QString());
     QCOMPARE(recent.currentEntries().size(), 1);
+}
+
+void AppStateFacadeTest::retainsSelectionWhenDeleteFails()
+{
+    FacadeFixture fixture;
+    QVERIFY(fixture.model.applyEntries(
+        {facadeSelectionEntry(QStringLiteral("item.txt"), QStringLiteral("/fixture/item.txt"))},
+        1));
+    fixture.selection.selectByPath(QStringLiteral("/fixture/item.txt"));
+    FilesystemService filesystem(&fixture.client);
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &filesystem);
+
+    facade.deleteSelected();
+    fixture.client.failRequest(1, QStringLiteral("permission_denied"), QStringLiteral("denied"));
+    QTRY_COMPARE(fixture.selection.selectedPaths(), QStringList({QStringLiteral("/fixture/item.txt")}));
+
+    facade.deleteSelected();
+    UtilityResult result;
+    result.requestId = 2;
+    result.operation = QStringLiteral("trash");
+    result.ok = true;
+    fixture.client.completeUtility(2, result);
+    QTRY_VERIFY(fixture.selection.selectedPaths().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

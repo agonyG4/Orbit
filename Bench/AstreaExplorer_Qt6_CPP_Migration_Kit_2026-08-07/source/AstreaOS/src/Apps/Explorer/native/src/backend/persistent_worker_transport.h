@@ -33,6 +33,7 @@ private:
     {
         QStringList arguments;
         QTimer *timeout = nullptr;
+        QByteArray streamedPayload;
     };
 
     QString resolveBackendProgram() const;

@@ -11,6 +11,7 @@ class SelectionController final : public QObject
     Q_OBJECT
     Q_PROPERTY(QString selectedFile READ selectedFile NOTIFY selectedFileChanged)
     Q_PROPERTY(QStringList selectedFiles READ selectedFiles NOTIFY selectedFilesChanged)
+    Q_PROPERTY(QStringList selectedPaths READ selectedPaths NOTIFY selectedPathsChanged)
     Q_PROPERTY(int lastSelectedIndex READ lastSelectedIndex NOTIFY lastSelectedIndexChanged)
 
 public:
@@ -18,12 +19,16 @@ public:
 
     QString selectedFile() const;
     QStringList selectedFiles() const;
+    QStringList selectedPaths() const;
     int lastSelectedIndex() const;
 
     Q_INVOKABLE bool isSelected(const QString &name) const;
+    Q_INVOKABLE bool isPathSelected(const QString &path) const;
     Q_INVOKABLE void clearSelection();
+    Q_INVOKABLE void removePaths(const QStringList &paths);
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void selectByName(const QString &name);
+    Q_INVOKABLE void selectByPath(const QString &path);
     Q_INVOKABLE void handleSelection(
         const QString &name,
         int index,
@@ -34,6 +39,7 @@ public:
 signals:
     void selectedFileChanged();
     void selectedFilesChanged();
+    void selectedPathsChanged();
     void lastSelectedIndexChanged();
     void selectionChanged();
 

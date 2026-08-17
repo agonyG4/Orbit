@@ -682,7 +682,8 @@ bool NavigationController::isRemotePath(const QString &path)
         return result;
     }();
 
-    if (cleanPath == QStringLiteral("recent://")) {
+    if (cleanPath == QStringLiteral("recent://")
+        || cleanPath == QStringLiteral("trash://")) {
         return false;
     }
 

@@ -32,6 +32,7 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString networkRootPath READ networkRootPath CONSTANT)
     Q_PROPERTY(QString trashFilesPath READ trashFilesPath CONSTANT)
     Q_PROPERTY(QString trashInfoPath READ trashInfoPath CONSTANT)
+    Q_PROPERTY(QString trashVirtualPath READ trashVirtualPath CONSTANT)
     Q_PROPERTY(QString recentVirtualPath READ recentVirtualPath CONSTANT)
     Q_PROPERTY(bool isPortalDialog READ isPortalDialog CONSTANT)
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
@@ -48,6 +49,7 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString searchQuery READ searchQuery WRITE setSearchQuery NOTIFY searchStateChanged)
     Q_PROPERTY(QString selectedFile READ selectedFile WRITE setSelectedFile NOTIFY selectedFileChanged)
     Q_PROPERTY(QStringList selectedFiles READ selectedFiles NOTIFY selectedFilesChanged)
+    Q_PROPERTY(QStringList selectedPaths READ selectedPaths NOTIFY selectedPathsChanged)
     Q_PROPERTY(int lastSelectedIndex READ lastSelectedIndex NOTIFY lastSelectedIndexChanged)
     Q_PROPERTY(int fileModelRevision READ fileModelRevision NOTIFY fileModelRevisionChanged)
     Q_PROPERTY(bool fileModelFilling READ fileModelFilling NOTIFY loadingDirChanged)
@@ -83,6 +85,8 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(int fileOperationDoneCount READ fileOperationDoneCount NOTIFY fileOperationStateChanged)
     Q_PROPERTY(int fileOperationTotalCount READ fileOperationTotalCount NOTIFY fileOperationStateChanged)
     Q_PROPERTY(QString fileOperationMode READ fileOperationMode NOTIFY fileOperationStateChanged)
+    Q_PROPERTY(QString fileOperationState READ fileOperationState NOTIFY fileOperationStateChanged)
+    Q_PROPERTY(QVariantList fileOperationItems READ fileOperationItems NOTIFY fileOperationStateChanged)
     Q_PROPERTY(bool pasteConflictVisible READ pasteConflictVisible NOTIFY pasteConflictStateChanged)
     Q_PROPERTY(QVariantList pasteConflictItems READ pasteConflictItems NOTIFY pasteConflictStateChanged)
     Q_PROPERTY(QString pendingPasteRename READ pendingPasteRename WRITE setPendingPasteRename NOTIFY pasteConflictStateChanged)
@@ -139,6 +143,7 @@ public:
     QString networkRootPath() const;
     QString trashFilesPath() const;
     QString trashInfoPath() const;
+    QString trashVirtualPath() const;
     QString recentVirtualPath() const;
     bool isPortalDialog() const;
     QString currentPath() const;
@@ -155,6 +160,7 @@ public:
     QString searchQuery() const;
     QString selectedFile() const;
     QStringList selectedFiles() const;
+    QStringList selectedPaths() const;
     int lastSelectedIndex() const;
     int fileModelRevision() const;
     bool fileModelFilling() const;
@@ -190,6 +196,8 @@ public:
     int fileOperationDoneCount() const;
     int fileOperationTotalCount() const;
     QString fileOperationMode() const;
+    QString fileOperationState() const;
+    QVariantList fileOperationItems() const;
     bool pasteConflictVisible() const;
     QVariantList pasteConflictItems() const;
     QString pendingPasteRename() const;
@@ -305,6 +313,7 @@ public:
     Q_INVOKABLE void cutSelected();
     Q_INVOKABLE BackendRequestId pasteFiles();
     Q_INVOKABLE bool isCutPending(const QString &name) const;
+    Q_INVOKABLE bool isCutPathPending(const QString &path) const;
     Q_INVOKABLE void resolvePasteConflict(const QString &policy);
     Q_INVOKABLE void renamePasteConflict(const QString &name);
     Q_INVOKABLE void cancelPasteConflict();
@@ -351,14 +360,17 @@ public:
         const QString &label = QString(),
         const QString &icon = QString());
     Q_INVOKABLE void removeSidebarFavorite(const QString &path);
+    Q_INVOKABLE void moveSidebarFavorite(const QString &path, int targetIndex);
     Q_INVOKABLE void announceContextMenuOpening(const QString &owner);
 
     void setPendingPasteRename(const QString &name);
 
     Q_INVOKABLE bool isSelected(const QString &name) const;
+    Q_INVOKABLE bool isPathSelected(const QString &path) const;
     Q_INVOKABLE void clearSelection();
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void selectByName(const QString &name);
+    Q_INVOKABLE void selectByPath(const QString &path);
     Q_INVOKABLE void handleSelection(
         const QString &name,
         int index,
@@ -378,6 +390,7 @@ signals:
     void searchStateChanged();
     void selectedFileChanged();
     void selectedFilesChanged();
+    void selectedPathsChanged();
     void lastSelectedIndexChanged();
     void fileModelRevisionChanged();
     void showPreviewChanged();

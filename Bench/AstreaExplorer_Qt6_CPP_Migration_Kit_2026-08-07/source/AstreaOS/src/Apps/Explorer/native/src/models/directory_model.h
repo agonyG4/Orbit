@@ -34,6 +34,14 @@ public:
         LastAccessedRole,
         RecentSourceRole,
         FileIconNameRole,
+        TrashItemIdRole,
+        TrashInfoPathRole,
+        TrashLocationIdRole,
+        TrashOriginalPathRole,
+        TrashDeletionDateRole,
+        TrashMountTopdirRole,
+        TrashAvailableRole,
+        TrashOrphanStateRole,
     };
     Q_ENUM(Role)
 

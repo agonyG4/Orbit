@@ -55,6 +55,9 @@ public:
     Backend::BackendRequestId emptyTrash(
         const QString &trashFiles,
         const QString &trashInfo);
+    Backend::BackendRequestId deletePermanently(
+        const QStringList &paths,
+        const QStringList &metadataPaths = {});
 
 signals:
     void operationFinished(

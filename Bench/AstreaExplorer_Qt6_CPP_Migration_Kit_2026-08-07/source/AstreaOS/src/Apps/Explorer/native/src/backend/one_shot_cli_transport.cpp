@@ -30,6 +30,11 @@ void BackendTransport::emitCompleted(BackendRequestId requestId, const QByteArra
     emit completed(requestId, payload);
 }
 
+void BackendTransport::emitStreamed(BackendRequestId requestId, const QByteArray &payload)
+{
+    emit streamed(requestId, payload);
+}
+
 void BackendTransport::emitFailed(
     BackendRequestId requestId,
     const BackendTransportError &error)

@@ -1,6 +1,8 @@
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QFile>
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
@@ -20,6 +22,11 @@ private slots:
     void emptySelectionPreservesClipboardState();
     void repeatedCutIsOrderInsensitiveAndClearsClipboard();
     void pasteDelegatesTypedRequestAndPublishesProgress();
+    void exposesTerminalItemResults();
+    void pastePreflightsConflictsBeforeStarting();
+    void dragTransferDoesNotMutateClipboard();
+    void successfulMoveReconcilesCutClipboard();
+    void partialMoveRetainsFailedCutClipboardItems();
     void cancelDelegatesToBackendAndClearsBusyState();
 };
 
@@ -41,6 +48,8 @@ void FileOperationsControllerTest::copyAndCutExposeClipboardState()
     controller.cutSelection();
     QCOMPARE(controller.clipboardMode(), QStringLiteral("cut"));
     QVERIFY(controller.isCutPending(QStringLiteral("one.txt")));
+    QVERIFY(controller.isCutPathPending(QStringLiteral("/tmp/one.txt")));
+    QVERIFY(!controller.isCutPathPending(QStringLiteral("/tmp/other/one.txt")));
 }
 
 void FileOperationsControllerTest::emptySelectionPreservesClipboardState()
@@ -125,6 +134,164 @@ void FileOperationsControllerTest::pasteDelegatesTypedRequestAndPublishesProgres
     QTRY_COMPARE(finishedSpy.count(), 1);
     QCOMPARE(controller.running(), false);
     QCOMPARE(finishedSpy.takeFirst().at(0).value<FileOperationResult>().ok, true);
+}
+
+void FileOperationsControllerTest::exposesTerminalItemResults()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+
+    const BackendRequestId requestId = controller.transferFiles(
+        {QStringLiteral("/tmp/source.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("move"));
+    FileOperationResult result;
+    result.requestId = requestId;
+    result.mode = QStringLiteral("move");
+    result.ok = false;
+    result.state = QStringLiteral("partial-success");
+    result.doneCount = 1;
+    result.totalCount = 2;
+    result.percent = 50;
+    result.errorCode = QStringLiteral("permission-denied");
+    result.errorMessage = QStringLiteral("one item failed");
+    FileOperationItemResult item;
+    item.source = QStringLiteral("/tmp/source.txt");
+    item.target = QStringLiteral("/tmp/destination/source.txt");
+    item.status = QStringLiteral("failed");
+    item.errorCode = QStringLiteral("permission-denied");
+    item.errorMessage = QStringLiteral("one item failed");
+    result.items.append(item);
+    client.completeFileOperation(requestId, result);
+
+    QCOMPARE(controller.operationState(), QStringLiteral("partial-success"));
+    QCOMPARE(controller.operationItems().size(), 1);
+    const QVariantMap itemMap = controller.operationItems().constFirst().toMap();
+    QCOMPARE(itemMap.value(QStringLiteral("status")).toString(), QStringLiteral("failed"));
+    QCOMPARE(itemMap.value(QStringLiteral("errorCode")).toString(), QStringLiteral("permission-denied"));
+    QCOMPARE(controller.operationError(), QStringLiteral("one item failed"));
+}
+
+void FileOperationsControllerTest::dragTransferDoesNotMutateClipboard()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+
+    controller.setSelection({QStringLiteral("/tmp/clipboard.txt")});
+    controller.copySelection();
+    const QStringList clipboardBefore = controller.clipboardFiles();
+
+    const BackendRequestId requestId = controller.transferFiles(
+        {QStringLiteral("/tmp/dragged.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("move"));
+
+    QCOMPARE(controller.clipboardFiles(), clipboardBefore);
+    QCOMPARE(controller.clipboardMode(), QStringLiteral("copy"));
+    QCOMPARE(client.fileOperationRequests().size(), 1);
+    const FileOperationRequest request = client.fileOperationRequests().constLast();
+    QVERIFY(requestId > 0);
+    QCOMPARE(request.mode, QStringLiteral("move"));
+    QCOMPARE(request.sources, QStringList({QStringLiteral("/tmp/dragged.txt")}));
+}
+
+void FileOperationsControllerTest::pastePreflightsConflictsBeforeStarting()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString sourcePath = fixture.filePath(QStringLiteral("source.txt"));
+    const QString destinationPath = fixture.filePath(QStringLiteral("destination"));
+    QVERIFY(QDir().mkpath(destinationPath));
+    QVERIFY(QFile(sourcePath).open(QIODevice::WriteOnly));
+    QVERIFY(QFile(destinationPath + QStringLiteral("/source.txt")).open(QIODevice::WriteOnly));
+
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+    controller.setSelection({sourcePath});
+    controller.copySelection();
+
+    QCOMPARE(controller.pasteFiles(destinationPath), BackendRequestId(0));
+    QVERIFY(controller.pasteConflictVisible());
+    QCOMPARE(controller.pasteConflictItems(), QVariantList({sourcePath}));
+    QCOMPARE(client.fileOperationRequests().size(), 0);
+
+    controller.resolvePasteConflict(QStringLiteral("skip"));
+    QCOMPARE(client.fileOperationRequests().size(), 1);
+    QCOMPARE(client.fileOperationRequests().constFirst().conflictPolicy, QStringLiteral("skip"));
+}
+
+void FileOperationsControllerTest::successfulMoveReconcilesCutClipboard()
+{
+    QTemporaryDir fixture;
+    QVERIFY(fixture.isValid());
+    const QString sourcePath = fixture.filePath(QStringLiteral("source.txt"));
+    QVERIFY(QFile(sourcePath).open(QIODevice::WriteOnly));
+    const QString destinationPath = fixture.filePath(QStringLiteral("destination"));
+    QVERIFY(QDir().mkpath(destinationPath));
+
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+    controller.setSelection({sourcePath});
+    controller.cutSelection();
+    const BackendRequestId requestId = controller.pasteFiles(destinationPath, QStringLiteral("overwrite"));
+
+    FileOperationResult result;
+    result.requestId = requestId;
+    result.ok = true;
+    result.mode = QStringLiteral("move");
+    result.doneCount = 1;
+    result.totalCount = 1;
+    result.percent = 100;
+    client.completeFileOperation(requestId, result);
+
+    QVERIFY(controller.clipboardFiles().isEmpty());
+    QVERIFY(controller.clipboardMode().isEmpty());
+}
+
+void FileOperationsControllerTest::partialMoveRetainsFailedCutClipboardItems()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+    const QString moved = QStringLiteral("/tmp/moved.txt");
+    const QString failed = QStringLiteral("/tmp/failed.txt");
+    controller.setSelection({moved, failed});
+    controller.cutSelection();
+
+    const BackendRequestId requestId = controller.pasteFiles(
+        QStringLiteral("/tmp/destination"), QStringLiteral("overwrite"));
+    FileOperationResult result;
+    result.requestId = requestId;
+    result.ok = true;
+    result.mode = QStringLiteral("move");
+    result.state = QStringLiteral("partial-success");
+    result.doneCount = 1;
+    result.totalCount = 2;
+    result.percent = 50;
+    result.items = {
+        FileOperationItemResult {
+            moved,
+            QStringLiteral("/tmp/destination/moved.txt"),
+            QStringLiteral("moved"),
+            {},
+            {},
+        },
+        FileOperationItemResult {
+            failed,
+            QStringLiteral("/tmp/destination/failed.txt"),
+            QStringLiteral("failed"),
+            QStringLiteral("permission_denied"),
+            QStringLiteral("permission denied"),
+        },
+    };
+    client.completeFileOperation(requestId, result);
+
+    QCOMPARE(controller.clipboardFiles(), QStringList({failed}));
+    QCOMPARE(controller.clipboardMode(), QStringLiteral("cut"));
 }
 
 void FileOperationsControllerTest::cancelDelegatesToBackendAndClearsBusyState()

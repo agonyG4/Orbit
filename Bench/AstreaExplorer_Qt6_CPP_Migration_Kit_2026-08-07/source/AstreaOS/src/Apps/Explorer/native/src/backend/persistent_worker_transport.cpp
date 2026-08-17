@@ -188,18 +188,29 @@ void PersistentWorkerTransport::handleReadyRead()
         if (!okId || !m_pending.contains(requestId)) {
             continue;
         }
+        if (response.value(QStringLiteral("stream")).toBool(false)) {
+            const QByteArray payload = response.value(QStringLiteral("payload")).toString().toUtf8();
+            auto pending = m_pending.find(requestId);
+            pending->streamedPayload.append(payload);
+            emitStreamed(requestId, payload);
+            continue;
+        }
         PendingRequest pending = m_pending.take(requestId);
         if (pending.timeout != nullptr) {
             pending.timeout->stop();
             pending.timeout->deleteLater();
         }
         if (response.value(QStringLiteral("ok")).toBool(false)) {
-            emitCompleted(requestId, response.value(QStringLiteral("payload")).toString().toUtf8());
+            pending.streamedPayload.append(
+                response.value(QStringLiteral("payload")).toString().toUtf8());
+            emitCompleted(requestId, pending.streamedPayload);
         } else {
             BackendTransportError error;
             error.code = response.value(QStringLiteral("errorCode")).toString(QStringLiteral("worker_error"));
             error.message = response.value(QStringLiteral("error")).toString(QStringLiteral("backend worker request failed"));
             error.requestId = requestId;
+            error.stdoutData = pending.streamedPayload;
+            error.stdoutData.append(response.value(QStringLiteral("payload")).toString().toUtf8());
             emitFailed(requestId, error);
         }
     }

@@ -150,6 +150,18 @@ BackendRequestId FilesystemService::emptyTrash(
     return request(QStringLiteral("empty-trash"), {trashFiles, trashInfo});
 }
 
+BackendRequestId FilesystemService::deletePermanently(
+    const QStringList &paths,
+    const QStringList &metadataPaths)
+{
+    QStringList arguments = paths;
+    if (!metadataPaths.isEmpty()) {
+        arguments.append(QStringLiteral("--metadata"));
+        arguments.append(metadataPaths);
+    }
+    return request(QStringLiteral("delete-permanently"), arguments);
+}
+
 BackendRequestId FilesystemService::request(
     const QString &operation,
     const QStringList &arguments)

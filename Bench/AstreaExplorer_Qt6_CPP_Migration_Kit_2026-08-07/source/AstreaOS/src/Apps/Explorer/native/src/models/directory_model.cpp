@@ -57,6 +57,14 @@ DirectoryEntry entryFromVariant(const QVariantMap &item)
     entry.lastAccessed = item.value(QStringLiteral("lastAccessed")).toLongLong();
     entry.recentSource = item.value(QStringLiteral("recentSource")).toString();
     entry.fileIconName = item.value(QStringLiteral("fileIconName")).toString();
+    entry.trashItemId = item.value(QStringLiteral("trashItemId")).toString();
+    entry.trashInfoPath = item.value(QStringLiteral("trashInfoPath")).toString();
+    entry.trashLocationId = item.value(QStringLiteral("trashLocationId")).toString();
+    entry.trashOriginalPath = item.value(QStringLiteral("trashOriginalPath")).toString();
+    entry.trashDeletionDate = variantDateTime(item.value(QStringLiteral("trashDeletionDate")));
+    entry.trashMountTopdir = item.value(QStringLiteral("trashMountTopdir")).toString();
+    entry.trashAvailable = item.value(QStringLiteral("trashAvailable")).toBool();
+    entry.trashOrphanState = item.value(QStringLiteral("trashOrphanState")).toString();
     return entry;
 }
 
@@ -234,6 +242,22 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         return entry.recentSource;
     case FileIconNameRole:
         return entry.fileIconName;
+    case TrashItemIdRole:
+        return entry.trashItemId;
+    case TrashInfoPathRole:
+        return entry.trashInfoPath;
+    case TrashLocationIdRole:
+        return entry.trashLocationId;
+    case TrashOriginalPathRole:
+        return entry.trashOriginalPath;
+    case TrashDeletionDateRole:
+        return entry.trashDeletionDate;
+    case TrashMountTopdirRole:
+        return entry.trashMountTopdir;
+    case TrashAvailableRole:
+        return entry.trashAvailable;
+    case TrashOrphanStateRole:
+        return entry.trashOrphanState;
     default:
         return {};
     }
@@ -258,6 +282,14 @@ QHash<int, QByteArray> DirectoryModel::roleNames() const
         {LastAccessedRole, QByteArrayLiteral("lastAccessed")},
         {RecentSourceRole, QByteArrayLiteral("recentSource")},
         {FileIconNameRole, QByteArrayLiteral("fileIconName")},
+        {TrashItemIdRole, QByteArrayLiteral("trashItemId")},
+        {TrashInfoPathRole, QByteArrayLiteral("trashInfoPath")},
+        {TrashLocationIdRole, QByteArrayLiteral("trashLocationId")},
+        {TrashOriginalPathRole, QByteArrayLiteral("trashOriginalPath")},
+        {TrashDeletionDateRole, QByteArrayLiteral("trashDeletionDate")},
+        {TrashMountTopdirRole, QByteArrayLiteral("trashMountTopdir")},
+        {TrashAvailableRole, QByteArrayLiteral("trashAvailable")},
+        {TrashOrphanStateRole, QByteArrayLiteral("trashOrphanState")},
     };
 }
 

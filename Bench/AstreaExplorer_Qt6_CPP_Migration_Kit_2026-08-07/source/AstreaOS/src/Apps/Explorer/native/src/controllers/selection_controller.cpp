@@ -36,6 +36,11 @@ QStringList SelectionController::selectedFiles() const
     return m_selectedFiles;
 }
 
+QStringList SelectionController::selectedPaths() const
+{
+    return m_selectedPaths;
+}
+
 int SelectionController::lastSelectedIndex() const
 {
     return m_lastSelectedIndex;
@@ -46,9 +51,42 @@ bool SelectionController::isSelected(const QString &name) const
     return !name.isEmpty() && m_selectedFiles.contains(name);
 }
 
+bool SelectionController::isPathSelected(const QString &path) const
+{
+    return !path.isEmpty() && m_selectedPaths.contains(path);
+}
+
 void SelectionController::clearSelection()
 {
     applySelection({}, {}, {}, {}, {}, -1);
+}
+
+void SelectionController::removePaths(const QStringList &paths)
+{
+    if (paths.isEmpty() || m_selectedPaths.isEmpty()) {
+        return;
+    }
+    QStringList remainingPaths;
+    QStringList remainingNames;
+    for (const QString &path : m_selectedPaths) {
+        if (paths.contains(path)) {
+            continue;
+        }
+        remainingPaths.append(path);
+        const int index = indexForPath(path);
+        if (index >= 0) {
+            remainingNames.append(nameAt(index));
+        }
+    }
+    const QString selectedPath = remainingPaths.isEmpty() ? QString() : remainingPaths.constLast();
+    const QString selectedName = remainingNames.isEmpty() ? QString() : remainingNames.constLast();
+    applySelection(
+        remainingPaths,
+        remainingNames,
+        selectedPath,
+        selectedName,
+        selectedPath,
+        indexForPath(selectedPath));
 }
 
 void SelectionController::selectAll()
@@ -91,6 +129,19 @@ void SelectionController::selectByName(const QString &name)
     applySelection({path}, {name}, path, name, path, index);
 }
 
+void SelectionController::selectByPath(const QString &path)
+{
+    if (path.isEmpty()) {
+        return;
+    }
+    const int index = indexForPath(path);
+    if (index < 0) {
+        return;
+    }
+    const QString name = nameAt(index);
+    applySelection({path}, {name}, path, name, path, index);
+}
+
 void SelectionController::handleSelection(
     const QString &name,
     int index,
@@ -101,7 +152,7 @@ void SelectionController::handleSelection(
     if (name.isEmpty()) {
         return;
     }
-    if (preserveCurrentSelection && isSelected(name)) {
+    if (preserveCurrentSelection && isPathSelected(pathAt(index))) {
         return;
     }
 
@@ -242,6 +293,7 @@ void SelectionController::applySelection(
 {
     const bool fileChanged = m_selectedFile != selectedName;
     const bool filesChanged = m_selectedFiles != names;
+    const bool pathsChanged = m_selectedPaths != paths;
     const bool indexChanged = m_lastSelectedIndex != anchorIndex;
     m_selectedPaths = paths;
     m_selectedFile = selectedName;
@@ -256,10 +308,13 @@ void SelectionController::applySelection(
     if (filesChanged) {
         emit selectedFilesChanged();
     }
+    if (pathsChanged) {
+        emit selectedPathsChanged();
+    }
     if (indexChanged) {
         emit lastSelectedIndexChanged();
     }
-    if (fileChanged || filesChanged || indexChanged) {
+    if (fileChanged || filesChanged || pathsChanged || indexChanged) {
         emit selectionChanged();
     }
 }
