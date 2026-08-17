@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -48,8 +50,33 @@ struct FileOpRequest {
     sources: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlanClassification {
+    Ready,
+    NoOpAlreadyAtDestination,
+    NoOpSelfDrop,
+    RedundantDescendant,
+    Conflict,
+    DuplicateSource,
+    IntraBatchCollision,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlannedItem {
+    source: PathBuf,
+    target: PathBuf,
+    classification: PlanClassification,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TransferPlan {
+    mode: OperationMode,
+    destination: PathBuf,
+    policy: ConflictPolicy,
+    items: Vec<PlannedItem>,
+}
+
 struct ProgressSource {
-    path: PathBuf,
     bytes: u64,
 }
 
@@ -57,6 +84,39 @@ struct ProgressPlan {
     mode: ProgressMode,
     sources: Vec<ProgressSource>,
     total_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ItemStatus {
+    Moved,
+    Copied,
+    Skipped,
+    NoOp,
+    Failed,
+    NotAttempted,
+    Cancelled,
+}
+
+impl ItemStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Moved => "moved",
+            Self::Copied => "copied",
+            Self::Skipped => "skipped",
+            Self::NoOp => "no-op",
+            Self::Failed => "failed",
+            Self::NotAttempted => "not-attempted",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+struct ItemOutcome {
+    source: PathBuf,
+    target: PathBuf,
+    status: ItemStatus,
+    error_code: String,
+    message: String,
 }
 
 struct ProgressEmitter {
@@ -167,80 +227,191 @@ fn parse_event_format(args: &[String]) -> (EventFormat, Vec<String>) {
 fn run_inner(args: &[String], format: EventFormat) -> Result<(), String> {
     let request = parse_file_op_request(args)?;
     let mode = request.mode;
-    let destination = request.destination.as_path();
     let policy = request.policy;
-    let rename = request.rename.as_str();
-    let requested_progress_mode = request.progress_mode;
-    let sources = request.sources;
+    let plan = match plan_transfer(
+        mode,
+        &request.destination,
+        policy,
+        &request.rename,
+        request.sources.clone(),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            emit_file_op_error(
+                format,
+                classify_error_code(&error),
+                &error,
+                Some(mode),
+                None,
+            );
+            return Err(error);
+        }
+    };
 
-    validate_rename_policy(policy, rename, sources.len())?;
-
-    if !destination.is_dir() {
-        return Err(format!(
-            "destination is not a directory: {}",
-            destination.display()
-        ));
+    if plan
+        .items
+        .iter()
+        .any(|item| item.classification == PlanClassification::IntraBatchCollision)
+    {
+        let error = "transfer plan contains colliding destination targets".to_string();
+        emit_file_op_error(format, "intra_batch_collision", &error, Some(mode), None);
+        return Err(error);
     }
 
-    let progress_plan = build_progress_plan(&sources, requested_progress_mode);
+    let progress_sources: Vec<PathBuf> =
+        plan.items.iter().map(|item| item.source.clone()).collect();
+    let progress_plan = build_progress_plan(&progress_sources, request.progress_mode);
+    let destination = plan.destination.as_path();
     emit_file_op_start(
         format,
         mode,
         destination,
-        sources.len(),
+        plan.items.len(),
         progress_plan.total_bytes,
     );
     let mut progress = ProgressEmitter::new(format, mode, &progress_plan);
+    let mut outcomes = Vec::with_capacity(plan.items.len());
+    let mut first_error = None;
 
-    for source_info in &progress_plan.sources {
-        let source = &source_info.path;
-        let name = source
-            .file_name()
-            .and_then(|v| v.to_str())
-            .ok_or_else(|| format!("invalid source path: {}", source.display()))?;
-        let target_name = if policy == ConflictPolicy::Rename {
-            rename
-        } else {
-            name
-        };
-        let initial_target = destination.join(target_name);
+    for (index, item) in plan.items.iter().enumerate() {
+        let source = &item.source;
+        let target = &item.target;
+        let source_info = &progress_plan.sources[index];
         let source_done_floor = expected_done_bytes(&progress, source_info.bytes);
-
-        if same_path(source, &initial_target) {
-            progress.finish_source(source, source_done_floor);
-            continue;
-        }
-
-        let Some(target) = resolve_conflict_target(&initial_target, policy)? else {
-            progress.finish_source(source, source_done_floor);
-            continue;
+        let mut outcome = ItemOutcome {
+            source: source.clone(),
+            target: target.clone(),
+            status: ItemStatus::NoOp,
+            error_code: String::new(),
+            message: String::new(),
         };
 
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        if cancellation_requested() {
+            outcome.status = ItemStatus::Cancelled;
+            outcome.error_code = "cancelled".into();
+            outcome.message = "operation cancelled".into();
+            first_error.get_or_insert(outcome.message.clone());
+            progress.finish_source(source, source_done_floor);
+            emit_file_op_item(format, &outcome);
+            outcomes.push(outcome);
+            continue;
         }
 
-        if let Err(err) = run_operation_with_progress(
-            format,
-            mode,
-            source,
-            &target,
-            policy == ConflictPolicy::Overwrite,
-            &mut progress,
-        ) {
-            emit_file_op_error(
-                format,
-                classify_error_code(&err),
-                &err,
-                Some(mode),
-                Some(source),
-            );
-            return Err(err);
+        match item.classification {
+            PlanClassification::NoOpSelfDrop | PlanClassification::NoOpAlreadyAtDestination => {
+                outcome.status = ItemStatus::NoOp;
+            }
+            PlanClassification::RedundantDescendant | PlanClassification::DuplicateSource => {
+                outcome.status = ItemStatus::Skipped;
+            }
+            PlanClassification::Conflict if policy == ConflictPolicy::Skip => {
+                outcome.status = ItemStatus::Skipped;
+            }
+            PlanClassification::Conflict if policy == ConflictPolicy::Rename => {
+                let error = format!("renamed target already exists: {}", target.display());
+                outcome.status = ItemStatus::Failed;
+                outcome.error_code = classify_error_code(&error).to_string();
+                outcome.message = error.clone();
+                first_error.get_or_insert(error);
+            }
+            PlanClassification::Ready | PlanClassification::Conflict => {
+                let operation = (|| {
+                    if !path_exists_or_symlink(source) {
+                        return Err(format!("source disappeared: {}", source.display()));
+                    }
+                    if source.is_dir()
+                        && !source.is_symlink()
+                        && is_self_or_descendant_target(source, target)
+                    {
+                        return Err(format!(
+                            "refusing to transfer directory into itself: {} -> {}",
+                            source.display(),
+                            target.display()
+                        ));
+                    }
+                    if path_exists_or_symlink(target) && policy != ConflictPolicy::Overwrite {
+                        return Err(format!(
+                            "target appeared after preflight: {}",
+                            target.display()
+                        ));
+                    }
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)
+                            .map_err(|error| format!("create {}: {error}", parent.display()))?;
+                    }
+                    run_operation_with_progress(
+                        format,
+                        mode,
+                        source,
+                        target,
+                        policy == ConflictPolicy::Overwrite,
+                        &mut progress,
+                    )
+                })();
+                match operation {
+                    Ok(()) => {
+                        outcome.status = if mode == OperationMode::Move {
+                            ItemStatus::Moved
+                        } else {
+                            ItemStatus::Copied
+                        };
+                    }
+                    Err(error) => {
+                        let error_code = if cancellation_requested() {
+                            "cancelled"
+                        } else {
+                            classify_error_code(&error)
+                        };
+                        emit_file_op_error(format, error_code, &error, Some(mode), Some(source));
+                        outcome.status = if error_code == "cancelled" {
+                            ItemStatus::Cancelled
+                        } else {
+                            ItemStatus::Failed
+                        };
+                        outcome.error_code = error_code.to_string();
+                        outcome.message = error.clone();
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            classification => {
+                let error = format!(
+                    "unhandled transfer plan classification {:?} for {}",
+                    classification,
+                    source.display()
+                );
+                outcome.status = ItemStatus::NotAttempted;
+                outcome.error_code = "invalid_plan".into();
+                outcome.message = error.clone();
+                first_error.get_or_insert(error);
+            }
         }
-
         progress.finish_source(source, source_done_floor);
+        emit_file_op_item(format, &outcome);
+        outcomes.push(outcome);
     }
 
+    let failures = outcomes
+        .iter()
+        .filter(|outcome| {
+            matches!(
+                outcome.status,
+                ItemStatus::Failed | ItemStatus::NotAttempted | ItemStatus::Cancelled
+            )
+        })
+        .count();
+    let cancelled = outcomes
+        .iter()
+        .any(|outcome| outcome.status == ItemStatus::Cancelled);
+    let state = if cancelled {
+        "cancelled"
+    } else if failures == 0 {
+        "success"
+    } else if failures < outcomes.len() {
+        "partial-success"
+    } else {
+        "failed"
+    };
     emit_file_op_done(
         format,
         mode,
@@ -248,8 +419,12 @@ fn run_inner(args: &[String], format: EventFormat) -> Result<(), String> {
         progress.done_items,
         progress.total_items,
         progress.byte_fields(),
+        state,
     );
-    Ok(())
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn file_op_usage() -> &'static str {
@@ -350,7 +525,7 @@ fn build_progress_plan(sources: &[PathBuf], requested: ProgressMode) -> Progress
                     .iter()
                     .cloned()
                     .zip(bytes)
-                    .map(|(path, bytes)| ProgressSource { path, bytes })
+                    .map(|(_path, bytes)| ProgressSource { bytes })
                     .collect(),
                 total_bytes: Some(total_bytes),
             };
@@ -362,7 +537,7 @@ fn build_progress_plan(sources: &[PathBuf], requested: ProgressMode) -> Progress
         sources: sources
             .iter()
             .cloned()
-            .map(|path| ProgressSource { path, bytes: 0 })
+            .map(|_path| ProgressSource { bytes: 0 })
             .collect(),
         total_bytes: None,
     }
@@ -418,6 +593,205 @@ fn validate_rename_policy(
         return Err(format!("invalid renamed target: {rename}"));
     }
     Ok(())
+}
+
+fn plan_transfer(
+    mode: OperationMode,
+    destination: &Path,
+    policy: ConflictPolicy,
+    rename: &str,
+    sources: Vec<PathBuf>,
+) -> Result<TransferPlan, String> {
+    if !destination.is_dir() {
+        return Err(format!(
+            "destination is not a directory: {}",
+            destination.display()
+        ));
+    }
+    validate_rename_policy(policy, rename, sources.len())?;
+
+    let destination = normalize_lexical_path(destination);
+    let normalized_sources: Vec<PathBuf> = sources
+        .into_iter()
+        .map(|source| normalize_lexical_path(&source))
+        .collect();
+
+    let mut seen_sources = HashSet::new();
+    let mut items = Vec::with_capacity(normalized_sources.len());
+    let mut reserved_targets = HashSet::new();
+
+    for source in &normalized_sources {
+        if !seen_sources.insert(source.clone()) {
+            items.push(PlannedItem {
+                source: source.clone(),
+                target: source.clone(),
+                classification: PlanClassification::DuplicateSource,
+            });
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(source)
+            .map_err(|error| format!("source not available {}: {error}", source.display()))?;
+        let source_is_directory = metadata.is_dir() && !metadata.file_type().is_symlink();
+        let name = source
+            .file_name()
+            .ok_or_else(|| format!("source has no valid name: {}", source.display()))?;
+        let initial_target = if policy == ConflictPolicy::Rename {
+            destination.join(rename)
+        } else {
+            destination.join(name)
+        };
+
+        if source_is_directory && same_path(source, &destination) {
+            items.push(PlannedItem {
+                source: source.clone(),
+                target: source.clone(),
+                classification: PlanClassification::NoOpSelfDrop,
+            });
+            continue;
+        }
+
+        if source_is_directory && is_self_or_descendant_target(source, &destination) {
+            return Err(format!(
+                "refusing to plan directory into itself: {} -> {}",
+                source.display(),
+                destination.display()
+            ));
+        }
+
+        if same_path(source, &initial_target) {
+            items.push(PlannedItem {
+                source: source.clone(),
+                target: initial_target,
+                classification: PlanClassification::NoOpAlreadyAtDestination,
+            });
+            continue;
+        }
+
+        let mut target = initial_target;
+        let mut classification = if path_exists_or_symlink(&target) {
+            if policy == ConflictPolicy::KeepBoth {
+                target = unique_path_excluding_reserved(&target, &reserved_targets);
+                PlanClassification::Ready
+            } else {
+                PlanClassification::Conflict
+            }
+        } else {
+            PlanClassification::Ready
+        };
+
+        if classification == PlanClassification::Ready && reserved_targets.contains(&target) {
+            if policy == ConflictPolicy::KeepBoth {
+                target = unique_path_excluding_reserved(&target, &reserved_targets);
+            } else {
+                classification = PlanClassification::IntraBatchCollision;
+            }
+        }
+
+        if classification != PlanClassification::IntraBatchCollision {
+            reserved_targets.insert(target.clone());
+        }
+        items.push(PlannedItem {
+            source: source.clone(),
+            target,
+            classification,
+        });
+    }
+
+    for index in 0..items.len() {
+        if items[index].classification != PlanClassification::Ready
+            && items[index].classification != PlanClassification::Conflict
+        {
+            continue;
+        }
+        for ancestor in items.iter().take(index) {
+            if ancestor.classification == PlanClassification::DuplicateSource
+                || ancestor.classification == PlanClassification::RedundantDescendant
+            {
+                continue;
+            }
+            let ancestor_is_directory = fs::symlink_metadata(&ancestor.source)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            if ancestor_is_directory && is_path_descendant(&ancestor.source, &items[index].source) {
+                items[index].classification = PlanClassification::RedundantDescendant;
+                break;
+            }
+        }
+    }
+
+    Ok(TransferPlan {
+        mode,
+        destination,
+        policy,
+        items,
+    })
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    normalized.components().next_back(),
+                    Some(Component::RootDir)
+                ) {
+                    let _ = normalized.pop();
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+fn is_path_descendant(ancestor: &Path, candidate: &Path) -> bool {
+    if candidate == ancestor {
+        return false;
+    }
+    if candidate.starts_with(ancestor) {
+        return true;
+    }
+    match (fs::canonicalize(ancestor), fs::canonicalize(candidate)) {
+        (Ok(ancestor), Ok(candidate)) => candidate.starts_with(&ancestor) && candidate != ancestor,
+        _ => false,
+    }
+}
+
+fn unique_path_excluding_reserved(path: &Path, reserved: &HashSet<PathBuf>) -> PathBuf {
+    if !path_exists_or_symlink(path) && !reserved.contains(path) {
+        return path.to_path_buf();
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .or_else(|| path.file_name().and_then(|value| value.to_str()))
+        .unwrap_or("item");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    for index in 2..10_000usize {
+        let name = if extension.is_empty() {
+            format!("{stem} {index}")
+        } else {
+            format!("{stem} {index}.{extension}")
+        };
+        let candidate = parent.join(name);
+        if !path_exists_or_symlink(&candidate) && !reserved.contains(&candidate) {
+            return candidate;
+        }
+    }
+    parent.join(format!("{stem} {}", unix_millis()))
 }
 
 fn is_safe_child_name(name: &str) -> bool {
@@ -571,18 +945,51 @@ fn emit_file_op_done(
     done: usize,
     total: usize,
     byte_fields: Option<(u64, u64)>,
+    state: &str,
 ) {
     let destination = destination.to_string_lossy().into_owned();
     let percent = byte_fields
         .map(|(done_bytes, total_bytes)| clamped_percent_u64(done_bytes, total_bytes))
         .unwrap_or_else(|| clamped_percent(done, total));
     match format {
-        EventFormat::Legacy => {
-            emit_file_op_event("DONE", &[destination, done.to_string(), total.to_string()])
-        }
+        EventFormat::Legacy => emit_file_op_event(
+            "DONE",
+            &[
+                destination,
+                done.to_string(),
+                total.to_string(),
+                state.to_string(),
+            ],
+        ),
         EventFormat::Jsonl => println!(
             "{}",
-            json_done_line(mode, &destination, done, total, percent, byte_fields)
+            json_done_line_with_state(mode, &destination, done, total, percent, byte_fields, state,)
+        ),
+    }
+    flush_stdout();
+}
+
+fn emit_file_op_item(format: EventFormat, outcome: &ItemOutcome) {
+    match format {
+        EventFormat::Legacy => emit_file_op_event(
+            "ITEM",
+            &[
+                outcome.source.to_string_lossy().into_owned(),
+                outcome.target.to_string_lossy().into_owned(),
+                outcome.status.as_str().to_string(),
+                outcome.error_code.clone(),
+                outcome.message.clone(),
+            ],
+        ),
+        EventFormat::Jsonl => println!(
+            "{}",
+            json_item_line(
+                &outcome.source.to_string_lossy(),
+                &outcome.target.to_string_lossy(),
+                outcome.status.as_str(),
+                &outcome.error_code,
+                &outcome.message,
+            )
         ),
     }
     flush_stdout();
@@ -623,6 +1030,10 @@ fn classify_error_code(message: &str) -> &'static str {
     } else {
         "operation_failed"
     }
+}
+
+fn cancellation_requested() -> bool {
+    env::var_os("ASTREA_CANCEL_FILE").is_some_and(|path| Path::new(&path).exists())
 }
 fn json_start_line(
     mode: OperationMode,
@@ -677,6 +1088,26 @@ fn json_done_line(
     percent: usize,
     byte_fields: Option<(u64, u64)>,
 ) -> String {
+    json_done_line_with_state(
+        mode,
+        destination,
+        done,
+        total,
+        percent,
+        byte_fields,
+        "success",
+    )
+}
+
+fn json_done_line_with_state(
+    mode: OperationMode,
+    destination: &str,
+    done: usize,
+    total: usize,
+    percent: usize,
+    byte_fields: Option<(u64, u64)>,
+    state: &str,
+) -> String {
     let byte_json = byte_fields
         .map(|(done_bytes, total_bytes)| {
             format!(
@@ -686,13 +1117,31 @@ fn json_done_line(
         })
         .unwrap_or_default();
     format!(
-        "{{\"event\":\"done\",\"mode\":\"{}\",\"destination\":\"{}\",\"done\":{},\"total\":{},\"percent\":{}{}}}",
+        "{{\"event\":\"done\",\"mode\":\"{}\",\"destination\":\"{}\",\"done\":{},\"total\":{},\"percent\":{},\"state\":\"{}\"{}}}",
         mode.as_str(),
         escape_json(destination),
         done,
         total,
         percent.clamp(0, 100),
+        escape_json(state),
         byte_json
+    )
+}
+
+fn json_item_line(
+    source: &str,
+    target: &str,
+    status: &str,
+    error_code: &str,
+    message: &str,
+) -> String {
+    format!(
+        "{{\"event\":\"item\",\"source\":\"{}\",\"target\":\"{}\",\"status\":\"{}\",\"errorCode\":\"{}\",\"message\":\"{}\"}}",
+        escape_json(source),
+        escape_json(target),
+        escape_json(status),
+        escape_json(error_code),
+        escape_json(message),
     )
 }
 fn json_error_line(mode_json: String, code: &str, message: &str, path_json: String) -> String {
@@ -733,25 +1182,6 @@ fn sanitize_pipe_field(value: &str) -> String {
             c => c,
         })
         .collect()
-}
-
-fn resolve_conflict_target(
-    target: &Path,
-    policy: ConflictPolicy,
-) -> Result<Option<PathBuf>, String> {
-    if !path_exists_or_symlink(target) {
-        return Ok(Some(target.to_path_buf()));
-    }
-
-    match policy {
-        ConflictPolicy::Skip => Ok(None),
-        ConflictPolicy::Overwrite => Ok(Some(target.to_path_buf())),
-        ConflictPolicy::Rename => Err(format!(
-            "renamed target already exists: {}",
-            target.display()
-        )),
-        ConflictPolicy::KeepBoth => Ok(Some(unique_path(target))),
-    }
 }
 
 fn unique_path(path: &Path) -> PathBuf {
@@ -912,6 +1342,11 @@ fn move_path(source: &Path, target: &Path, overwrite: bool) -> Result<(), String
                     target.display()
                 ));
             }
+            if cancellation_requested() {
+                let _ = remove_existing_if_present(target);
+                restore_backup(target, backup.as_deref());
+                return Err("operation cancelled".into());
+            }
             if let Err(remove_err) = remove_existing(source) {
                 let _ = remove_existing_if_present(target);
                 restore_backup(target, backup.as_deref());
@@ -1057,6 +1492,9 @@ fn copy_file_stream_with_progress(
     let mut buffer = vec![0u8; 1024 * 1024];
 
     loop {
+        if cancellation_requested() {
+            return Err("operation cancelled".into());
+        }
         let read = input
             .read(&mut buffer)
             .map_err(|e| format!("read {}: {e}", source.display()))?;
@@ -1066,6 +1504,9 @@ fn copy_file_stream_with_progress(
         output
             .write_all(&buffer[..read])
             .map_err(|e| format!("write {}: {e}", target.display()))?;
+        if cancellation_requested() {
+            return Err("operation cancelled".into());
+        }
         copied = copied.saturating_add(read as u64);
         if progress.mode == ProgressMode::Bytes {
             progress.add_bytes(read as u64, source);
@@ -1175,6 +1616,9 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     let _ = fs::set_permissions(target, meta.permissions());
 
     for entry in fs::read_dir(source).map_err(|e| format!("read {}: {e}", source.display()))? {
+        if cancellation_requested() {
+            return Err("operation cancelled".into());
+        }
         let entry = entry.map_err(|e| format!("read {}: {e}", source.display()))?;
         let child_source = entry.path();
         let child_target = target.join(entry.file_name());
@@ -1201,6 +1645,9 @@ fn copy_dir_recursive_overwrite(source: &Path, target: &Path) -> Result<(), Stri
     let _ = fs::set_permissions(target, meta.permissions());
 
     for entry in fs::read_dir(source).map_err(|e| format!("read {}: {e}", source.display()))? {
+        if cancellation_requested() {
+            return Err("operation cancelled".into());
+        }
         let entry = entry.map_err(|e| format!("read {}: {e}", source.display()))?;
         let child_source = entry.path();
         let child_target = target.join(entry.file_name());
@@ -1263,6 +1710,201 @@ fn is_self_or_descendant_target(source: &Path, target: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn plan_for(
+        mode: OperationMode,
+        destination: &Path,
+        policy: ConflictPolicy,
+        sources: &[PathBuf],
+    ) -> Result<TransferPlan, String> {
+        plan_transfer(mode, destination, policy, "", sources.to_vec())
+    }
+
+    #[test]
+    fn transfer_plan_validates_every_source_before_any_mutation() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-transfer-plan-preflight-{}", unix_millis()));
+        let source_dir = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        let first = source_dir.join("first");
+        let missing = source_dir.join("missing");
+        let third = source_dir.join("third");
+        fs::write(&first, "first").unwrap();
+        fs::write(&third, "third").unwrap();
+
+        let result = plan_for(
+            OperationMode::Move,
+            &destination,
+            ConflictPolicy::KeepBoth,
+            &[first.clone(), missing.clone(), third.clone()],
+        );
+
+        assert!(result.is_err());
+        assert!(first.exists());
+        assert!(third.exists());
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transfer_plan_treats_directory_self_drop_as_a_noop() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-transfer-self-drop-{}", unix_millis()));
+        let source = root.join("folder");
+        fs::create_dir_all(&source).unwrap();
+
+        let plan = plan_for(
+            OperationMode::Move,
+            &source,
+            ConflictPolicy::KeepBoth,
+            std::slice::from_ref(&source),
+        )
+        .unwrap();
+
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(
+            plan.items[0].classification,
+            PlanClassification::NoOpSelfDrop
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transfer_plan_rejects_directory_descendant_targets() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-transfer-descendant-{}", unix_millis()));
+        let source = root.join("folder");
+        let destination = source.join("child");
+        fs::create_dir_all(&destination).unwrap();
+
+        let result = plan_for(
+            OperationMode::Copy,
+            &destination,
+            ConflictPolicy::KeepBoth,
+            std::slice::from_ref(&source),
+        );
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transfer_plan_collapses_descendant_sources_when_ancestor_is_selected() {
+        let root = std::env::temp_dir().join(format!("astrea-transfer-ancestor-{}", unix_millis()));
+        let source = root.join("source");
+        let descendant = source.join("child");
+        let destination = root.join("destination");
+        fs::create_dir_all(&descendant).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+
+        let plan = plan_for(
+            OperationMode::Copy,
+            &destination,
+            ConflictPolicy::KeepBoth,
+            &[source.clone(), descendant],
+        )
+        .unwrap();
+
+        assert_eq!(plan.items.len(), 2);
+        assert_eq!(
+            plan.items[1].classification,
+            PlanClassification::RedundantDescendant
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transfer_plan_detects_colliding_targets_before_execution() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-transfer-collision-{}", unix_millis()));
+        let source_a = root.join("a/report.txt");
+        let source_b = root.join("b/report.txt");
+        let destination = root.join("destination");
+        fs::create_dir_all(source_a.parent().unwrap()).unwrap();
+        fs::create_dir_all(source_b.parent().unwrap()).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(&source_a, "a").unwrap();
+        fs::write(&source_b, "b").unwrap();
+
+        let plan = plan_for(
+            OperationMode::Move,
+            &destination,
+            ConflictPolicy::Skip,
+            &[source_a, source_b],
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.items[1].classification,
+            PlanClassification::IntraBatchCollision
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_inner_moves_a_large_sibling_batch() {
+        let root = std::env::temp_dir().join(format!("astrea-transfer-batch-{}", unix_millis()));
+        let sources = root.join("sources");
+        let destination = root.join("destination");
+        fs::create_dir_all(&sources).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        let paths: Vec<PathBuf> = (0..100)
+            .map(|index| {
+                let path = sources.join(format!("folder-{index}"));
+                fs::create_dir(&path).unwrap();
+                fs::write(path.join("payload.txt"), index.to_string()).unwrap();
+                path
+            })
+            .collect();
+        let mut args = vec![
+            "move".into(),
+            destination.to_string_lossy().into_owned(),
+            "keep-both".into(),
+        ];
+        args.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
+
+        run_inner(&args, EventFormat::Jsonl).unwrap();
+
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 100);
+        assert_eq!(fs::read_dir(&sources).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_inner_treats_directory_self_drop_as_noop() {
+        let root = std::env::temp_dir().join(format!("astrea-transfer-self-run-{}", unix_millis()));
+        let source = root.join("folder");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("child.txt"), "child").unwrap();
+
+        let args = vec![
+            "move".into(),
+            source.to_string_lossy().into_owned(),
+            "keep-both".into(),
+            source.to_string_lossy().into_owned(),
+        ];
+        run_inner(&args, EventFormat::Jsonl).unwrap();
+
+        assert!(source.join("child.txt").is_file());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn item_event_preserves_terminal_error_details() {
+        let line = json_item_line(
+            "/source/a.txt",
+            "/destination/a.txt",
+            "failed",
+            "permission_denied",
+            "permission denied",
+        );
+        assert!(line.contains("\"status\":\"failed\""));
+        assert!(line.contains("\"errorCode\":\"permission_denied\""));
+        assert!(line.contains("permission denied"));
+    }
 
     #[test]
     fn json_lines_escape_special_names() {
