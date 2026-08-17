@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::env;
-use std::io::{self, BufRead, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -11,6 +13,9 @@ use serde::{Deserialize, Serialize};
 const MAX_REQUEST_LINE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 3 * 1024 * 1024;
 const CANCEL_OPERATION: &str = "cancel";
+const COOPERATIVE_CANCEL_WAIT_STEPS: usize = 500;
+
+static CANCEL_MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -31,6 +36,10 @@ struct Response {
     error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    done: Option<bool>,
 }
 
 enum Incoming {
@@ -46,7 +55,9 @@ struct CapturedStream {
 struct ActiveRequest {
     request: Request,
     child: Child,
+    cancel_file: PathBuf,
     stdout: JoinHandle<io::Result<CapturedStream>>,
+    stdout_lines: mpsc::Receiver<io::Result<Vec<u8>>>,
     stderr: JoinHandle<io::Result<CapturedStream>>,
 }
 
@@ -89,6 +100,10 @@ pub fn run() -> Result<(), String> {
 
         while let Ok(message) = incoming_receiver.try_recv() {
             handle_incoming(message, &mut active, &mut queue, &mut stdout)?;
+        }
+
+        if let Some(active_request) = active.as_mut() {
+            drain_stdout_lines(active_request, &mut stdout)?;
         }
 
         let completed = active
@@ -207,8 +222,10 @@ fn spawn_request(
     executable: &std::path::Path,
     request: Request,
 ) -> Result<ActiveRequest, (Request, String)> {
+    let cancel_file = cancellation_marker_path();
     let mut child = match Command::new(executable)
         .args(&request.arguments)
+        .env("ASTREA_CANCEL_FILE", &cancel_file)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -217,11 +234,13 @@ fn spawn_request(
         Err(error) => return Err((request, format!("run backend operation: {error}"))),
     };
 
+    let (stdout_sender, stdout_lines) = mpsc::channel();
     let stdout = match child.stdout.take() {
-        Some(stream) => thread::spawn(move || read_stream(stream)),
+        Some(stream) => thread::spawn(move || read_stream_lines(stream, stdout_sender)),
         None => {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = std::fs::remove_file(&cancel_file);
             return Err((request, "backend stdout pipe was unavailable".into()));
         }
     };
@@ -231,6 +250,7 @@ fn spawn_request(
             let _ = child.kill();
             let _ = child.wait();
             let _ = stdout.join();
+            let _ = std::fs::remove_file(&cancel_file);
             return Err((request, "backend stderr pipe was unavailable".into()));
         }
     };
@@ -238,9 +258,54 @@ fn spawn_request(
     Ok(ActiveRequest {
         request,
         child,
+        cancel_file,
         stdout,
+        stdout_lines,
         stderr,
     })
+}
+
+fn read_stream_lines(
+    stream: impl Read,
+    sender: Sender<io::Result<Vec<u8>>>,
+) -> io::Result<CapturedStream> {
+    let mut reader = BufReader::new(stream);
+    let mut captured = Vec::new();
+    let mut exceeded = false;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line)?;
+        if count == 0 {
+            break;
+        }
+        if captured.len() < MAX_STREAM_BYTES {
+            let remaining = MAX_STREAM_BYTES - captured.len();
+            captured.extend_from_slice(&line[..count.min(remaining)]);
+        }
+        if captured.len() >= MAX_STREAM_BYTES
+            && count > MAX_STREAM_BYTES.saturating_sub(captured.len())
+        {
+            exceeded = true;
+        }
+        if sender.send(Ok(line.clone())).is_err() {
+            break;
+        }
+    }
+    Ok(CapturedStream {
+        bytes: captured,
+        exceeded,
+    })
+}
+
+fn drain_stdout_lines(active: &mut ActiveRequest, stdout: &mut impl Write) -> Result<(), String> {
+    while let Ok(line) = active.stdout_lines.try_recv() {
+        let line = line.map_err(|error| format!("read backend stdout: {error}"))?;
+        if !line.is_empty() {
+            write_stream_response(stdout, &active.request.id, &line)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_stream(mut stream: impl Read) -> io::Result<CapturedStream> {
@@ -271,7 +336,9 @@ fn write_finished_response(
     let ActiveRequest {
         request,
         mut child,
+        cancel_file,
         stdout: stdout_thread,
+        stdout_lines,
         stderr: stderr_thread,
     } = active;
     let _ = child.wait();
@@ -283,6 +350,14 @@ fn write_finished_response(
         .join()
         .map_err(|_| "backend stderr reader panicked".to_string())?
         .map_err(|error| format!("read backend stderr: {error}"))?;
+    let _ = std::fs::remove_file(cancel_file);
+
+    while let Ok(line) = stdout_lines.try_recv() {
+        let line = line.map_err(|error| format!("read backend stdout: {error}"))?;
+        if !line.is_empty() {
+            write_stream_response(stdout, &request.id, &line)?;
+        }
+    }
 
     if captured_stdout.exceeded || captured_stderr.exceeded {
         return write_error_response(
@@ -299,9 +374,11 @@ fn write_finished_response(
                 version: 1,
                 id: request.id,
                 ok: true,
-                payload: Some(String::from_utf8_lossy(&captured_stdout.bytes).into_owned()),
+                payload: None,
                 error_code: None,
                 error: None,
+                stream: None,
+                done: Some(true),
             },
         );
     }
@@ -318,15 +395,40 @@ fn write_finished_response(
 
 fn terminate_request(active: ActiveRequest) {
     let ActiveRequest {
+        cancel_file,
         mut child,
         stdout,
+        stdout_lines: _,
         stderr,
         ..
     } = active;
-    let _ = child.kill();
+    let _ = std::fs::write(&cancel_file, b"cancelled\n");
+    let mut exited = false;
+    for _ in 0..COOPERATIVE_CANCEL_WAIT_STEPS {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                exited = true;
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+    if !exited {
+        let _ = child.kill();
+    }
     let _ = child.wait();
     let _ = stdout.join();
     let _ = stderr.join();
+    let _ = std::fs::remove_file(cancel_file);
+}
+
+fn cancellation_marker_path() -> PathBuf {
+    let serial = CANCEL_MARKER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        ".astrea-explorer-cancel-{}-{serial}",
+        std::process::id()
+    ))
 }
 
 fn write_cancelled_response(stdout: &mut impl Write, id: String) -> Result<(), String> {
@@ -348,6 +450,24 @@ fn write_error_response(
             payload: None,
             error_code: Some(code.into()),
             error: Some(message),
+            stream: None,
+            done: Some(true),
+        },
+    )
+}
+
+fn write_stream_response(stdout: &mut impl Write, id: &str, payload: &[u8]) -> Result<(), String> {
+    write_response(
+        stdout,
+        Response {
+            version: 1,
+            id: id.to_string(),
+            ok: true,
+            payload: Some(String::from_utf8_lossy(payload).into_owned()),
+            error_code: None,
+            error: None,
+            stream: Some(true),
+            done: None,
         },
     )
 }

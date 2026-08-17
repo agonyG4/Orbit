@@ -5,7 +5,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
 use crate::json;
@@ -13,8 +12,6 @@ use crate::thumbnails;
 
 const SEARCH_MAX_DEPTH: usize = 8;
 const SEARCH_MAX_RESULTS: usize = 2_000;
-
-static MOUNTINFO_CACHE: OnceLock<Option<Vec<MountInfoEntry>>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct Entry {
@@ -81,6 +78,10 @@ impl ListingProfile {
 pub fn run_list(args: &[String]) -> Result<(), String> {
     let (dir, show_hidden, sort_field, sort_asc, folders_first, preview_mode) =
         parse_list_args_with_preview(args)?;
+    if dir == Path::new("trash://") || dir == Path::new("trash:///") {
+        println!("{}", crate::utility::list_trash_entries_json()?);
+        return Ok(());
+    }
     let entries = read_sorted_entries_with_preview(
         dir,
         show_hidden,
@@ -636,17 +637,15 @@ fn filesystem_type_for_path(path: &Path) -> Option<String> {
     } else {
         path
     };
-    filesystem_type_for_path_from_mounts(query, mountinfo_entries()?)
+    let mounts = mountinfo_entries()?;
+    filesystem_type_for_path_from_mounts(query, &mounts)
 }
 
-fn mountinfo_entries() -> Option<&'static [MountInfoEntry]> {
-    MOUNTINFO_CACHE
-        .get_or_init(|| {
-            fs::read_to_string("/proc/self/mountinfo")
-                .ok()
-                .map(|mountinfo| parse_mountinfo_entries(&mountinfo))
-        })
-        .as_deref()
+fn mountinfo_entries() -> Option<Vec<MountInfoEntry>> {
+    env::var("ASTREA_MOUNTINFO")
+        .ok()
+        .or_else(|| fs::read_to_string("/proc/self/mountinfo").ok())
+        .map(|mountinfo| parse_mountinfo_entries(&mountinfo))
 }
 
 fn filesystem_type_for_path_from_mounts(query: &Path, mounts: &[MountInfoEntry]) -> Option<String> {

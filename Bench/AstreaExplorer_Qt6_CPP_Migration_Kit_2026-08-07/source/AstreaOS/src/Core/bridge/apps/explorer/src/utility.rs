@@ -1,8 +1,15 @@
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let operation = args.first().map(String::as_str).unwrap_or_default();
@@ -22,6 +29,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "trash" => trash(args),
         "restore-trash" => restore_trash(args),
         "empty-trash" => empty_trash(args),
+        "delete-permanently" => delete_permanently(args),
         other => Err(format!("unsupported utility operation: {other}")),
     };
 
@@ -35,6 +43,99 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ),
     }
     Ok(())
+}
+
+pub fn list_trash_entries_json() -> Result<String, String> {
+    let mut locations = vec![home_trash_location()];
+    for mount in mount_table() {
+        if is_remote_filesystem(&mount.fs_type) {
+            continue;
+        }
+        for location in candidate_secondary_locations(&mount) {
+            if (location.files.is_dir() || location.info.is_dir())
+                && !locations.iter().any(|root| root.files == location.files)
+            {
+                locations.push(location);
+            }
+        }
+    }
+
+    let mut entries = Vec::new();
+    for location in locations {
+        if !location.files.is_dir() {
+            continue;
+        }
+        let location_id = location.files.to_string_lossy().into_owned();
+        for entry in fs::read_dir(&location.files)
+            .map_err(|error| format!("read trash files {}: {error}", location.files.display()))?
+        {
+            let entry = entry.map_err(|error| format!("read trash entry: {error}"))?;
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let info_path = location.info.join(format!("{name}.trashinfo"));
+            let metadata = if info_path.is_file() {
+                read_trash_metadata(&info_path).ok()
+            } else {
+                None
+            };
+            let (original_path, deletion_date, orphan_state) = match metadata {
+                Some((path_value, deletion_date)) => {
+                    let orphan_state = if deletion_date.is_empty() {
+                        "invalid-metadata"
+                    } else {
+                        "none"
+                    };
+                    (
+                        decode_trash_path(&path_value, location.mount_root.as_deref())
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        deletion_date,
+                        orphan_state,
+                    )
+                }
+                None => (String::new(), String::new(), "orphan"),
+            };
+            let file_metadata = fs::symlink_metadata(&path)
+                .map_err(|error| format!("metadata trash item {}: {error}", path.display()))?;
+            let modified_ms = file_metadata
+                .modified()
+                .ok()
+                .and_then(to_millis)
+                .unwrap_or_default();
+            let is_dir = file_metadata.is_dir() && !file_metadata.file_type().is_symlink();
+            let item_id = format!("{location_id}:{name}");
+            let mount_topdir = location
+                .mount_root
+                .as_ref()
+                .map(|root| root.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entries.push(format!(
+                "{{\"fileName\":\"{}\",\"filePath\":\"{}\",\"fileUrl\":\"{}\",\"fileIsDir\":{},\"fileExecutable\":false,\"fileHidden\":{},\"fileSize\":{},\"fileModified\":{},\"fileKind\":\"{}\",\"filePreviewUrl\":\"\",\"fileRemote\":false,\"fileMetadataLimited\":false,\"fileFilesystem\":\"{}\",\"trashItemId\":\"{}\",\"trashInfoPath\":\"{}\",\"trashLocationId\":\"{}\",\"trashOriginalPath\":\"{}\",\"trashDeletionDate\":\"{}\",\"trashMountTopdir\":\"{}\",\"trashAvailable\":true,\"trashOrphanState\":\"{}\"}}",
+                escape_json(&name),
+                escape_json(&path.to_string_lossy()),
+                escape_json(&crate::json::file_url(&path)),
+                is_dir,
+                name.starts_with('.'),
+                if is_dir { 0 } else { file_metadata.len() },
+                modified_ms,
+                escape_json(if orphan_state == "none" {
+                    if is_dir { "Pasta" } else { "Arquivo" }
+                } else {
+                    "Orphan"
+                }),
+                escape_json(&location_id),
+                escape_json(&item_id),
+                escape_json(&info_path.to_string_lossy()),
+                escape_json(&location_id),
+                escape_json(&original_path),
+                escape_json(&deletion_date),
+                escape_json(&mount_topdir),
+                orphan_state,
+            ));
+        }
+    }
+    entries.sort();
+    Ok(format!("[{}]", entries.join(",")))
 }
 
 fn warm_thumbnails(args: &[String]) -> Result<String, String> {
@@ -160,6 +261,52 @@ fn properties(args: &[String]) -> Result<String, String> {
     ))
 }
 
+fn batch_item_json(path: &Path, target: Option<&Path>, status: &str, error: &str) -> String {
+    format!(
+        "{{\"path\":\"{}\",\"target\":\"{}\",\"status\":\"{}\",\"errorCode\":\"{}\",\"message\":\"{}\"}}",
+        escape_json(&path.to_string_lossy()),
+        escape_json(
+            &target
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+        escape_json(status),
+        if error.is_empty() {
+            String::new()
+        } else {
+            String::from("operation_failed")
+        },
+        escape_json(error),
+    )
+}
+
+fn batch_result_json(
+    operation: &str,
+    count: usize,
+    items: &[String],
+    first_error: Option<&str>,
+) -> String {
+    let ok = first_error.is_none();
+    let state = if ok {
+        "success"
+    } else if count > 0 {
+        "partial-success"
+    } else {
+        "failed"
+    };
+    format!(
+        "{{\"ok\":{},\"operation\":\"{}\",\"count\":{},\"state\":\"{}\",\"items\":[{}]{} }}",
+        ok,
+        escape_json(operation),
+        count,
+        state,
+        items.join(","),
+        first_error
+            .map(|error| format!(",\"error\":\"{}\"", escape_json(error)))
+            .unwrap_or_default(),
+    )
+}
+
 fn create_desktop_shortcut(args: &[String]) -> Result<String, String> {
     let target = expand_home(Path::new(required(args, 1, "target")?));
     if !path_exists(&target) {
@@ -234,38 +381,102 @@ fn trash(args: &[String]) -> Result<String, String> {
     if args.len() < 4 {
         return Err("usage: utility trash <trash-files> <trash-info> <paths...>".to_string());
     }
-    let files = expand_home(Path::new(&args[1]));
-    let info = expand_home(Path::new(&args[2]));
-    fs::create_dir_all(&files).map_err(|error| format!("create trash: {error}"))?;
-    fs::create_dir_all(&info).map_err(|error| format!("create trash info: {error}"))?;
-    let mut count = 0usize;
+    let primary = TrashLocation {
+        files: expand_home(Path::new(&args[1])),
+        info: expand_home(Path::new(&args[2])),
+        mount_root: None,
+    };
+    let mut items = Vec::new();
+    let mut first_error = None;
+    let mut planned = Vec::new();
     for raw in &args[3..] {
         let source = expand_home(Path::new(raw));
         if !path_exists(&source) {
-            return Err(format!("source not found: {}", source.display()));
+            let error = format!("source not found: {}", source.display());
+            first_error.get_or_insert(error.clone());
+            items.push(batch_item_json(&source, None, "failed", &error));
+            continue;
         }
-        let name = source
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| "source has no valid name".to_string())?;
-        let destination = unique_target(&files, name);
-        let info_path = info.join(format!(
-            "{}.trashinfo",
-            destination.file_name().unwrap().to_string_lossy()
-        ));
-        fs::rename(&source, &destination)
-            .map_err(|error| format!("move to trash {}: {error}", source.display()))?;
+        let name = match source.file_name().and_then(|value| value.to_str()) {
+            Some(name) => name.to_string(),
+            None => {
+                let error = format!("source has no valid name: {}", source.display());
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
+        };
+        let location = match trash_location_for(&source, &primary) {
+            Ok(location) => location,
+            Err(error) => {
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
+        };
+        planned.push((source, name, location));
+    }
+    if let Some(error) = first_error {
+        for (source, _, _) in planned {
+            items.push(batch_item_json(
+                &source,
+                None,
+                "not-attempted",
+                "batch preflight failed",
+            ));
+        }
+        return Ok(batch_result_json("trash", 0, &items, Some(&error)));
+    }
+
+    let mut count = 0usize;
+    for (source, name, location) in planned {
+        ensure_trash_dirs(&location)?;
+        let (destination, info_path) = match reserve_trash_item(&location, &name) {
+            Ok(value) => value,
+            Err(error) => {
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
+        };
+        let path_value = encode_trash_path(&source, location.mount_root.as_deref());
         let content = format!(
-            "[Trash Info]\nPath={}\nDeletionDate={}\n",
-            encode_file_url(&source),
+            "[Trash Info]\nPath={path_value}\nDeletionDate={}\n",
             unix_date()
         );
-        fs::write(&info_path, content).map_err(|error| format!("write trash info: {error}"))?;
+        if let Err(error) = fs::rename(&source, &destination) {
+            let _ = fs::remove_file(&info_path);
+            let message = format!("move to trash {}: {error}", source.display());
+            first_error.get_or_insert(message.clone());
+            items.push(batch_item_json(
+                &source,
+                Some(&destination),
+                "failed",
+                &message,
+            ));
+            continue;
+        }
+        if let Err(error) = fs::write(&info_path, content) {
+            let _ = fs::rename(&destination, &source);
+            let _ = fs::remove_file(&info_path);
+            let message = format!("write trash info: {error}");
+            first_error.get_or_insert(message.clone());
+            items.push(batch_item_json(
+                &source,
+                Some(&destination),
+                "failed",
+                &message,
+            ));
+            continue;
+        }
         count += 1;
+        items.push(batch_item_json(&source, Some(&destination), "trashed", ""));
     }
-    Ok(format!(
-        "{{\"ok\":true,\"operation\":\"trash\",\"count\":{}}}",
-        count
+    Ok(batch_result_json(
+        "trash",
+        count,
+        &items,
+        first_error.as_deref(),
     ))
 }
 
@@ -278,47 +489,83 @@ fn restore_trash(args: &[String]) -> Result<String, String> {
     let info = expand_home(Path::new(&args[1]));
     let fallback = expand_home(Path::new(&args[2]));
     let mut count = 0usize;
+    let mut items = Vec::new();
+    let mut first_error = None;
     for raw in &args[3..] {
         let source = expand_home(Path::new(raw));
         if !path_exists(&source) {
+            let error = format!("trash item not found: {}", source.display());
+            first_error.get_or_insert(error.clone());
+            items.push(batch_item_json(&source, None, "failed", &error));
             continue;
         }
         let name = source
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("restored");
-        let info_path = info.join(format!("{name}.trashinfo"));
-        let original = fs::read_to_string(&info_path)
-            .ok()
-            .and_then(|text| {
-                text.lines()
-                    .find_map(|line| line.strip_prefix("Path=").map(str::to_owned))
-            })
-            .map(|value| decode_file_url(&value))
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| fallback.join(name));
-        let parent = original.parent().unwrap_or(&fallback);
-        fs::create_dir_all(parent).map_err(|error| format!("create restore directory: {error}"))?;
-        let destination = if path_exists(&original) {
-            unique_target(
-                parent,
-                original
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .unwrap_or(name),
-            )
-        } else {
-            original
+        let metadata = match find_trash_metadata(&info, name) {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                let error = format!("trash metadata missing for {name}");
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
+            Err(error) => {
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
         };
-        fs::rename(&source, &destination)
-            .map_err(|error| format!("restore {}: {error}", source.display()))?;
+        let (info_path, path_value, mount_root) = metadata;
+        let original = match decode_trash_path(&path_value, mount_root.as_deref()) {
+            Some(path) => path,
+            None => {
+                let error = format!("invalid original path for {name}");
+                first_error.get_or_insert(error.clone());
+                items.push(batch_item_json(&source, None, "failed", &error));
+                continue;
+            }
+        };
+        let parent = original.parent().unwrap_or(&fallback);
+        if let Err(error) = fs::create_dir_all(parent) {
+            let message = format!("create restore directory: {error}");
+            first_error.get_or_insert(message.clone());
+            items.push(batch_item_json(
+                &source,
+                Some(&original),
+                "failed",
+                &message,
+            ));
+            continue;
+        }
+        if path_exists(&original) {
+            let error = format!("restore conflict: {}", original.display());
+            first_error.get_or_insert(error.clone());
+            items.push(batch_item_json(&source, Some(&original), "failed", &error));
+            continue;
+        }
+        let destination = original;
+        if let Err(error) = fs::rename(&source, &destination) {
+            let message = format!("restore {}: {error}", source.display());
+            first_error.get_or_insert(message.clone());
+            items.push(batch_item_json(
+                &source,
+                Some(&destination),
+                "failed",
+                &message,
+            ));
+            continue;
+        }
         let _ = fs::remove_file(info_path);
         count += 1;
+        items.push(batch_item_json(&source, Some(&destination), "restored", ""));
     }
-    Ok(format!(
-        "{{\"ok\":true,\"operation\":\"restore-trash\",\"count\":{}}}",
-        count
+    Ok(batch_result_json(
+        "restore-trash",
+        count,
+        &items,
+        first_error.as_deref(),
     ))
 }
 
@@ -326,99 +573,562 @@ fn empty_trash(args: &[String]) -> Result<String, String> {
     if args.len() < 3 {
         return Err("usage: utility empty-trash <trash-files> <trash-info>".to_string());
     }
-    let mut count = 0usize;
-    for root in [
-        &expand_home(Path::new(&args[1])),
-        &expand_home(Path::new(&args[2])),
-    ] {
-        if !root.is_dir() {
+    let primary = TrashLocation {
+        files: expand_home(Path::new(&args[1])),
+        info: expand_home(Path::new(&args[2])),
+        mount_root: None,
+    };
+    let mut roots = vec![primary];
+    for mount in mount_table() {
+        if is_remote_filesystem(&mount.fs_type) {
             continue;
         }
-        for entry in fs::read_dir(root).map_err(|error| format!("read trash: {error}"))? {
-            let path = entry
-                .map_err(|error| format!("read trash entry: {error}"))?
-                .path();
-            if path.is_dir() {
-                fs::remove_dir_all(path).map_err(|error| format!("empty trash: {error}"))?;
-            } else {
-                fs::remove_file(path).map_err(|error| format!("empty trash: {error}"))?;
+        for location in candidate_secondary_locations(&mount) {
+            if (location.files.is_dir() || location.info.is_dir())
+                && !roots.iter().any(|root| root.files == location.files)
+            {
+                roots.push(location);
             }
-            count += 1;
         }
     }
-    Ok(format!(
-        "{{\"ok\":true,\"operation\":\"empty-trash\",\"count\":{}}}",
-        count
+    let mut count = 0usize;
+    let mut items = Vec::new();
+    let mut first_error = None;
+    for root in roots {
+        let logical_names: std::collections::HashSet<String> = if root.info.is_dir() {
+            fs::read_dir(&root.info)
+                .map_err(|error| format!("read trash info: {error}"))?
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let path = entry.path();
+                    if path.extension().and_then(|value| value.to_str()) == Some("trashinfo") {
+                        path.file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+        if root.files.is_dir() {
+            let entries = match fs::read_dir(&root.files) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    let message = format!("read trash: {error}");
+                    first_error.get_or_insert(message.clone());
+                    items.push(batch_item_json(&root.files, None, "failed", &message));
+                    continue;
+                }
+            };
+            for entry in entries {
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(error) => {
+                        let message = format!("read trash entry: {error}");
+                        first_error.get_or_insert(message.clone());
+                        items.push(batch_item_json(&root.files, None, "failed", &message));
+                        continue;
+                    }
+                };
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let logical = logical_names.contains(&name);
+                match remove_path(&path) {
+                    Ok(()) => {
+                        if logical {
+                            count += 1;
+                        }
+                        items.push(batch_item_json(&path, None, "deleted", ""));
+                    }
+                    Err(error) => {
+                        first_error.get_or_insert(error.clone());
+                        items.push(batch_item_json(&path, None, "failed", &error));
+                    }
+                }
+            }
+        }
+        if root.info.is_dir() {
+            let entries = match fs::read_dir(&root.info) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    let message = format!("read trash info: {error}");
+                    first_error.get_or_insert(message.clone());
+                    items.push(batch_item_json(&root.info, None, "failed", &message));
+                    continue;
+                }
+            };
+            for entry in entries {
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(error) => {
+                        let message = format!("read trash info entry: {error}");
+                        first_error.get_or_insert(message.clone());
+                        items.push(batch_item_json(&root.info, None, "failed", &message));
+                        continue;
+                    }
+                };
+                if let Err(error) = remove_path(&path) {
+                    first_error.get_or_insert(error.clone());
+                    items.push(batch_item_json(&path, None, "failed", &error));
+                }
+            }
+        }
+    }
+    Ok(batch_result_json(
+        "empty-trash",
+        count,
+        &items,
+        first_error.as_deref(),
     ))
 }
 
-fn unique_target(root: &Path, name: &str) -> PathBuf {
-    let mut candidate = root.join(name);
-    let mut index = 2;
-    while path_exists(&candidate) {
-        candidate = root.join(format!("{} {}", name, index));
-        index += 1;
+fn delete_permanently(args: &[String]) -> Result<String, String> {
+    if args.len() < 2 {
+        return Err("usage: utility delete-permanently <paths...>".to_string());
     }
-    candidate
-}
-
-fn unix_date() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let days = (seconds / 86_400) as i64;
-    let day_seconds = seconds % 86_400;
-
-    // Civil-date conversion from Unix days, using UTC and no locale or
-    // subprocess dependency. This is the format required by the freedesktop
-    // trash specification's DeletionDate field.
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let month_part = (5 * doy + 2) / 153;
-    let day = doy - (153 * month_part + 2) / 5 + 1;
-    let month = month_part + if month_part < 10 { 3 } else { -9 };
-    year += if month <= 2 { 1 } else { 0 };
-
-    let hour = day_seconds / 3_600;
-    let minute = (day_seconds % 3_600) / 60;
-    let second = day_seconds % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
-}
-
-fn encode_file_url(path: &Path) -> String {
-    let mut encoded = String::from("file://");
-    for byte in path.to_string_lossy().as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
-            encoded.push(*byte as char);
-        } else {
-            encoded.push_str(&format!("%{:02X}", byte));
+    let metadata_index = args[1..]
+        .iter()
+        .position(|value| value == "--metadata")
+        .map(|index| index + 1);
+    let path_end = metadata_index.unwrap_or(args.len());
+    let metadata_start = metadata_index.map(|index| index + 1);
+    let mut count = 0usize;
+    let mut items = Vec::new();
+    let mut first_error = None;
+    for (index, raw) in args[1..path_end].iter().enumerate() {
+        let path = expand_home(Path::new(raw));
+        if !path_exists(&path) {
+            let error = format!("path not found: {}", path.display());
+            first_error.get_or_insert(error.clone());
+            items.push(batch_item_json(&path, None, "failed", &error));
+            continue;
         }
-    }
-    encoded
-}
-
-fn decode_file_url(value: &str) -> String {
-    let value = value.strip_prefix("file://").unwrap_or(value);
-    let bytes = value.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(decoded) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
-                output.push(decoded);
-                index += 3;
+        if let Err(error) = remove_path(&path) {
+            first_error.get_or_insert(error.clone());
+            items.push(batch_item_json(&path, None, "failed", &error));
+            continue;
+        }
+        count += 1;
+        let metadata_path = metadata_start
+            .and_then(|start| args.get(start + index))
+            .filter(|value| !value.is_empty())
+            .map(|value| expand_home(Path::new(value)));
+        if let Some(metadata_path) = metadata_path {
+            if let Err(error) = fs::remove_file(&metadata_path) {
+                let message = format!("remove trash metadata {}: {error}", metadata_path.display());
+                first_error.get_or_insert(message.clone());
+                items.push(batch_item_json(
+                    &path,
+                    Some(&metadata_path),
+                    "deleted",
+                    &message,
+                ));
                 continue;
             }
         }
-        output.push(bytes[index]);
-        index += 1;
+        items.push(batch_item_json(&path, None, "deleted", ""));
     }
-    String::from_utf8_lossy(&output).into_owned()
+    Ok(batch_result_json(
+        "delete-permanently",
+        count,
+        &items,
+        first_error.as_deref(),
+    ))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TrashLocation {
+    files: PathBuf,
+    info: PathBuf,
+    mount_root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct MountLocation {
+    mount_point: PathBuf,
+    fs_type: String,
+}
+
+fn ensure_trash_dirs(location: &TrashLocation) -> Result<(), String> {
+    fs::create_dir_all(&location.files)
+        .map_err(|error| format!("create trash files {}: {error}", location.files.display()))?;
+    fs::create_dir_all(&location.info)
+        .map_err(|error| format!("create trash info {}: {error}", location.info.display()))?;
+    Ok(())
+}
+
+fn reserve_trash_item(location: &TrashLocation, name: &str) -> Result<(PathBuf, PathBuf), String> {
+    for index in 1..10_000usize {
+        let candidate_name = if index == 1 {
+            name.to_string()
+        } else {
+            format!("{name} {index}")
+        };
+        let destination = location.files.join(&candidate_name);
+        if path_exists(&destination) {
+            continue;
+        }
+        let info_path = location.info.join(format!("{candidate_name}.trashinfo"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&info_path)
+        {
+            Ok(_) => return Ok((destination, info_path)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("reserve trash metadata: {error}")),
+        }
+    }
+    Err(format!("unable to reserve trash name for {name}"))
+}
+
+fn trash_location_for(source: &Path, primary: &TrashLocation) -> Result<TrashLocation, String> {
+    let Some(mount) = owning_secondary_mount(source) else {
+        return Ok(primary.clone());
+    };
+    let primary_mount = owning_secondary_mount(&primary.files);
+    if primary_mount
+        .as_ref()
+        .is_some_and(|candidate| candidate.mount_point == mount.mount_point)
+    {
+        return Ok(primary.clone());
+    }
+    if is_remote_filesystem(&mount.fs_type) {
+        return Err(format!(
+            "trash unsupported on remote filesystem {}",
+            mount.fs_type
+        ));
+    }
+    secondary_location(&mount)
+}
+
+fn find_trash_metadata(
+    primary_info: &Path,
+    name: &str,
+) -> Result<Option<(PathBuf, String, Option<PathBuf>)>, String> {
+    if primary_info.is_file() {
+        let expected = format!("{name}.trashinfo");
+        if primary_info.file_name().and_then(|value| value.to_str()) != Some(expected.as_str()) {
+            return Err(format!("trash metadata does not match {name}"));
+        }
+        let mount_root = primary_info.parent().and_then(|info_dir| {
+            mount_table().into_iter().find_map(|mount| {
+                candidate_secondary_locations(&mount)
+                    .into_iter()
+                    .find(|location| location.info == info_dir)
+                    .and_then(|location| location.mount_root)
+            })
+        });
+        return Ok(Some((
+            primary_info.to_path_buf(),
+            read_trash_path(primary_info)?,
+            mount_root,
+        )));
+    }
+    let primary_path = primary_info.join(format!("{name}.trashinfo"));
+    if primary_path.is_file() {
+        let path_value = read_trash_path(&primary_path)?;
+        return Ok(Some((primary_path, path_value, None)));
+    }
+    for mount in mount_table() {
+        for location in candidate_secondary_locations(&mount) {
+            let info_path = location.info.join(format!("{name}.trashinfo"));
+            if info_path.is_file() {
+                return Ok(Some((
+                    info_path.clone(),
+                    read_trash_path(&info_path)?,
+                    location.mount_root,
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn read_trash_path(path: &Path) -> Result<String, String> {
+    read_trash_metadata(path).map(|(path, _)| path)
+}
+
+fn read_trash_metadata(path: &Path) -> Result<(String, String), String> {
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("read trash metadata {}: {error}", path.display()))?;
+    let path_value = content
+        .lines()
+        .find_map(|line| line.strip_prefix("Path=").map(str::to_string))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("trash metadata has no Path: {}", path.display()))?;
+    let deletion_date = content
+        .lines()
+        .find_map(|line| line.strip_prefix("DeletionDate=").map(str::to_string))
+        .unwrap_or_default();
+    Ok((path_value, deletion_date))
+}
+
+fn encode_trash_path(path: &Path, mount_root: Option<&Path>) -> String {
+    let value = mount_root
+        .and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path);
+    encode_path_bytes(value)
+}
+
+fn decode_trash_path(value: &str, mount_root: Option<&Path>) -> Option<PathBuf> {
+    let bytes = decode_path_bytes(value)?;
+    #[cfg(unix)]
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    #[cfg(not(unix))]
+    let path = PathBuf::from(String::from_utf8(bytes).ok()?);
+    if path.is_absolute() {
+        Some(path)
+    } else if path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        None
+    } else {
+        mount_root.map(|root| root.join(path))
+    }
+}
+
+#[cfg(unix)]
+fn encode_path_bytes(path: &Path) -> String {
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+                (*byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn encode_path_bytes(path: &Path) -> String {
+    path.to_string_lossy()
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+                (*byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+fn decode_path_bytes(value: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            output.push(u8::from_str_radix(&value[index + 1..index + 3], 16).ok()?);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Some(output)
+}
+
+fn remove_path(path: &Path) -> Result<(), String> {
+    if path.is_dir() && !path.is_symlink() {
+        fs::remove_dir_all(path).map_err(|error| format!("empty trash: {error}"))
+    } else {
+        fs::remove_file(path).map_err(|error| format!("empty trash: {error}"))
+    }
+}
+
+fn secondary_location(mount: &MountLocation) -> Result<TrashLocation, String> {
+    candidate_secondary_locations(mount)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            format!(
+                "no usable trash location on {}",
+                mount.mount_point.display()
+            )
+        })
+}
+
+fn candidate_secondary_locations(mount: &MountLocation) -> Vec<TrashLocation> {
+    let uid = current_uid();
+    let mut locations = Vec::new();
+    let shared = mount.mount_point.join(".Trash");
+    if shared.is_dir() && !shared.is_symlink() && is_sticky_directory(&shared) {
+        let root = shared.join(uid.to_string());
+        locations.push(TrashLocation {
+            files: root.join("files"),
+            info: root.join("info"),
+            mount_root: Some(mount.mount_point.clone()),
+        });
+    }
+    let private_root = mount.mount_point.join(format!(".Trash-{uid}"));
+    let private = TrashLocation {
+        files: private_root.join("files"),
+        info: private_root.join("info"),
+        mount_root: Some(mount.mount_point.clone()),
+    };
+    if !locations
+        .iter()
+        .any(|location| location.files == private.files)
+    {
+        locations.push(private);
+    }
+    locations
+}
+
+fn home_trash_location() -> TrashLocation {
+    let data_home = env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|path| path.starts_with('/'))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| expand_home(Path::new("~/.local/share")));
+    TrashLocation {
+        files: data_home.join("Trash/files"),
+        info: data_home.join("Trash/info"),
+        mount_root: None,
+    }
+}
+
+#[cfg(unix)]
+fn is_sticky_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o1000 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_sticky_directory(_path: &Path) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    unsafe { getuid() }
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
+}
+
+fn owning_secondary_mount(path: &Path) -> Option<MountLocation> {
+    mount_table()
+        .into_iter()
+        .filter(|mount| mount.mount_point != Path::new("/") && path.starts_with(&mount.mount_point))
+        .max_by_key(|mount| mount.mount_point.components().count())
+}
+
+fn is_remote_filesystem(fs_type: &str) -> bool {
+    matches!(
+        fs_type,
+        "9p" | "afp" | "cifs" | "fuse.sshfs" | "ncp" | "nfs" | "nfs4" | "smbfs" | "sshfs"
+    )
+}
+
+fn mount_table() -> Vec<MountLocation> {
+    #[cfg(unix)]
+    {
+        let text = env::var("ASTREA_MOUNTINFO")
+            .ok()
+            .or_else(|| fs::read_to_string("/proc/self/mountinfo").ok())
+            .unwrap_or_default();
+        return text.lines().filter_map(parse_mountinfo_line).collect();
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(unix)]
+fn parse_mountinfo_line(line: &str) -> Option<MountLocation> {
+    let mut fields = line.split(" - ");
+    let left: Vec<&str> = fields.next()?.split_whitespace().collect();
+    let right: Vec<&str> = fields.next()?.split_whitespace().collect();
+    Some(MountLocation {
+        mount_point: PathBuf::from(unescape_mountinfo(left.get(4)?)),
+        fs_type: right.first()?.to_string(),
+    })
+}
+
+#[cfg(unix)]
+fn unescape_mountinfo(value: &str) -> String {
+    value
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+}
+
+#[cfg(unix)]
+fn unix_date() -> String {
+    #[repr(C)]
+    struct LocalTm {
+        second: i32,
+        minute: i32,
+        hour: i32,
+        day: i32,
+        month: i32,
+        year_since_1900: i32,
+        _weekday: i32,
+        _yearday: i32,
+        _isdst: i32,
+        _gmtoff: i64,
+        _zone: *const std::ffi::c_char,
+    }
+
+    unsafe extern "C" {
+        fn localtime_r(time: *const i64, result: *mut LocalTm) -> *mut LocalTm;
+    }
+
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+    let mut local = LocalTm {
+        second: 0,
+        minute: 0,
+        hour: 0,
+        day: 1,
+        month: 0,
+        year_since_1900: 70,
+        _weekday: 0,
+        _yearday: 0,
+        _isdst: 0,
+        _gmtoff: 0,
+        _zone: std::ptr::null(),
+    };
+    if unsafe { localtime_r(&seconds, &mut local) }.is_null() {
+        return String::from("1970-01-01T00:00:00");
+    }
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        local.year_since_1900 + 1900,
+        local.month + 1,
+        local.day,
+        local.hour,
+        local.minute,
+        local.second
+    )
+}
+
+#[cfg(not(unix))]
+fn unix_date() -> String {
+    String::from("1970-01-01T00:00:00")
 }
 
 fn desktop_directory() -> PathBuf {
@@ -558,6 +1268,9 @@ fn escape_json(value: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
+
+    static TRASH_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn child_name_rejects_path_escape() {
@@ -582,6 +1295,162 @@ mod tests {
         assert!(result.contains("item-00"));
         assert_eq!(result.matches("item-").count(), 12);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trash_metadata_is_freedesktop_path_bytes_and_restore_is_explicit() {
+        let _guard = TRASH_TEST_LOCK.lock().unwrap();
+        let root = tempfile_path("trash-metadata");
+        let files = root.join("Trash/files");
+        let info = root.join("Trash/info");
+        let source_dir = root.join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("space é.txt");
+        fs::write(&source, "payload").unwrap();
+
+        trash(&vec![
+            "trash".into(),
+            files.to_string_lossy().into_owned(),
+            info.to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+
+        let trashed = files.join("space é.txt");
+        let metadata = fs::read_to_string(info.join("space é.txt.trashinfo")).unwrap();
+        assert!(trashed.is_file());
+        assert!(metadata.contains("Path=/"));
+        assert!(!metadata.contains("Path=file://"));
+        assert!(metadata.contains("%20"));
+        assert!(metadata.contains("%C3%A9"));
+
+        let conflict = source.clone();
+        fs::write(&conflict, "new occupant").unwrap();
+        let restore = restore_trash(&vec![
+            "restore-trash".into(),
+            info.to_string_lossy().into_owned(),
+            source_dir.to_string_lossy().into_owned(),
+            trashed.to_string_lossy().into_owned(),
+        ]);
+        let restore = restore.unwrap();
+        assert!(restore.contains("\"ok\":false"));
+        assert!(restore.contains("restore conflict"));
+        assert!(trashed.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_trash_lists_home_items_with_owning_metadata() {
+        let _guard = TRASH_TEST_LOCK.lock().unwrap();
+        let root = tempfile_path("trash-index");
+        let data_home = root.join("data");
+        let files = data_home.join("Trash/files");
+        let info = data_home.join("Trash/info");
+        let original = root.join("original/item.txt");
+        fs::create_dir_all(&files).unwrap();
+        fs::create_dir_all(&info).unwrap();
+        fs::create_dir_all(original.parent().unwrap()).unwrap();
+        fs::write(files.join("item.txt"), "payload").unwrap();
+        fs::write(
+            info.join("item.txt.trashinfo"),
+            format!(
+                "[Trash Info]\nPath={}\nDeletionDate=2026-08-17T12:00:00\n",
+                encode_path_bytes(&original)
+            ),
+        )
+        .unwrap();
+        unsafe { env::set_var("XDG_DATA_HOME", &data_home) };
+
+        let result = list_trash_entries_json().unwrap();
+
+        assert!(result.contains("\"fileName\":\"item.txt\""));
+        assert!(result.contains("\"trashOriginalPath\":\""));
+        assert!(result.contains("\"trashInfoPath\":\""));
+        assert!(result.contains("\"trashOrphanState\":\"none\""));
+        unsafe { env::remove_var("XDG_DATA_HOME") };
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_trash_reports_logical_items_not_physical_entries() {
+        let _guard = TRASH_TEST_LOCK.lock().unwrap();
+        let root = tempfile_path("trash-count");
+        let files = root.join("files");
+        let info = root.join("info");
+        fs::create_dir_all(&files).unwrap();
+        fs::create_dir_all(&info).unwrap();
+        fs::write(files.join("one"), "1").unwrap();
+        fs::write(files.join("orphan"), "2").unwrap();
+        fs::write(info.join("one.trashinfo"), "[Trash Info]\n").unwrap();
+
+        let result = empty_trash(&vec![
+            "empty-trash".into(),
+            files.to_string_lossy().into_owned(),
+            info.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(result.contains("\"count\":1"));
+        assert!(result.contains("\"items\":["));
+        assert_eq!(fs::read_dir(&files).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&info).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_rejects_relative_metadata_that_escapes_mount_root() {
+        let root = tempfile_path("trash-path-escape");
+        assert!(decode_trash_path("../../outside", Some(&root)).is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trash_uses_a_secondary_filesystem_trash_location() {
+        let _guard = TRASH_TEST_LOCK.lock().unwrap();
+        let root = tempfile_path("trash-secondary");
+        let volume = root.join("volume");
+        let primary = root.join("primary/Trash");
+        let source = volume.join("item.txt");
+        fs::create_dir_all(&volume).unwrap();
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(&source, "payload").unwrap();
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - ext4 /dev/test rw\n",
+            volume.display()
+        );
+        unsafe { env::set_var("ASTREA_MOUNTINFO", mountinfo) };
+
+        trash(&vec![
+            "trash".into(),
+            primary.join("files").to_string_lossy().into_owned(),
+            primary.join("info").to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+
+        let secondary = volume.join(format!(".Trash-{}/files/item.txt", current_uid()));
+        assert!(secondary.is_file());
+        assert!(!source.exists());
+        unsafe { env::remove_var("ASTREA_MOUNTINFO") };
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn permanent_delete_removes_trash_items_without_metadata_lookup() {
+        let root = tempfile_path("permanent-delete");
+        fs::create_dir_all(&root).unwrap();
+        let item = root.join("folder");
+        fs::create_dir_all(&item).unwrap();
+        fs::write(item.join("child"), "payload").unwrap();
+
+        let result = delete_permanently(&vec![
+            "delete-permanently".into(),
+            item.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(result.contains("\"count\":1"));
+        assert!(!item.exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     fn tempfile_path(name: &str) -> PathBuf {
