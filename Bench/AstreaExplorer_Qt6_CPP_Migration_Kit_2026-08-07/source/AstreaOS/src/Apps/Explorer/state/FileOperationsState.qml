@@ -43,6 +43,8 @@ QtObject {
     property int fileOperationDoneCount: bridge ? bridge.fileOperationDoneCount : 0
     property int fileOperationTotalCount: bridge ? bridge.fileOperationTotalCount : 0
     property string fileOperationMode: bridge ? bridge.fileOperationMode : ""
+    property string fileOperationState: bridge ? bridge.fileOperationState : ""
+    property var fileOperationItems: bridge ? bridge.fileOperationItems : []
     property bool appImageInstallRunning: false
     property bool wallpaperApplyRunning: false
 
@@ -51,6 +53,7 @@ QtObject {
     function selectedPathsInCurrentFolder() { return bridge ? bridge.selectedPathsInCurrentFolder() : [] }
     function selectedUriListInCurrentFolder() { return bridge ? bridge.selectedUriListInCurrentFolder() : "" }
     function isCutPending(name) { return bridge ? bridge.isCutPending(name) : false }
+    function isCutPathPending(path) { return bridge ? bridge.isCutPathPending(path) : false }
     function copySelected() { if (bridge) bridge.copySelected() }
     function cutSelected() { if (bridge) bridge.cutSelected() }
     function dropFiles(urls, destination, mode) { if (bridge) bridge.dropFiles(urls, destination, mode || "copy") }

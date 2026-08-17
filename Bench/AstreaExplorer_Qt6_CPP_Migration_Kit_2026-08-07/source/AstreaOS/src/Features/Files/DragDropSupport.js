@@ -1,5 +1,8 @@
 .pragma library
 
+// Selection is path-authoritative through selectedPathsInCurrentFolder; drag
+// ownership is intentionally determined only by explicit drag metadata.
+
 function normalizeFileUrl(url) {
     const value = String(url || "").trim()
     if (value.indexOf("file://") !== 0)
@@ -68,24 +71,12 @@ function dropPaths(drop) {
     return paths
 }
 
-function isSelectedInternalDrop(drop, appState) {
-    if (!appState || !appState.selectedPathsInCurrentFolder)
-        return false
-    const selected = appState.selectedPathsInCurrentFolder()
-    if (!selected || selected.length === 0)
-        return false
-    const paths = dropPaths(drop)
-    for (var i = 0; i < paths.length; i++) {
-        if (selected.indexOf(paths[i]) !== -1)
-            return true
-    }
-    return false
-}
-
 function dropModeFor(drop, appState) {
     if (drop && drop.source)
         return "move"
-    return isSelectedInternalDrop(drop, appState) ? "move" : "copy"
+    if (dataAsString(drop, "application/x-astrea-explorer-internal-drag") === "move")
+        return "move"
+    return "copy"
 }
 
 function dragImageUrl(previewUrl, fallbackIconUrl) {
@@ -95,6 +86,16 @@ function dragImageUrl(previewUrl, fallbackIconUrl) {
 }
 
 function handleDroppedUrls(appState, drop, destinationPath) {
+    const urls = [].concat((drop && drop.urls) || [])
+    if (urls.length > 0) {
+        appState.dropFiles(
+            urls,
+            destinationPath || appState.currentPath,
+            dropModeFor(drop, appState))
+        drop.accepted = true
+        return true
+    }
+
     const paths = dropPaths(drop)
     if (!paths || paths.length === 0)
         return false

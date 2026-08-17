@@ -16,6 +16,7 @@ QtObject {
     readonly property string networkRootPath: facade.networkRootPath
     readonly property string trashFilesPath: facade.trashFilesPath
     readonly property string trashInfoPath: facade.trashInfoPath
+    readonly property string trashVirtualPath: facade.trashVirtualPath
     readonly property string recentVirtualPath: facade.recentVirtualPath
 
     property string currentPath: facade.currentPath
@@ -35,6 +36,7 @@ QtObject {
     property bool fileModelFilling: facade.fileModelFilling
     property string selectedFile: facade.selectedFile
     property var selectedFiles: facade.selectedFiles
+    property var selectedPaths: facade.selectedPaths
     property int lastSelectedIndex: facade.lastSelectedIndex
     property var clipboardFiles: facade.clipboardFiles
     property string clipboardMode: facade.clipboardMode
@@ -48,6 +50,8 @@ QtObject {
     property int fileOperationDoneCount: facade.fileOperationDoneCount
     property int fileOperationTotalCount: facade.fileOperationTotalCount
     property string fileOperationMode: facade.fileOperationMode
+    property string fileOperationState: facade.fileOperationState
+    property var fileOperationItems: facade.fileOperationItems
     property bool pasteConflictVisible: facade.pasteConflictVisible
     property var pasteConflictItems: facade.pasteConflictItems
     property string pendingPasteRename: facade.pendingPasteRename
@@ -184,12 +188,14 @@ QtObject {
     }
 
     function isSelected(name) { return facade.isSelected(name) }
+    function isPathSelected(path) { return facade.isPathSelected(path) }
     function clearSelection() { facade.clearSelection() }
     function handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection) {
         facade.handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection)
     }
     function selectAll() { facade.selectAll() }
     function selectByName(name) { facade.selectByName(name) }
+    function selectByPath(path) { facade.selectByPath(path) }
     function createTab(path) { return facade.createTab(path || "") }
     function closeTab(index) { facade.closeTab(index) }
     function closeTabById(tabId) { facade.closeTabById(tabId) }
@@ -236,6 +242,7 @@ QtObject {
     function submitSearch(rootPath, query) { return facade.submitSearch(rootPath, query || "") }
     function clearSearch() { facade.clearSearch() }
     function isCutPending(name) { return facade.isCutPending(name) }
+    function isCutPathPending(path) { return facade.isCutPathPending(path) }
     function joinPath(directory, fileName) { return facade.joinPath(directory, fileName) }
     function fileUrlForPath(path) { return facade.fileUrlForPath(path) }
     function selectedPathsInCurrentFolder() { return facade.selectedPathsInCurrentFolder() }
@@ -281,4 +288,5 @@ QtObject {
     function visibleDefaultSidebarFavorites(items) { return facade.visibleDefaultSidebarFavorites(items) }
     function pinSidebarFavorite(path, label, icon) { facade.pinSidebarFavorite(path, label || "", icon || "") }
     function removeSidebarFavorite(path) { facade.removeSidebarFavorite(path) }
+    function moveSidebarFavorite(path, index) { facade.moveSidebarFavorite(path, index) }
 }

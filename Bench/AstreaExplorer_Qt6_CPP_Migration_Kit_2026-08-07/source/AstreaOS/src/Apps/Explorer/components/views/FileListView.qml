@@ -117,13 +117,13 @@ Item {
     }
 
     function dragPathsForItem(itemName, itemPath) {
-        if (AppState.isSelected(itemName) && AppState.selectedFiles.length > 1)
+        if (AppState.isPathSelected(itemPath) && AppState.selectedPaths.length > 1)
             return AppState.selectedPathsInCurrentFolder()
         return [itemPath]
     }
 
     function dragUriListForItem(itemName, itemPath, itemUrl) {
-        if (AppState.isSelected(itemName) && AppState.selectedFiles.length > 1)
+        if (AppState.isPathSelected(itemPath) && AppState.selectedPaths.length > 1)
             return AppState.selectedUriListInCurrentFolder()
         return itemUrl || AppState.fileUrlForPath(itemPath)
     }
@@ -496,7 +496,8 @@ Item {
             Drag.supportedActions: Qt.CopyAction | Qt.MoveAction
             Drag.mimeData: ({
                 "text/uri-list": root.dragUriListForItem(itemName, itemPath, itemUrl),
-                "text/plain": root.dragPathsForItem(itemName, itemPath).join("\n")
+                "text/plain": root.dragPathsForItem(itemName, itemPath).join("\n"),
+                "application/x-astrea-explorer-internal-drag": "move"
             })
             Drag.imageSource: dragImageUrl
             Drag.imageSourceSize: Qt.size(dragPreviewSize, dragPreviewSize)
@@ -509,7 +510,7 @@ Item {
                                                     ? Qt.rgba(0.49, 0.72, 0.97, 0.18)
                                                     : AppState.itemColor(itemName, rowHover.hovered))
 
-            opacity: isHeaderRow ? 1.0 : ((AppState.isCutPending(itemName) || fileHidden) ? 0.4 : 1.0)
+            opacity: isHeaderRow ? 1.0 : ((AppState.isCutPathPending(itemPath) || fileHidden) ? 0.4 : 1.0)
             Behavior on opacity { NumberAnimation { duration: 120 } }
 
             Text {
@@ -623,7 +624,7 @@ Item {
                 border {
                     color: dropTarget.containsDrag
                            ? "#7eb8f7"
-                           : (AppState.isSelected(itemName) ? Theme.selectedBdr : "transparent")
+                           : (AppState.isPathSelected(itemPath) ? Theme.selectedBdr : "transparent")
                     width: 1
                 }
             }

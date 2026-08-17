@@ -124,13 +124,13 @@ Item {
     }
 
     function dragPathsForItem(itemName, itemPath) {
-        if (AppState.isSelected(itemName) && AppState.selectedFiles.length > 1)
+        if (AppState.isPathSelected(itemPath) && AppState.selectedPaths.length > 1)
             return AppState.selectedPathsInCurrentFolder()
         return [itemPath]
     }
 
     function dragUriListForItem(itemName, itemPath, itemUrl) {
-        if (AppState.isSelected(itemName) && AppState.selectedFiles.length > 1)
+        if (AppState.isPathSelected(itemPath) && AppState.selectedPaths.length > 1)
             return AppState.selectedUriListInCurrentFolder()
         return itemUrl || AppState.fileUrlForPath(itemPath)
     }
@@ -364,7 +364,11 @@ Item {
         z: 9999
         Drag.dragType: Drag.Automatic
         Drag.supportedActions: Qt.CopyAction | Qt.MoveAction
-        Drag.mimeData: ({ "text/uri-list": root.queuedDragItemUrl, "text/plain": root.queuedDragItemPath })
+        Drag.mimeData: ({
+            "text/uri-list": root.queuedDragItemUrl,
+            "text/plain": root.queuedDragItemPath,
+            "application/x-astrea-explorer-internal-drag": "move"
+        })
         Drag.imageSource: root.queuedDragImageUrl
         Drag.imageSourceSize: Qt.size(root.queuedDragPreviewSize, root.queuedDragPreviewSize)
         Drag.hotSpot: Qt.point(width / 2, height / 2)
@@ -606,7 +610,7 @@ Item {
 
                         width: grid.tileWidth
                         height: grid.hlHeight + grid.tilePad * 2
-                        opacity: (AppState.isCutPending(itemName) || modelData.fileHidden) ? 0.4 : 1.0
+                        opacity: (AppState.isCutPathPending(itemPath) || modelData.fileHidden) ? 0.4 : 1.0
 
                         Rectangle {
                             id: hl
@@ -614,7 +618,7 @@ Item {
                             x: Math.round((parent.width - width)  / 2)
                             y: grid.tilePad
                             radius: 8
-                            color: AppState.isSelected(itemName)
+                            color: AppState.isPathSelected(itemPath)
                                    ? Theme.selected
                                    : folderDropTarget.containsDrag ? Qt.rgba(0.49, 0.72, 0.97, 0.18)
                                    : tileHover.hovered ? Theme.hover : "transparent"
