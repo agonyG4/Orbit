@@ -46,17 +46,6 @@ Item {
     readonly property color sidebarIconIdle: Theme.isLight ? UI.Theme.textSecondary : Qt.rgba(1, 1, 1, 0.78)
     readonly property color sidebarIconHover: UI.Theme.textPrimary
     readonly property color sidebarIconActive: UI.Theme.accentForeground
-    readonly property var defaultFavoriteItems: [
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.desktop"]) || "Desktop"),    icon: "user-desktop",      path: AppState.homePath + "/Área de trabalho" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.documentos"]) || "Documents"), icon: "folder-documents",  path: AppState.homePath + "/Documentos" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.downloads"]) || "Downloads"),  icon: "folder-downloads",  path: AppState.homePath + "/Downloads" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.imagens"]) || "Pictures"),    icon: "folder-pictures",   path: AppState.homePath + "/Imagens" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["explorer.sidebar.music"]) || "Music"),    icon: "folder-music",      path: AppState.homePath + "/Músicas" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["explorer.sidebar.videos"]) || "Videos"),     icon: "folder-videos",     path: AppState.homePath + "/Vídeos" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["explorer.sidebar.public"]) || "Public"),    icon: "folder-publicshare",path: AppState.homePath + "/Público" },
-        { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.modelos"]) || "Templates"),    icon: "folder-templates",  path: AppState.homePath + "/Modelos" }
-    ]
-
     function openDriveMenu(item, mouse) {
         AppState.announceContextMenuOpening("sidebar")
         sidebarMenuOpen = false
@@ -235,13 +224,15 @@ Item {
         Repeater {
             model: {
                 var revision = AppState.sidebarFavoritesRevision
-                return AppState.visibleDefaultSidebarFavorites(root.defaultFavoriteItems)
+                return AppState.sidebarFavorites
             }
-            SidebarItem { icon: modelData.icon; label: modelData.label; path: modelData.path }
-        }
-        Repeater {
-            model: AppState.sidebarFavorites
-            SidebarItem { icon: modelData.icon || "inode-directory"; label: modelData.label || AppState.sidebarLabelForPath(modelData.path); path: modelData.path }
+            SidebarItem {
+                icon: modelData.icon || "inode-directory"
+                label: modelData.label || AppState.sidebarLabelForPath(modelData.path)
+                path: modelData.path
+                isFavoriteRow: true
+                favoriteIndex: index
+            }
         }
 
         Item { width: 1; height: 4 }
@@ -289,7 +280,7 @@ Item {
         SidebarItem {
             icon:  "user-trash"
             label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.lixeira"]) || "Trash")
-            path:  AppState.trashFilesPath
+            path:  AppState.trashVirtualPath
         }
 
         Item { width: 1; height: 6 }
@@ -674,7 +665,10 @@ Item {
         property string label
         property string path
         property string action
-        readonly property bool acceptsDrop: action === "" && path.indexOf("/") === 0
+        property bool isFavoriteRow: false
+        property int favoriteIndex: -1
+        property bool favoriteDragging: false
+        readonly property bool acceptsDrop: (action === "" && path.indexOf("/") === 0) || isFavoriteRow
 
         readonly property bool active: action === "network"
             ? (AppState.currentPath === AppState.networkRootPath ||
@@ -804,6 +798,19 @@ Item {
             }
         }
 
+        DragHandler {
+            id: favoriteDragHandler
+            enabled: sbItem.isFavoriteRow
+            onActiveChanged: sbItem.favoriteDragging = active
+        }
+
+        Drag.active: sbItem.favoriteDragging
+        Drag.dragType: Drag.Automatic
+        Drag.supportedActions: Qt.MoveAction
+        Drag.mimeData: ({
+            "application/x-astrea-sidebar-favorite": sbItem.isFavoriteRow ? sbItem.path : ""
+        })
+
         DropArea {
             id: sidebarDropTarget
             anchors.fill: parent
@@ -813,6 +820,15 @@ Item {
             onDropped: function(drop) {
                 if (drop.accepted)
                     return
+                if (sbItem.isFavoriteRow
+                        && drop.hasFormat("application/x-astrea-sidebar-favorite")) {
+                    var draggedPath = drop.getDataAsString("application/x-astrea-sidebar-favorite")
+                    if (draggedPath && draggedPath !== sbItem.path) {
+                        AppState.moveSidebarFavorite(draggedPath, sbItem.favoriteIndex)
+                    }
+                    drop.acceptProposedAction()
+                    return
+                }
                 root.handleDroppedUrls(drop, sbItem.path)
             }
         }

@@ -184,11 +184,11 @@ Item {
     function runShowProperties() {
         closeMenu()
         var selected = AppState.selectedFiles
-        var inSelection = AppState.isSelected(itemPath.split('/').pop())
+        var inSelection = AppState.isPathSelected(itemPath)
 
         if (inSelection && selected.length > 1) {
             propertiesWin.isMulti = true
-            propertiesWin.targetPaths = selected.map(function(n) { return AppState.joinPath(AppState.currentPath, n) })
+            propertiesWin.targetPaths = AppState.selectedPaths
             propertiesWin.targetPath = ""
             propertiesWin.targetIsDir = false
         } else {
@@ -220,8 +220,8 @@ Item {
     }
 
     function runDelete() {
-        if (!AppState.isSelected(itemPath.split('/').pop()))
-            AppState.handleSelection(itemPath.split('/').pop(), -1, false, false)
+        if (!AppState.isPathSelected(itemPath))
+            AppState.selectByPath(itemPath)
         AppState.deleteSelected()
         closeMenu()
     }
@@ -229,8 +229,8 @@ Item {
     function runRestore() {
         if (!AppState.inTrashView || menuRoot.isBackgroundTarget)
             return
-        if (!AppState.isSelected(itemPath.split('/').pop()))
-            AppState.handleSelection(itemPath.split('/').pop(), -1, false, false)
+        if (!AppState.isPathSelected(itemPath))
+            AppState.selectByPath(itemPath)
         AppState.restoreSelected()
         closeMenu()
     }

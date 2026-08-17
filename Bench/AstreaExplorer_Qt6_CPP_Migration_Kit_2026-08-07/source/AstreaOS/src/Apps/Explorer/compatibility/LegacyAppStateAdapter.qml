@@ -28,6 +28,7 @@ QtObject {
     function refreshCurrentFolder() { return 0 }
     function goBack() {}
     function goForward() {}
+    function isCutPathPending(path) { return false }
     function refreshDevices() {}
     function ensureAutoMountDevices() {}
     function toggleDeviceAutoMount(deviceId, enabled) {}

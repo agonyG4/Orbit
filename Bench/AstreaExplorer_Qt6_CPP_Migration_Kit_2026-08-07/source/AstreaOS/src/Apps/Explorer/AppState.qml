@@ -33,6 +33,7 @@ QtObject {
     readonly property string networkRootPath: nativeAppState.networkRootPath
     readonly property string trashFilesPath: nativeAppState.trashFilesPath
     readonly property string trashInfoPath: nativeAppState.trashInfoPath
+    readonly property string trashVirtualPath: nativeAppState.trashVirtualPath
     readonly property string recentVirtualPath: nativeAppState.recentVirtualPath
     readonly property real minZoom: 0.75
     readonly property real maxZoom: 2.0
@@ -82,6 +83,7 @@ QtObject {
 
     property string selectedFile: nativeAppState.selectedFile
     property var selectedFiles: nativeAppState.selectedFiles
+    property var selectedPaths: nativeAppState.selectedPaths
     property int lastSelectedIndex: nativeAppState.lastSelectedIndex
 
     property var clipboardFiles: nativeAppState.clipboardFiles
@@ -118,6 +120,8 @@ QtObject {
     property alias fileOperationDoneCount: fileOpsObj.fileOperationDoneCount
     property alias fileOperationTotalCount: fileOpsObj.fileOperationTotalCount
     property alias fileOperationMode: fileOpsObj.fileOperationMode
+    property alias fileOperationState: fileOpsObj.fileOperationState
+    property alias fileOperationItems: fileOpsObj.fileOperationItems
     property alias appImageInstallRunning: fileOpsObj.appImageInstallRunning
     property alias wallpaperApplyRunning: fileOpsObj.wallpaperApplyRunning
 
@@ -339,12 +343,14 @@ QtObject {
     }
 
     function isSelected(name) { return nativeAppState.isSelected(name) }
+    function isPathSelected(path) { return nativeAppState.isPathSelected(path) }
     function clearSelection() { nativeAppState.clearSelection() }
     function handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection) {
         nativeAppState.handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection)
     }
     function selectAll() { nativeAppState.selectAll() }
     function selectByName(name) { nativeAppState.selectByName(name) }
+    function selectByPath(path) { nativeAppState.selectByPath(path) }
 
     function createTab(initialPath) { nativeAppState.createTab(initialPath || "") }
     function closeTab(index) { nativeAppState.closeTab(index) }
@@ -377,6 +383,7 @@ QtObject {
     function clearSearch() { nativeAppState.clearSearch() }
 
     function isCutPending(name) { return nativeAppState.isCutPending(name) }
+    function isCutPathPending(path) { return nativeAppState.isCutPathPending(path) }
     function joinPath(dirPath, fileName) { return nativeAppState.joinPath(dirPath, fileName) }
     function fileUrlForPath(path) { return nativeAppState.fileUrlForPath(path) }
     function selectedPathsInCurrentFolder() { return nativeAppState.selectedPathsInCurrentFolder() }
@@ -555,6 +562,9 @@ QtObject {
 
     function removeSidebarFavorite(path) {
         nativeAppState.removeSidebarFavorite(path)
+    }
+    function moveSidebarFavorite(path, index) {
+        nativeAppState.moveSidebarFavorite(path, index)
     }
 
     function isTrashPath(path) {
