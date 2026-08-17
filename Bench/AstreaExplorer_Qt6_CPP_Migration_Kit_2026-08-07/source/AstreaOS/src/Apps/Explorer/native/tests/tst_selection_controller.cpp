@@ -23,6 +23,7 @@ private slots:
     void selectsAllItems();
     void reconcilesSelectionByStablePath();
     void removesSelectedPathsAfterReplacement();
+    void selectsDuplicateNamesByPath();
     void exposesFacadeToQmlEngine();
 };
 
@@ -145,6 +146,23 @@ void SelectionControllerTest::removesSelectedPathsAfterReplacement()
     QCOMPARE(selection.selectedFile(), QString());
     QVERIFY(selection.selectedFiles().isEmpty());
     QCOMPARE(selection.lastSelectedIndex(), -1);
+}
+
+void SelectionControllerTest::selectsDuplicateNamesByPath()
+{
+    DirectoryModel model;
+    QVERIFY(model.applyEntries(
+        {selectionEntry(QStringLiteral("report.txt"), QStringLiteral("/one/report.txt")),
+         selectionEntry(QStringLiteral("report.txt"), QStringLiteral("/two/report.txt"))},
+        1));
+    SelectionController selection(&model);
+
+    selection.selectByPath(QStringLiteral("/two/report.txt"));
+
+    QVERIFY(selection.isPathSelected(QStringLiteral("/two/report.txt")));
+    QVERIFY(!selection.isPathSelected(QStringLiteral("/one/report.txt")));
+    QCOMPARE(selection.selectedPaths(), QStringList({QStringLiteral("/two/report.txt")}));
+    QCOMPARE(selection.selectedFiles(), QStringList({QStringLiteral("report.txt")}));
 }
 
 void SelectionControllerTest::exposesFacadeToQmlEngine()

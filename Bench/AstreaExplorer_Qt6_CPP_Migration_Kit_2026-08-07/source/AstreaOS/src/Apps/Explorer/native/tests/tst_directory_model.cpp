@@ -71,6 +71,14 @@ void DirectoryModelTest::exposesLegacyRolesAndValues()
         QByteArrayLiteral("lastAccessed"),
         QByteArrayLiteral("recentSource"),
         QByteArrayLiteral("fileIconName"),
+        QByteArrayLiteral("trashItemId"),
+        QByteArrayLiteral("trashInfoPath"),
+        QByteArrayLiteral("trashLocationId"),
+        QByteArrayLiteral("trashOriginalPath"),
+        QByteArrayLiteral("trashDeletionDate"),
+        QByteArrayLiteral("trashMountTopdir"),
+        QByteArrayLiteral("trashAvailable"),
+        QByteArrayLiteral("trashOrphanState"),
     };
     QCOMPARE(roles.size(), expectedRoles.size());
     for (const QByteArray &roleName : expectedRoles) {

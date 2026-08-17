@@ -78,6 +78,15 @@ struct FileOperationProgress
     qint64 totalBytes = 0;
 };
 
+struct FileOperationItemResult
+{
+    QString source;
+    QString target;
+    QString status;
+    QString errorCode;
+    QString errorMessage;
+};
+
 struct FileOperationResult
 {
     BackendRequestId requestId = 0;
@@ -89,6 +98,8 @@ struct FileOperationResult
     int percent = 0;
     QString errorCode;
     QString errorMessage;
+    QString state;
+    QVector<FileOperationItemResult> items;
 };
 
 struct DirectoryEntry
@@ -109,6 +120,14 @@ struct DirectoryEntry
     qint64 lastAccessed = 0;
     QString recentSource;
     QString fileIconName;
+    QString trashItemId;
+    QString trashInfoPath;
+    QString trashLocationId;
+    QString trashOriginalPath;
+    QDateTime trashDeletionDate;
+    QString trashMountTopdir;
+    bool trashAvailable = false;
+    QString trashOrphanState;
 };
 
 struct BackendError
@@ -125,6 +144,7 @@ struct BackendTransportError
     BackendRequestId requestId = 0;
     int exitCode = -1;
     QByteArray stderrData;
+    QByteArray stdoutData;
 };
 
 struct UtilityRequest
@@ -154,6 +174,8 @@ Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::DeviceEntry>)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DeviceOperationResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationProgress)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationItemResult)
+Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::FileOperationItemResult>)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityResult)

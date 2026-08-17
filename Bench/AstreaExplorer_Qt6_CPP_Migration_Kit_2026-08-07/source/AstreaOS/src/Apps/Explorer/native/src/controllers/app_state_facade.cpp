@@ -16,6 +16,74 @@
 
 namespace Astrea::Explorer::Native::Backend {
 
+namespace {
+
+QString normalizeFavoritePath(const QString &path)
+{
+    if (path.isEmpty() || !path.startsWith(QLatin1Char('/'))) {
+        return path;
+    }
+    return QDir::cleanPath(path);
+}
+
+QString xdgUserDirectory(const QString &key, const QString &fallback, const QString &home)
+{
+    const QString configPath = QDir(home).filePath(QStringLiteral(".config/user-dirs.dirs"));
+    QFile config(configPath);
+    if (!config.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return QDir(home).filePath(fallback);
+    }
+    const QByteArray contents = config.readAll();
+    const QRegularExpression expression(
+        QStringLiteral("^%1=\\\"([^\\\"]+)\\\"$").arg(QRegularExpression::escape(key)),
+        QRegularExpression::MultilineOption);
+    const QRegularExpressionMatch match = expression.match(QString::fromUtf8(contents));
+    if (!match.hasMatch()) {
+        return QDir(home).filePath(fallback);
+    }
+    QString value = match.captured(1);
+    value.replace(QStringLiteral("$HOME"), home);
+    return QDir::cleanPath(value);
+}
+
+QVariantMap defaultFavoriteItem(const QString &path, const QString &home)
+{
+    const QStringList defaults {
+        xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), home),
+        xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), home),
+        xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), home),
+        xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), home),
+        xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), home),
+        xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), home),
+        xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), home),
+        xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), home),
+    };
+    const QStringList labels {
+        QStringLiteral("Desktop"), QStringLiteral("Documents"), QStringLiteral("Downloads"),
+        QStringLiteral("Pictures"), QStringLiteral("Music"), QStringLiteral("Videos"),
+        QStringLiteral("Public"), QStringLiteral("Templates"),
+    };
+    const QStringList icons {
+        QStringLiteral("user-desktop"), QStringLiteral("folder-documents"),
+        QStringLiteral("folder-downloads"), QStringLiteral("folder-pictures"),
+        QStringLiteral("folder-music"), QStringLiteral("folder-videos"),
+        QStringLiteral("folder-publicshare"), QStringLiteral("folder-templates"),
+    };
+    QVariantMap item;
+    const int index = defaults.indexOf(path);
+    item.insert(QStringLiteral("path"), path);
+    item.insert(QStringLiteral("label"), index >= 0 ? labels.at(index) : QFileInfo(path).fileName());
+    item.insert(QStringLiteral("icon"), index >= 0 ? icons.at(index) : QStringLiteral("inode-directory"));
+    item.insert(
+        QStringLiteral("id"),
+        index >= 0 ? QStringLiteral("builtin:%1").arg(index)
+                   : QStringLiteral("custom:%1").arg(path));
+    item.insert(QStringLiteral("builtIn"), index >= 0);
+    return item;
+}
+
+} // namespace
+
 AppStateFacade::AppStateFacade(
     NavigationController *navigation,
     SelectionController *selection,
@@ -122,6 +190,11 @@ AppStateFacade::AppStateFacade(
         &AppStateFacade::selectedFilesChanged);
     connect(
         m_selection,
+        &SelectionController::selectedPathsChanged,
+        this,
+        &AppStateFacade::selectedPathsChanged);
+    connect(
+        m_selection,
         &SelectionController::lastSelectedIndexChanged,
         this,
         &AppStateFacade::lastSelectedIndexChanged);
@@ -143,7 +216,7 @@ AppStateFacade::AppStateFacade(
 
     connect(
         m_selection,
-        &SelectionController::selectedFilesChanged,
+        &SelectionController::selectedPathsChanged,
         this,
         [this]() {
             if (m_fileOperations != nullptr) {
@@ -172,6 +245,15 @@ AppStateFacade::AppStateFacade(
             &FileOperationsController::imagePasted,
             this,
             [this](const QString &) { m_navigation->refreshCurrentFolder(); });
+        connect(
+            m_fileOperations,
+            &FileOperationsController::operationFinished,
+            this,
+            [this](const FileOperationResult &result) {
+                if (result.ok) {
+                    m_navigation->refreshCurrentFolder();
+                }
+            });
     }
     if (m_devices != nullptr) {
         connect(
@@ -230,10 +312,37 @@ AppStateFacade::AppStateFacade(
                     m_appImageInstallRunning = false;
                     emit archiveStateChanged();
                 }
-                if (result.ok && (result.operation == QStringLiteral("trash")
-                                  || result.operation == QStringLiteral("restore-trash")
-                                  || result.operation == QStringLiteral("empty-trash"))) {
+                const bool destructiveOperation =
+                    result.operation == QStringLiteral("trash")
+                    || result.operation == QStringLiteral("restore-trash")
+                    || result.operation == QStringLiteral("empty-trash")
+                    || result.operation == QStringLiteral("delete-permanently");
+                if (destructiveOperation) {
                     m_navigation->refreshCurrentFolder();
+                    if (result.operation == QStringLiteral("trash")
+                        || result.operation == QStringLiteral("restore-trash")
+                        || result.operation == QStringLiteral("delete-permanently")) {
+                        QStringList completedPaths;
+                        const QJsonArray items = result.data.value(QStringLiteral("items")).toArray();
+                        for (const QJsonValue &value : items) {
+                            const QJsonObject item = value.toObject();
+                            const QString status = item.value(QStringLiteral("status")).toString();
+                            if (status != QStringLiteral("trashed")
+                                && status != QStringLiteral("restored")
+                                && status != QStringLiteral("deleted")) {
+                                continue;
+                            }
+                            const QString path = item.value(QStringLiteral("path")).toString();
+                            if (!path.isEmpty()) {
+                                completedPaths.append(path);
+                            }
+                        }
+                        if (completedPaths.isEmpty() && result.ok) {
+                            m_selection->clearSelection();
+                        } else {
+                            m_selection->removePaths(completedPaths);
+                        }
+                    }
                 }
                 emit filesystemActionFinished(
                     result.requestId,
@@ -344,12 +453,25 @@ QString AppStateFacade::networkRootPath() const
 
 QString AppStateFacade::trashFilesPath() const
 {
-    return QDir(homePath()).filePath(QStringLiteral(".local/share/Trash/files"));
+    QString dataHome = qEnvironmentVariable("XDG_DATA_HOME");
+    if (dataHome.isEmpty() || !dataHome.startsWith(QLatin1Char('/'))) {
+        dataHome = QDir(homePath()).filePath(QStringLiteral(".local/share"));
+    }
+    return QDir(dataHome).filePath(QStringLiteral("Trash/files"));
 }
 
 QString AppStateFacade::trashInfoPath() const
 {
-    return QDir(homePath()).filePath(QStringLiteral(".local/share/Trash/info"));
+    QString dataHome = qEnvironmentVariable("XDG_DATA_HOME");
+    if (dataHome.isEmpty() || !dataHome.startsWith(QLatin1Char('/'))) {
+        dataHome = QDir(homePath()).filePath(QStringLiteral(".local/share"));
+    }
+    return QDir(dataHome).filePath(QStringLiteral("Trash/info"));
+}
+
+QString AppStateFacade::trashVirtualPath() const
+{
+    return QStringLiteral("trash://");
 }
 
 QString AppStateFacade::recentVirtualPath() const
@@ -433,6 +555,11 @@ QStringList AppStateFacade::selectedFiles() const
     return m_selection->selectedFiles();
 }
 
+QStringList AppStateFacade::selectedPaths() const
+{
+    return m_selection->selectedPaths();
+}
+
 int AppStateFacade::lastSelectedIndex() const
 {
     return m_selection->lastSelectedIndex();
@@ -512,31 +639,66 @@ QString AppStateFacade::sidebarHiddenDefaultFavoritesJson() const
 
 QVariantList AppStateFacade::sidebarFavorites() const
 {
-    QVariantList result;
+    QVariantList persisted;
     const QJsonDocument document = QJsonDocument::fromJson(
         m_settings.sidebarFavoritesJson.toUtf8());
-    if (!document.isArray()) {
-        return result;
+    if (document.isArray()) {
+        for (const QJsonValue &value : document.array()) {
+            QVariantMap item;
+            if (value.isObject()) {
+                item = value.toObject().toVariantMap();
+            } else if (value.isString()) {
+                item.insert(QStringLiteral("path"), value.toString());
+            }
+            const QString path = item.value(QStringLiteral("path")).toString();
+            if (path.isEmpty()) {
+                continue;
+            }
+            item.insert(QStringLiteral("path"), normalizeFavoritePath(path));
+            if (item.value(QStringLiteral("label")).toString().isEmpty()) {
+                item.insert(
+                    QStringLiteral("label"),
+                    QFileInfo(item.value(QStringLiteral("path")).toString()).fileName());
+            }
+            if (item.value(QStringLiteral("icon")).toString().isEmpty()) {
+                item.insert(QStringLiteral("icon"), QStringLiteral("inode-directory"));
+            }
+            persisted.append(item);
+        }
     }
 
-    for (const QJsonValue &value : document.array()) {
+    const QVariantList hidden = sidebarHiddenDefaultFavorites();
+    const QStringList defaults = defaultSidebarFavoritePaths();
+    QVariantList result;
+    QStringList seen;
+    for (const QVariant &value : persisted) {
         QVariantMap item;
-        if (value.isObject()) {
-            item = value.toObject().toVariantMap();
-        } else if (value.isString()) {
-            item.insert(QStringLiteral("path"), value.toString());
-        }
-        const QString path = item.value(QStringLiteral("path")).toString();
-        if (path.isEmpty()) {
+        item = value.toMap();
+        const QString path = normalizeFavoritePath(
+            item.value(QStringLiteral("path")).toString());
+        if (path.isEmpty() || seen.contains(path)) {
             continue;
         }
-        if (item.value(QStringLiteral("label")).toString().isEmpty()) {
-            item.insert(QStringLiteral("label"), QFileInfo(path).fileName());
+        if (defaults.contains(path)) {
+            if (std::any_of(hidden.cbegin(), hidden.cend(), [&path](const QVariant &value) {
+                    return normalizeFavoritePath(value.toString()) == path;
+                })) {
+                continue;
+            }
+            item = defaultFavoriteItem(path, homePath());
         }
-        if (item.value(QStringLiteral("icon")).toString().isEmpty()) {
-            item.insert(QStringLiteral("icon"), QStringLiteral("inode-directory"));
-        }
+        seen.append(path);
         result.append(item);
+    }
+    for (const QString &path : defaults) {
+        if (seen.contains(path)
+            || std::any_of(hidden.cbegin(), hidden.cend(), [&path](const QVariant &value) {
+                   return value.toString() == path;
+               })) {
+            continue;
+        }
+        result.append(defaultFavoriteItem(path, homePath()));
+        seen.append(path);
     }
     return result;
 }
@@ -551,7 +713,7 @@ QVariantList AppStateFacade::sidebarHiddenDefaultFavorites() const
     }
     for (const QJsonValue &value : document.array()) {
         if (value.isString()) {
-            result.append(value.toString());
+            result.append(normalizeFavoritePath(value.toString()));
         }
     }
     return result;
@@ -565,16 +727,24 @@ int AppStateFacade::sidebarFavoritesRevision() const
 QStringList AppStateFacade::defaultSidebarFavoritePaths() const
 {
     const QString root = homePath();
-    return {
-        QDir(root).filePath(QStringLiteral("Área de trabalho")),
-        QDir(root).filePath(QStringLiteral("Documentos")),
-        QDir(root).filePath(QStringLiteral("Downloads")),
-        QDir(root).filePath(QStringLiteral("Imagens")),
-        QDir(root).filePath(QStringLiteral("Músicas")),
-        QDir(root).filePath(QStringLiteral("Vídeos")),
-        QDir(root).filePath(QStringLiteral("Público")),
-        QDir(root).filePath(QStringLiteral("Modelos")),
+    const QStringList candidates {
+        xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), root),
+        xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), root),
+        xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), root),
+        xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), root),
+        xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), root),
+        xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), root),
+        xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), root),
+        xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), root),
     };
+    QStringList result;
+    for (const QString &path : candidates) {
+        const QString normalized = normalizeFavoritePath(path);
+        if (!normalized.isEmpty() && !result.contains(normalized)) {
+            result.append(normalized);
+        }
+    }
+    return result;
 }
 
 bool AppStateFacade::inTrashView() const
@@ -657,6 +827,16 @@ int AppStateFacade::fileOperationTotalCount() const
 QString AppStateFacade::fileOperationMode() const
 {
     return m_fileOperations == nullptr ? QString() : m_fileOperations->operationMode();
+}
+
+QString AppStateFacade::fileOperationState() const
+{
+    return m_fileOperations == nullptr ? QString() : m_fileOperations->operationState();
+}
+
+QVariantList AppStateFacade::fileOperationItems() const
+{
+    return m_fileOperations == nullptr ? QVariantList() : m_fileOperations->operationItems();
 }
 
 bool AppStateFacade::pasteConflictVisible() const
@@ -935,6 +1115,9 @@ void AppStateFacade::setSelectedFile(const QString &name)
 
 BackendRequestId AppStateFacade::navigateTo(const QString &path)
 {
+    if (path == trashVirtualPath() || path == QStringLiteral("trash:///")) {
+        return m_navigation->navigateTo(trashVirtualPath());
+    }
     return m_navigation->navigateTo(path);
 }
 
@@ -1116,8 +1299,23 @@ void AppStateFacade::deleteSelected()
     if (paths.isEmpty()) {
         return;
     }
-    m_filesystemService->trash(trashFilesPath(), trashInfoPath(), paths);
-    m_selection->clearSelection();
+    if (inTrashView()) {
+        QStringList metadataPaths;
+        bool hasMetadata = false;
+        for (const QString &path : paths) {
+            DirectoryEntry entry;
+            const QString metadataPath = m_model->entryForPath(path, &entry)
+                ? entry.trashInfoPath
+                : QString();
+            metadataPaths.append(metadataPath);
+            hasMetadata = hasMetadata || !metadataPath.isEmpty();
+        }
+        m_filesystemService->deletePermanently(
+            paths,
+            hasMetadata ? metadataPaths : QStringList());
+    } else {
+        m_filesystemService->trash(trashFilesPath(), trashInfoPath(), paths);
+    }
 }
 
 void AppStateFacade::restoreSelected()
@@ -1129,8 +1327,14 @@ void AppStateFacade::restoreSelected()
     if (paths.isEmpty()) {
         return;
     }
-    m_filesystemService->restoreTrash(trashInfoPath(), homePath(), paths);
-    m_selection->clearSelection();
+    for (const QString &path : paths) {
+        DirectoryEntry entry;
+        const QString metadataPath = m_model->entryForPath(path, &entry)
+            && !entry.trashInfoPath.isEmpty()
+            ? entry.trashInfoPath
+            : trashInfoPath();
+        m_filesystemService->restoreTrash(metadataPath, homePath(), {path});
+    }
 }
 
 void AppStateFacade::emptyTrash()
@@ -1424,12 +1628,7 @@ QString AppStateFacade::joinPath(
 
 QStringList AppStateFacade::selectedPathsInCurrentFolder() const
 {
-    QStringList paths;
-    const QDir currentDirectory(m_navigation->currentPath());
-    for (const QString &name : m_selection->selectedFiles()) {
-        paths.append(currentDirectory.filePath(name));
-    }
-    return paths;
+    return m_selection->selectedPaths();
 }
 
 QString AppStateFacade::selectedUriListInCurrentFolder() const
@@ -1467,13 +1666,7 @@ void AppStateFacade::dropFilePaths(
     if (m_fileOperations == nullptr || paths.isEmpty() || destination.isEmpty()) {
         return;
     }
-    m_fileOperations->setSelection(paths);
-    if (mode == QStringLiteral("move")) {
-        m_fileOperations->cutSelection();
-    } else {
-        m_fileOperations->copySelection();
-    }
-    m_fileOperations->pasteFiles(destination);
+    m_fileOperations->transferFiles(paths, destination, mode);
 }
 
 void AppStateFacade::dropFiles(
@@ -1483,8 +1676,14 @@ void AppStateFacade::dropFiles(
 {
     QStringList paths;
     for (const QVariant &value : urls) {
-        const QUrl url(value.toString());
-        paths.append(url.isLocalFile() ? url.toLocalFile() : value.toString());
+        const QUrl url = value.canConvert<QUrl>()
+            ? value.toUrl()
+            : QUrl(value.toString());
+        if (url.isLocalFile()) {
+            paths.append(url.toLocalFile());
+        } else if (url.scheme().isEmpty() && !value.toString().isEmpty()) {
+            paths.append(value.toString());
+        }
     }
     dropFilePaths(paths, destination, mode);
 }
@@ -1518,6 +1717,11 @@ BackendRequestId AppStateFacade::pasteFiles()
 bool AppStateFacade::isCutPending(const QString &name) const
 {
     return m_fileOperations != nullptr && m_fileOperations->isCutPending(name);
+}
+
+bool AppStateFacade::isCutPathPending(const QString &path) const
+{
+    return m_fileOperations != nullptr && m_fileOperations->isCutPathPending(path);
 }
 
 void AppStateFacade::resolvePasteConflict(const QString &policy)
@@ -1589,6 +1793,9 @@ bool AppStateFacade::isRecentPath(const QString &path) const
 
 bool AppStateFacade::isTrashPath(const QString &path) const
 {
+    if (path == trashVirtualPath() || path == QStringLiteral("trash:///")) {
+        return true;
+    }
     QString normalized = path;
     while (normalized.size() > 1 && normalized.endsWith(QLatin1Char('/'))) {
         normalized.chop(1);
@@ -1603,20 +1810,24 @@ bool AppStateFacade::canPinSidebarFavorite(const QString &path) const
 
 bool AppStateFacade::isSidebarFavorite(const QString &path) const
 {
+    const QString normalizedPath = normalizeFavoritePath(path);
     for (const QVariant &value : sidebarFavorites()) {
-        if (value.toMap().value(QStringLiteral("path")).toString() == path) {
+        if (normalizeFavoritePath(value.toMap().value(QStringLiteral("path")).toString())
+            == normalizedPath) {
             return true;
         }
     }
     const QVariantList hidden = sidebarHiddenDefaultFavorites();
     for (const QString &defaultPath : defaultSidebarFavoritePaths()) {
-        if (defaultPath != path) {
+        if (defaultPath != normalizedPath) {
             continue;
         }
         return std::none_of(
             hidden.cbegin(),
             hidden.cend(),
-            [&path](const QVariant &value) { return value.toString() == path; });
+            [&normalizedPath](const QVariant &value) {
+                return normalizeFavoritePath(value.toString()) == normalizedPath;
+            });
     }
     return false;
 }
@@ -1645,13 +1856,14 @@ void AppStateFacade::pinSidebarFavorite(
     const QString &label,
     const QString &icon)
 {
-    if (!canPinSidebarFavorite(path)) {
+    const QString normalizedPath = normalizeFavoritePath(path);
+    if (!canPinSidebarFavorite(normalizedPath)) {
         return;
     }
-    if (defaultSidebarFavoritePaths().contains(path)) {
+    if (defaultSidebarFavoritePaths().contains(normalizedPath)) {
         QVariantList hidden;
         for (const QVariant &value : sidebarHiddenDefaultFavorites()) {
-            if (value.toString() != path) {
+            if (normalizeFavoritePath(value.toString()) != normalizedPath) {
                 hidden.append(value);
             }
         }
@@ -1660,15 +1872,15 @@ void AppStateFacade::pinSidebarFavorite(
                                   .toJson(QJsonDocument::Compact)));
         return;
     }
-    if (isSidebarFavorite(path)) {
+    if (isSidebarFavorite(normalizedPath)) {
         return;
     }
 
     QVariantList favorites = sidebarFavorites();
     QVariantMap item;
-    item.insert(QStringLiteral("label"), label.isEmpty() ? QFileInfo(path).fileName() : label);
+    item.insert(QStringLiteral("label"), label.isEmpty() ? QFileInfo(normalizedPath).fileName() : label);
     item.insert(QStringLiteral("icon"), icon.isEmpty() ? QStringLiteral("inode-directory") : icon);
-    item.insert(QStringLiteral("path"), path);
+    item.insert(QStringLiteral("path"), normalizedPath);
     favorites.append(item);
     setSidebarFavoritesJson(
         QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(favorites))
@@ -1677,13 +1889,16 @@ void AppStateFacade::pinSidebarFavorite(
 
 void AppStateFacade::removeSidebarFavorite(const QString &path)
 {
-    if (defaultSidebarFavoritePaths().contains(path)) {
+    const QString normalizedPath = normalizeFavoritePath(path);
+    if (defaultSidebarFavoritePaths().contains(normalizedPath)) {
         QVariantList hidden = sidebarHiddenDefaultFavorites();
         if (std::none_of(
                 hidden.cbegin(),
                 hidden.cend(),
-                [&path](const QVariant &value) { return value.toString() == path; })) {
-            hidden.append(path);
+                [&normalizedPath](const QVariant &value) {
+                    return normalizeFavoritePath(value.toString()) == normalizedPath;
+                })) {
+            hidden.append(normalizedPath);
             setSidebarHiddenDefaultFavoritesJson(
                 QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(hidden))
                                       .toJson(QJsonDocument::Compact)));
@@ -1693,10 +1908,38 @@ void AppStateFacade::removeSidebarFavorite(const QString &path)
 
     QVariantList favorites;
     for (const QVariant &value : sidebarFavorites()) {
-        if (value.toMap().value(QStringLiteral("path")).toString() != path) {
+        if (normalizeFavoritePath(value.toMap().value(QStringLiteral("path")).toString())
+            != normalizedPath) {
             favorites.append(value);
         }
     }
+    setSidebarFavoritesJson(
+        QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(favorites))
+                              .toJson(QJsonDocument::Compact)));
+}
+
+void AppStateFacade::moveSidebarFavorite(const QString &path, int targetIndex)
+{
+    const QString normalizedPath = normalizeFavoritePath(path);
+    QVariantList favorites = sidebarFavorites();
+    int currentIndex = -1;
+    for (int index = 0; index < favorites.size(); ++index) {
+        if (normalizeFavoritePath(
+                favorites.at(index).toMap().value(QStringLiteral("path")).toString())
+            == normalizedPath) {
+            currentIndex = index;
+            break;
+        }
+    }
+    if (currentIndex < 0 || favorites.size() < 2) {
+        return;
+    }
+    targetIndex = qBound(0, targetIndex, favorites.size() - 1);
+    if (currentIndex == targetIndex) {
+        return;
+    }
+    const QVariant item = favorites.takeAt(currentIndex);
+    favorites.insert(targetIndex, item);
     setSidebarFavoritesJson(
         QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(favorites))
                               .toJson(QJsonDocument::Compact)));
@@ -1712,6 +1955,11 @@ bool AppStateFacade::isSelected(const QString &name) const
     return m_selection->isSelected(name);
 }
 
+bool AppStateFacade::isPathSelected(const QString &path) const
+{
+    return m_selection->isPathSelected(path);
+}
+
 void AppStateFacade::clearSelection()
 {
     m_selection->clearSelection();
@@ -1725,6 +1973,11 @@ void AppStateFacade::selectAll()
 void AppStateFacade::selectByName(const QString &name)
 {
     m_selection->selectByName(name);
+}
+
+void AppStateFacade::selectByPath(const QString &path)
+{
+    m_selection->selectByPath(path);
 }
 
 void AppStateFacade::handleSelection(

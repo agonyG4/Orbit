@@ -26,6 +26,8 @@ class FileOperationsController final : public QObject
     Q_PROPERTY(int operationDoneCount READ operationDoneCount NOTIFY operationStateChanged)
     Q_PROPERTY(int operationTotalCount READ operationTotalCount NOTIFY operationStateChanged)
     Q_PROPERTY(QString operationMode READ operationMode NOTIFY operationStateChanged)
+    Q_PROPERTY(QString operationState READ operationState NOTIFY operationStateChanged)
+    Q_PROPERTY(QVariantList operationItems READ operationItems NOTIFY operationStateChanged)
     Q_PROPERTY(bool pasteConflictVisible READ pasteConflictVisible NOTIFY pasteConflictChanged)
     Q_PROPERTY(QVariantList pasteConflictItems READ pasteConflictItems NOTIFY pasteConflictChanged)
     Q_PROPERTY(QString pendingPasteRename READ pendingPasteRename WRITE setPendingPasteRename NOTIFY pasteConflictChanged)
@@ -48,6 +50,8 @@ public:
     int operationDoneCount() const;
     int operationTotalCount() const;
     QString operationMode() const;
+    QString operationState() const;
+    QVariantList operationItems() const;
     bool pasteConflictVisible() const;
     QVariantList pasteConflictItems() const;
     QString pendingPasteRename() const;
@@ -59,8 +63,14 @@ public:
     Q_INVOKABLE BackendRequestId pasteFiles(
         const QString &destination,
         const QString &conflictPolicy = QStringLiteral("keep-both"));
+    Q_INVOKABLE BackendRequestId transferFiles(
+        const QStringList &sources,
+        const QString &destination,
+        const QString &mode = QStringLiteral("copy"),
+        const QString &conflictPolicy = QStringLiteral("keep-both"));
     Q_INVOKABLE void cancelOperation();
     Q_INVOKABLE bool isCutPending(const QString &name) const;
+    Q_INVOKABLE bool isCutPathPending(const QString &path) const;
     Q_INVOKABLE void resolvePasteConflict(const QString &conflictPolicy);
     Q_INVOKABLE void renamePasteConflict(const QString &name);
     Q_INVOKABLE void cancelPasteConflict();
@@ -90,6 +100,18 @@ private:
     Backend::FileOperationRequest makePasteRequest(
         const QString &destination,
         const QString &conflictPolicy) const;
+    Backend::FileOperationRequest makeTransferRequest(
+        const QStringList &sources,
+        const QString &destination,
+        const QString &mode,
+        const QString &conflictPolicy) const;
+    QVariantList findConflicts(
+        const QStringList &sources,
+        const QString &destination) const;
+    bool showConflictPrompt(
+        const QStringList &sources,
+        const QString &destination,
+        const QString &mode);
 
     Services::FileOperationService *m_service = nullptr;
     Services::ClipboardService *m_clipboardService = nullptr;
@@ -106,11 +128,16 @@ private:
     int m_operationDoneCount = 0;
     int m_operationTotalCount = 0;
     QString m_operationMode;
+    QString m_operationState;
+    QVariantList m_operationItems;
     BackendRequestId m_operationRequestId = 0;
     bool m_pasteConflictVisible = false;
     QVariantList m_pasteConflictItems;
     QString m_pendingPasteRename;
     QString m_pendingPasteDestination;
+    QStringList m_pendingTransferSources;
+    QString m_pendingTransferMode;
+    bool m_conflictResolutionInProgress = false;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

@@ -37,6 +37,12 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
 
     connect(
         m_transport,
+        &BackendTransport::streamed,
+        this,
+        &RustBackendClient::handleStreamed,
+        Qt::QueuedConnection);
+    connect(
+        m_transport,
         &BackendTransport::completed,
         this,
         [this](BackendRequestId requestId, const QByteArray &payload) {
@@ -46,6 +52,7 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
             }
 
             const RequestKind kind = pending->kind;
+            const int streamedProgressCount = pending->streamedProgressCount;
             m_pendingRequests.erase(pending);
 
             if (kind == RequestKind::Devices) {
@@ -84,7 +91,8 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 if (!error.code.isEmpty()) {
                     emit failed(error);
                 } else {
-                    for (const FileOperationProgress &progress : progresses) {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        const FileOperationProgress &progress = progresses.at(index);
                         emit fileOperationProgress(requestId, progress);
                     }
                     emit fileOperationReady(requestId, result);
@@ -125,8 +133,30 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
         [this](
             BackendRequestId requestId,
             const BackendTransportError &transportError) {
-            if (!m_pendingRequests.remove(requestId)) {
+            const auto pending = m_pendingRequests.find(requestId);
+            if (pending == m_pendingRequests.end()) {
                 return;
+            }
+
+            const RequestKind kind = pending->kind;
+            const int streamedProgressCount = pending->streamedProgressCount;
+            m_pendingRequests.erase(pending);
+
+            if (kind == RequestKind::FileOperation && !transportError.stdoutData.isEmpty()) {
+                BackendError decodeError;
+                QVector<FileOperationProgress> progresses;
+                const FileOperationResult result = decodeFileOperation(
+                    requestId,
+                    transportError.stdoutData,
+                    &decodeError,
+                    &progresses);
+                if (decodeError.code.isEmpty()) {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        emit fileOperationProgress(requestId, progresses.at(index));
+                    }
+                    emit fileOperationReady(requestId, result);
+                    return;
+                }
             }
 
             BackendError error;
@@ -136,6 +166,36 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
             emit failed(error);
         },
         Qt::QueuedConnection);
+}
+
+void RustBackendClient::handleStreamed(
+    BackendRequestId requestId,
+    const QByteArray &payload)
+{
+    auto pending = m_pendingRequests.find(requestId);
+    if (pending == m_pendingRequests.end() || pending->kind != RequestKind::FileOperation) {
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(payload.trimmed(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return;
+    }
+    if (document.object().value(QStringLiteral("event")).toString()
+        != QStringLiteral("progress")) {
+        return;
+    }
+
+    BackendError error;
+    FileOperationProgress progress;
+    if (!decodeFileOperationProgress(requestId, document.object(), &progress, &error)) {
+        m_pendingRequests.erase(pending);
+        emit failed(error);
+        return;
+    }
+    ++pending->streamedProgressCount;
+    emit fileOperationProgress(requestId, progress);
 }
 
 BackendRequestId RustBackendClient::list(const ListRequest &request)
@@ -427,6 +487,42 @@ DeviceOperationResult RustBackendClient::decodeDeviceOperation(
     return result;
 }
 
+bool RustBackendClient::decodeFileOperationProgress(
+    BackendRequestId requestId,
+    const QJsonObject &object,
+    FileOperationProgress *progress,
+    BackendError *error) const
+{
+    const QJsonValue done = object.value(QStringLiteral("done"));
+    const QJsonValue total = object.value(QStringLiteral("total"));
+    const QJsonValue percent = object.value(QStringLiteral("percent"));
+    const QJsonValue path = object.value(QStringLiteral("path"));
+    const QJsonValue name = object.value(QStringLiteral("name"));
+    if (!done.isDouble() || !total.isDouble() || !percent.isDouble()
+        || !path.isString() || !name.isString()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("file operation progress fields have incompatible types"));
+        }
+        return false;
+    }
+
+    if (progress == nullptr) {
+        return true;
+    }
+    progress->requestId = requestId;
+    progress->mode = object.value(QStringLiteral("mode")).toString();
+    progress->doneCount = done.toInt();
+    progress->totalCount = total.toInt();
+    progress->percent = percent.toInt();
+    progress->path = path.toString();
+    progress->fileName = name.toString();
+    progress->doneBytes = object.value(QStringLiteral("bytesDone")).toInteger();
+    progress->totalBytes = object.value(QStringLiteral("bytesTotal")).toInteger();
+    return true;
+}
+
 FileOperationResult RustBackendClient::decodeFileOperation(
     BackendRequestId requestId,
     const QByteArray &payload,
@@ -458,34 +554,35 @@ FileOperationResult RustBackendClient::decodeFileOperation(
         const QJsonObject object = document.object();
         const QString event = object.value(QStringLiteral("event")).toString();
         if (event == QStringLiteral("progress")) {
-            const QJsonValue done = object.value(QStringLiteral("done"));
-            const QJsonValue total = object.value(QStringLiteral("total"));
-            const QJsonValue percent = object.value(QStringLiteral("percent"));
-            const QJsonValue path = object.value(QStringLiteral("path"));
-            const QJsonValue name = object.value(QStringLiteral("name"));
-            if (!done.isDouble() || !total.isDouble() || !percent.isDouble()
-                || !path.isString() || !name.isString()) {
+            FileOperationProgress progress;
+            if (!decodeFileOperationProgress(requestId, object, &progress, error)) {
                 if (error != nullptr) {
-                    *error = makeDecodeError(
-                        requestId,
-                        QStringLiteral("file operation progress fields have incompatible types"));
+                    return {};
                 }
                 return {};
             }
-
-            FileOperationProgress progress;
-            progress.requestId = requestId;
-            progress.mode = object.value(QStringLiteral("mode")).toString();
-            progress.doneCount = done.toInt();
-            progress.totalCount = total.toInt();
-            progress.percent = percent.toInt();
-            progress.path = path.toString();
-            progress.fileName = name.toString();
-            progress.doneBytes = object.value(QStringLiteral("bytesDone")).toInteger();
-            progress.totalBytes = object.value(QStringLiteral("bytesTotal")).toInteger();
             if (progresses != nullptr) {
                 progresses->append(progress);
             }
+            continue;
+        }
+
+        if (event == QStringLiteral("item")) {
+            FileOperationItemResult item;
+            item.source = object.value(QStringLiteral("source")).toString();
+            item.target = object.value(QStringLiteral("target")).toString();
+            item.status = object.value(QStringLiteral("status")).toString();
+            item.errorCode = object.value(QStringLiteral("errorCode")).toString();
+            item.errorMessage = object.value(QStringLiteral("message")).toString();
+            if (item.source.isEmpty() || item.target.isEmpty() || item.status.isEmpty()) {
+                if (error != nullptr) {
+                    *error = makeDecodeError(
+                        requestId,
+                        QStringLiteral("file operation item fields are incomplete"));
+                }
+                return {};
+            }
+            result.items.append(item);
             continue;
         }
 
@@ -496,6 +593,7 @@ FileOperationResult RustBackendClient::decodeFileOperation(
             result.doneCount = object.value(QStringLiteral("done")).toInt();
             result.totalCount = object.value(QStringLiteral("total")).toInt();
             result.percent = object.value(QStringLiteral("percent")).toInt();
+            result.state = object.value(QStringLiteral("state")).toString();
             terminal = true;
             continue;
         }
@@ -633,6 +731,15 @@ DirectoryEntry RustBackendClient::decodeEntry(
     entry.fileUrl = QUrl(fileUrl);
     entry.filePreviewUrl = QUrl(previewUrl);
     entry.fileModified = QDateTime::fromMSecsSinceEpoch(modifiedMs, QTimeZone::UTC);
+    entry.trashItemId = object.value(QStringLiteral("trashItemId")).toString();
+    entry.trashInfoPath = object.value(QStringLiteral("trashInfoPath")).toString();
+    entry.trashLocationId = object.value(QStringLiteral("trashLocationId")).toString();
+    entry.trashOriginalPath = object.value(QStringLiteral("trashOriginalPath")).toString();
+    entry.trashDeletionDate = QDateTime::fromString(
+        object.value(QStringLiteral("trashDeletionDate")).toString(), Qt::ISODate);
+    entry.trashMountTopdir = object.value(QStringLiteral("trashMountTopdir")).toString();
+    entry.trashAvailable = object.value(QStringLiteral("trashAvailable")).toBool(false);
+    entry.trashOrphanState = object.value(QStringLiteral("trashOrphanState")).toString();
     return entry;
 }
 

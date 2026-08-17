@@ -44,6 +44,11 @@ public:
         emitCompleted(requestId, payload);
     }
 
+    void stream(BackendRequestId requestId, const QByteArray &payload)
+    {
+        emitStreamed(requestId, payload);
+    }
+
     void fail(BackendRequestId requestId, const QString &code, const QString &message)
     {
         BackendTransportError error;
@@ -88,6 +93,7 @@ private slots:
     void forwardsLegacyCliArgumentsForListAndSearch();
     void decodesDevicesAndForwardsDeviceOperations();
     void decodesFileOperationProgressAndResult();
+    void forwardsLiveFileOperationProgressBeforeTerminalResult();
     void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
     void forwardsTransportFailuresExactlyOnce();
@@ -324,6 +330,41 @@ void BackendClientTest::decodesFileOperationProgressAndResult()
     QCOMPARE(result.destination, QStringLiteral("/tmp/destination"));
     QCOMPARE(result.doneCount, 1);
     QCOMPARE(result.totalCount, 1);
+}
+
+void BackendClientTest::forwardsLiveFileOperationProgressBeforeTerminalResult()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+    QSignalSpy progressSpy(&client, &IRustBackendClient::fileOperationProgress);
+    QSignalSpy readySpy(&client, &IRustBackendClient::fileOperationReady);
+
+    FileOperationRequest request;
+    request.mode = QStringLiteral("move");
+    request.destination = QStringLiteral("/tmp/destination");
+    request.sources = {QStringLiteral("/tmp/source.txt")};
+    const BackendRequestId requestId = client.fileOperation(request);
+
+    transport.stream(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"progress\",\"mode\":\"move\",\"done\":1,\"total\":1,"
+            "\"percent\":100,\"path\":\"/tmp/source.txt\",\"name\":\"source.txt\"}\n"));
+    QTRY_COMPARE(progressSpy.count(), 1);
+    QCOMPARE(readySpy.count(), 0);
+
+    transport.succeed(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"start\",\"mode\":\"move\",\"destination\":\"/tmp/destination\",\"total\":1}\n"
+            "{\"event\":\"item\",\"source\":\"/tmp/source.txt\",\"target\":\"/tmp/destination/source.txt\","
+            "\"status\":\"moved\",\"errorCode\":\"\",\"message\":\"\"}\n"
+            "{\"event\":\"done\",\"mode\":\"move\",\"destination\":\"/tmp/destination\",\"done\":1,\"total\":1,"
+            "\"percent\":100,\"state\":\"success\"}\n"));
+    QTRY_COMPARE(readySpy.count(), 1);
+    const FileOperationResult result = readySpy.takeFirst().at(1).value<FileOperationResult>();
+    QCOMPARE(result.items.size(), 1);
+    QCOMPARE(result.items.constFirst().status, QStringLiteral("moved"));
 }
 
 void BackendClientTest::acceptsSynchronousTransportCompletion()

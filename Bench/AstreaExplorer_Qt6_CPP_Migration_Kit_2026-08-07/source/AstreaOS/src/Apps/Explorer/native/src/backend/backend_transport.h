@@ -23,6 +23,9 @@ signals:
     void completed(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const QByteArray &payload);
+    void streamed(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const QByteArray &payload);
     void failed(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const Astrea::Explorer::Native::Backend::BackendTransportError &error);
@@ -30,6 +33,7 @@ signals:
 protected:
     BackendRequestId allocateRequestId();
     void emitCompleted(BackendRequestId requestId, const QByteArray &payload);
+    void emitStreamed(BackendRequestId requestId, const QByteArray &payload);
     void emitFailed(
         BackendRequestId requestId,
         const BackendTransportError &error);

@@ -44,6 +44,7 @@ private slots:
     void queuesRequestsUntilWorkerIsReady();
     void reportsStartFailureAsynchronously();
     void cancelsAnInFlightRequest();
+    void streamsOutputBeforeTerminalCompletion();
 };
 
 void PersistentWorkerTransportTest::queuesRequestsUntilWorkerIsReady()
@@ -126,6 +127,41 @@ void PersistentWorkerTransportTest::cancelsAnInFlightRequest()
     const BackendTransportError error = errorFrom(failedSpy);
     QCOMPARE(error.requestId, requestId);
     QCOMPARE(error.code, QStringLiteral("cancelled"));
+}
+
+void PersistentWorkerTransportTest::streamsOutputBeforeTerminalCompletion()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString worker = makeWorker(
+        directory,
+        QStringLiteral(
+            "import json,sys,time\n"
+            "for line in sys.stdin:\n"
+            "    request=json.loads(line)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'stream':True,'payload':'first\\n'}), flush=True)\n"
+            "    time.sleep(0.1)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'stream':True,'payload':'second\\n'}), flush=True)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'done':True,'payload':''}), flush=True)\n"));
+    QVERIFY(!worker.isEmpty());
+
+    PersistentWorkerTransportOptions options;
+    options.backendProgram = worker;
+    options.requestTimeoutMs = 2000;
+    PersistentWorkerTransport transport(options);
+    QSignalSpy streamSpy(&transport, &BackendTransport::streamed);
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+
+    const BackendRequestId requestId = transport.start({QStringLiteral("stream")});
+    QTRY_COMPARE_WITH_TIMEOUT(streamSpy.count(), 1, 500);
+    QTest::qWait(30);
+    QCOMPARE(completedSpy.count(), 0);
+    QCOMPARE(streamSpy.at(0).at(0).value<BackendRequestId>(), requestId);
+    QCOMPARE(streamSpy.at(0).at(1).toByteArray(), QByteArrayLiteral("first\n"));
+    QTRY_COMPARE_WITH_TIMEOUT(streamSpy.count(), 2, 1500);
+    QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 1500);
+    QCOMPARE(completedSpy.at(0).at(0).value<BackendRequestId>(), requestId);
+    QCOMPARE(completedSpy.at(0).at(1).toByteArray(), QByteArrayLiteral("first\nsecond\n"));
 }
 
 QTEST_MAIN(PersistentWorkerTransportTest)
