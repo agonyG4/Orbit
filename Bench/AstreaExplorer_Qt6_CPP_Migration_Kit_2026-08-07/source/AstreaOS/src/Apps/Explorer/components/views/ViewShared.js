@@ -30,6 +30,10 @@ function handlePrimaryItemClick(root, appState, path, isDir, fileUrl, fileName, 
     root.lastActivationCandidateAt = now
 }
 
+function prepareSelectionForDrag(appState, fileName, index) {
+    appState.prepareSelectionForDrag(fileName, index)
+}
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value))
 }

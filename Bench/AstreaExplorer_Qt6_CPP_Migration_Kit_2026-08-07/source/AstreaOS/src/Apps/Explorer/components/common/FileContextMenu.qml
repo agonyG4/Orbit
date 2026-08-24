@@ -29,6 +29,7 @@ Item {
     property int renameRequestId: 0
     readonly property bool isBackgroundTarget: itemPath === AppState.currentPath && itemIsDir
     readonly property bool isArchiveTarget: !itemIsDir && /\.(zip|tar|tgz|tar\.gz|tar\.bz2|tbz2|tar\.xz|txz|7z|rar)$/i.test(itemPath)
+    readonly property bool archiveOperationAvailable: !AppState.archiveExtractionRunning
     readonly property bool isAppImageTarget: !itemIsDir && AppState.isAppImageFileName(itemPath)
     readonly property bool isWallpaperImageTarget: !itemIsDir && !isBackgroundTarget && !AppState.inTrashView && AppState.isWallpaperImageFileName(itemPath)
     readonly property bool canCompressTarget: itemIsDir && !isBackgroundTarget && !AppState.inTrashView
@@ -104,7 +105,7 @@ Item {
         if (AppState.isSidebarFavorite(itemPath))
             AppState.removeSidebarFavorite(itemPath)
         else
-            AppState.pinSidebarFavorite(itemPath, name, AppState.fileIconName(name, true, false))
+            AppState.pinSidebarFavorite(itemPath, name, AppState.fileIconName(itemPath, true, false))
         closeMenu()
     }
 
@@ -136,14 +137,14 @@ Item {
     }
 
     function runExtract() {
-        if (!isArchiveTarget)
+        if (!isArchiveTarget || !archiveOperationAvailable)
             return
         closeMenu()
         AppState.startArchiveExtraction(itemPath, extractionFolderName())
     }
 
     function openCompressionSubmenu(anchorItem) {
-        if (!canCompressTarget)
+        if (!canCompressTarget || !archiveOperationAvailable)
             return
         compressionCloseTimer.stop()
         var submenuWidth = compressionSubmenu.width
@@ -161,7 +162,7 @@ Item {
     }
 
     function runCompress(format) {
-        if (!canCompressTarget)
+        if (!canCompressTarget || !archiveOperationAvailable)
             return
         closeMenu()
         AppState.startFolderCompression(itemPath, format)
@@ -278,7 +279,7 @@ Item {
         Common.ContextMenuAction {
             id: compressAction
             label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.compactar"]) || "Compress")
-            actionEnabled: true
+            actionEnabled: menuRoot.archiveOperationAvailable
             hasSubmenu: true
             visible: menuRoot.canCompressTarget
             onHoveredChanged: {
@@ -291,7 +292,7 @@ Item {
         }
         Common.ContextMenuAction {
             label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.extrair"]) || "Extract")
-            actionEnabled: true
+            actionEnabled: menuRoot.archiveOperationAvailable
             visible: menuRoot.isArchiveTarget
             onTriggered: menuRoot.runExtract()
         }
@@ -376,7 +377,7 @@ Item {
 
                 Common.ContextMenuAction {
                     label: modelData.label
-                    actionEnabled: modelData.format !== "rar" || menuRoot.rarAvailable
+                    actionEnabled: menuRoot.archiveOperationAvailable && (modelData.format !== "rar" || menuRoot.rarAvailable)
                     onTriggered: menuRoot.runCompress(modelData.format)
                 }
             }

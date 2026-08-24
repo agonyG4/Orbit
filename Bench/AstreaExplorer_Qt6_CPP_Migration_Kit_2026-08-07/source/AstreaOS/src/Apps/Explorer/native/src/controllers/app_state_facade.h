@@ -11,9 +11,11 @@
 #include "controllers/open_with_controller.h"
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
+#include "models/sidebar_favorites_model.h"
 #include "runtime/explorer_runtime_paths.h"
 #include "services/settings_service.h"
 #include "services/filesystem_service.h"
+#include "services/icon_theme_service.h"
 #include "services/wallpaper_service.h"
 
 namespace Astrea::Explorer::Native::Backend {
@@ -22,6 +24,7 @@ class AppStateFacade final : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QAbstractItemModel *fileModel READ fileModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *sidebarFavoritesModel READ sidebarFavoritesModel CONSTANT)
     Q_PROPERTY(QString homePath READ homePath CONSTANT)
     Q_PROPERTY(QString runtimeRoot READ runtimeRoot CONSTANT)
     Q_PROPERTY(QString backendPath READ backendPath CONSTANT)
@@ -34,6 +37,8 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString trashInfoPath READ trashInfoPath CONSTANT)
     Q_PROPERTY(QString trashVirtualPath READ trashVirtualPath CONSTANT)
     Q_PROPERTY(QString recentVirtualPath READ recentVirtualPath CONSTANT)
+    Q_PROPERTY(QString effectiveIconTheme READ effectiveIconTheme NOTIFY iconThemeChanged)
+    Q_PROPERTY(quint64 iconThemeRevision READ iconThemeRevision NOTIFY iconThemeChanged)
     Q_PROPERTY(bool isPortalDialog READ isPortalDialog CONSTANT)
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QStringList history READ history NOTIFY historyChanged)
@@ -130,9 +135,11 @@ public:
         OpenWithController *openWith = nullptr,
         Services::LaunchService *launchService = nullptr,
         Services::WallpaperService *wallpaperService = nullptr,
-        Services::MimeAppsService *mimeAppsService = nullptr);
+        Services::MimeAppsService *mimeAppsService = nullptr,
+        Services::IconThemeService *iconThemeService = nullptr);
 
     QAbstractItemModel *fileModel() const;
+    QAbstractItemModel *sidebarFavoritesModel() const;
     QString homePath() const;
     QString runtimeRoot() const;
     QString backendPath() const;
@@ -145,6 +152,8 @@ public:
     QString trashInfoPath() const;
     QString trashVirtualPath() const;
     QString recentVirtualPath() const;
+    QString effectiveIconTheme() const;
+    quint64 iconThemeRevision() const;
     bool isPortalDialog() const;
     QString currentPath() const;
     QStringList history() const;
@@ -336,6 +345,17 @@ public:
     Q_INVOKABLE void refreshPreviewMetadata();
     Q_INVOKABLE void requestThumbnailWarm(const QString &path, int offset, int limit);
     Q_INVOKABLE QString themedIconSource(const QString &iconName, int size, const QString &themeName);
+    Q_INVOKABLE QString sidebarIconSource(const QString &iconName, int size);
+    Q_INVOKABLE QString fileIconName(
+        const QString &path,
+        bool isDirectory,
+        bool isExecutable) const;
+    Q_INVOKABLE QString fileIconSource(
+        const QString &path,
+        bool isDirectory,
+        bool isExecutable,
+        int size,
+        const QString &semanticIconName = QString()) const;
     Q_INVOKABLE bool writePortalResult(const QString &json);
     Q_INVOKABLE BackendRequestId requestMountDevice(
         const QString &devicePath,
@@ -361,6 +381,10 @@ public:
         const QString &icon = QString());
     Q_INVOKABLE void removeSidebarFavorite(const QString &path);
     Q_INVOKABLE void moveSidebarFavorite(const QString &path, int targetIndex);
+    Q_INVOKABLE bool beginSidebarFavoriteDrag(const QString &path);
+    Q_INVOKABLE bool previewSidebarFavoriteMove(const QString &path, int finalIndex);
+    Q_INVOKABLE bool commitSidebarFavoriteDrag();
+    Q_INVOKABLE void cancelSidebarFavoriteDrag();
     Q_INVOKABLE void announceContextMenuOpening(const QString &owner);
 
     void setPendingPasteRename(const QString &name);
@@ -371,6 +395,7 @@ public:
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void selectByName(const QString &name);
     Q_INVOKABLE void selectByPath(const QString &path);
+    Q_INVOKABLE void prepareSelectionForDrag(const QString &name, int index);
     Q_INVOKABLE void handleSelection(
         const QString &name,
         int index,
@@ -413,6 +438,7 @@ signals:
     void deviceStateChanged();
     void archiveStateChanged();
     void wallpaperStateChanged();
+    void iconThemeChanged();
     void filesystemActionFinished(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const QString &operation,
@@ -427,10 +453,14 @@ private slots:
 
 private:
     void persistSettings();
+    void syncSidebarFavoritesModel();
+    void persistSidebarFavoriteItems(const QVariantList &items);
+    void startArchivePasswordContinuation(const QString &password);
 
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;
+    SidebarFavoritesModel *m_sidebarFavoritesModel = nullptr;
     Services::SettingsService *m_settingsService = nullptr;
     FileOperationsController *m_fileOperations = nullptr;
     DeviceController *m_devices = nullptr;
@@ -461,6 +491,7 @@ private:
     Services::LaunchService *m_launchService = nullptr;
     Services::WallpaperService *m_wallpaperService = nullptr;
     Services::MimeAppsService *m_mimeAppsService = nullptr;
+    Services::IconThemeService *m_iconThemeService = nullptr;
     QString m_openWithPath;
     Runtime::ExplorerRuntimePaths m_runtimePaths;
     Services::ExplorerSettings m_settings;

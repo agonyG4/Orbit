@@ -104,11 +104,11 @@ Rectangle {
 
             Image {
                 anchors.centerIn: parent
-                source: AppState.portalIconSource(AppState.fileIconName(root.selectedName, root.selectedIsDir, root.selectedExecutable), 64)
+                source: AppState.fileIconSource(root.selectedPath, root.selectedIsDir, root.selectedExecutable, 64, "")
                 width: 64
                 height: 64
                 fillMode: Image.PreserveAspectFit
-                asynchronous: true
+                asynchronous: false
                 cache: true
                 retainWhileLoading: true
                 smooth: true

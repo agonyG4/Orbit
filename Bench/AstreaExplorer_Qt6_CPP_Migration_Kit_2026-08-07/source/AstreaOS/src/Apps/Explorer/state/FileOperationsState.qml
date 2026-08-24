@@ -7,6 +7,54 @@ QtObject {
 
     property QtObject app
     readonly property var bridge: app && app.nativeAppState ? app.nativeAppState : null
+    signal fileOperationChanged(var snapshot)
+    signal archiveOperationChanged(var snapshot)
+
+    function currentFileOperationSnapshot() {
+        return bridge && bridge.currentFileOperationSnapshot
+            ? bridge.currentFileOperationSnapshot()
+            : {
+                  running: fileOperationRunning,
+                  progress: fileOperationProgress,
+                  percent: fileOperationPercent,
+                  fileName: fileOperationFileName,
+                  status: fileOperationStatus,
+                  error: fileOperationError,
+                  destination: fileOperationDestination,
+                  doneCount: fileOperationDoneCount,
+                  totalCount: fileOperationTotalCount,
+                  mode: fileOperationMode,
+                  state: fileOperationState,
+                  items: fileOperationItems
+              }
+    }
+
+    function currentArchiveOperationSnapshot() {
+        return bridge && bridge.currentArchiveOperationSnapshot
+            ? bridge.currentArchiveOperationSnapshot()
+            : {
+                  running: archiveExtractionRunning,
+                  progress: archiveExtractionProgress,
+                  percent: archiveExtractionPercent,
+                  fileName: archiveExtractionFileName,
+                  status: archiveExtractionStatus,
+                  error: archiveExtractionError,
+                  destination: archiveExtractionDestination,
+                  doneCount: archiveExtractionDoneCount,
+                  totalCount: archiveExtractionTotalCount,
+                  remainingText: archiveExtractionRemainingText
+              }
+    }
+
+    property Connections bridgeConnections: Connections {
+        target: ops.bridge
+        function onFileOperationChanged(snapshot) {
+            ops.fileOperationChanged(snapshot)
+        }
+        function onArchiveOperationChanged(snapshot) {
+            ops.archiveOperationChanged(snapshot)
+        }
+    }
     property var pendingDeleteTargets: []
     property var pendingRestoreTargets: []
     property var pendingPasteFiles: []

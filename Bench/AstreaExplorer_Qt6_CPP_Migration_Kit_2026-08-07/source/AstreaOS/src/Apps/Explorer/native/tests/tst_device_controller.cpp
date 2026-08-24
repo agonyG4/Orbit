@@ -43,6 +43,9 @@ void DeviceControllerTest::loadsTypedDevices()
     QTRY_COMPARE(changedSpy.count(), 1);
     QCOMPARE(controller.devices().size(), 1);
     QCOMPARE(controller.devices().constFirst().devicePath, QStringLiteral("/dev/sdb1"));
+    QCOMPARE(controller.devices().constFirst().title, QStringLiteral("USB"));
+    QCOMPARE(controller.devices().constFirst().subtitle, QStringLiteral("32 GB · FAT32"));
+    QCOMPARE(controller.devices().constFirst().icon, QStringLiteral("drive-removable-media"));
     QCOMPARE(controller.loading(), false);
     QCOMPARE(controller.error(), QString());
 }

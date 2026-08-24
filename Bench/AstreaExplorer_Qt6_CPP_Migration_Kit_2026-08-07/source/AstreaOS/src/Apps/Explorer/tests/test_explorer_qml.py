@@ -96,11 +96,36 @@ class ExplorerRecentPersistenceTests(unittest.TestCase):
         self.assertIn("archiveExtractionProgress", file_ops_qml)
         self.assertIn("archiveExtractionError", file_ops_qml)
 
-    def test_archive_progress_card_takes_priority_over_file_operation_card(self):
+    def test_operation_progress_uses_presenter_for_priority_and_lifecycle(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")
+        presenter_qml = (APP_ROOT / "components" / "common" / "OperationProgressPresenter.qml").read_text(encoding="utf-8")
 
-        self.assertIn("readonly property bool archiveVisible: AppState.archiveExtractionRunning", main_qml)
-        self.assertIn("readonly property bool fileOpVisible: AppState.fileOperationRunning && !archiveVisible", main_qml)
+        self.assertIn("CommonComponents.OperationProgressPresenter", main_qml)
+        self.assertIn("operationState: AppState.fileOps", main_qml)
+        self.assertIn("visible: operationProgressPresenter.cardVisible", main_qml)
+        self.assertIn("opacity: operationProgressPresenter.cardOpacity", main_qml)
+        self.assertIn('phase: "hidden"', presenter_qml)
+        self.assertIn('phase = "fading"', presenter_qml)
+        self.assertIn("if (_snapshotValue(_latestArchiveSnapshot, \"running\", false))", presenter_qml)
+        self.assertIn("property int minimumRunningDisplayMs: 500", presenter_qml)
+        self.assertIn("_pendingTerminalSnapshot", presenter_qml)
+
+
+class ExplorerArchiveAdmissionTests(unittest.TestCase):
+    def test_archive_actions_are_disabled_while_native_archive_is_running(self):
+        menu = (APP_ROOT / "components/common/FileContextMenu.qml").read_text(encoding="utf-8")
+        facade = (APP_ROOT / "native/src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("readonly property bool archiveOperationAvailable", menu)
+        self.assertIn("!AppState.archiveExtractionRunning", menu)
+        self.assertIn("if (!isArchiveTarget || !archiveOperationAvailable)", menu)
+        self.assertIn("if (!canCompressTarget || !archiveOperationAvailable)", menu)
+        self.assertIn("actionEnabled: menuRoot.archiveOperationAvailable", menu)
+        self.assertIn(
+            "actionEnabled: menuRoot.archiveOperationAvailable && (modelData.format !== \"rar\" || menuRoot.rarAvailable)",
+            menu,
+        )
+        self.assertIn("if (m_archiveRunning || m_filesystemService == nullptr", facade)
 
 
 class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
@@ -217,9 +242,70 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         icon_view = (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8")
 
         self.assertIn("readonly property int   iconDecodeSize", icon_view)
-        self.assertIn("AppState.portalIconSource(tile.cachedIconName, grid.iconDecodeSize)", icon_view)
+        self.assertIn(
+            "AppState.fileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName)",
+            icon_view,
+        )
         self.assertIn("sourceSize: Qt.size(grid.iconDecodeSize, grid.iconDecodeSize)", icon_view)
         self.assertNotIn("sourceSize: Qt.size(grid.iconSize, grid.iconSize)", icon_view)
+
+    def test_native_icon_service_replaces_qml_theme_and_extension_selection(self):
+        preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        adapter = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(encoding="utf-8")
+        icon_service = (APP_ROOT / "native" / "src" / "services" / "icon_theme_service.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("bridge.fileIconSource", preview_state)
+        self.assertIn("iconThemeRevision", app_state)
+        self.assertIn("iconThemeRevision", adapter)
+        self.assertIn("QMimeDatabase::MatchExtension", icon_service)
+        self.assertIn("image://astrea-icons/theme/", icon_service)
+        self.assertIn('QStringLiteral("desktop_icon_theme")', icon_service)
+        self.assertNotIn('QStringLiteral("icon_theme")', icon_service)
+        self.assertIn("configuredBaseTheme", icon_service)
+        self.assertIn("resolveAppearanceVariant", icon_service)
+        self.assertIn("AppearanceMode", icon_service)
+        self.assertIn("symbolicIconSourceForNames", icon_service)
+        self.assertIn("symbolicCandidatesForNames", icon_service)
+        self.assertNotIn("mode=symbolic", icon_service)
+        self.assertNotIn("symbolicImage", icon_service)
+        provider = (APP_ROOT / "native/src/runtime/astrea_icon_image_provider.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("IconRenderMode::Symbolic", provider)
+        for forbidden in [
+            "MacTahoe-dark",
+            ".local/share/icons/%1",
+            "mimes/scalable",
+            'var icons = { "pdf"',
+        ]:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, preview_state)
+
+    def test_sidebar_uses_symbolic_pipeline_and_semantic_roles(self):
+        sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
+        preview_state = (APP_ROOT / "state/PreviewState.qml").read_text(encoding="utf-8")
+        adapter = (APP_ROOT / "compatibility/NativeAppStateAdapter.qml").read_text(encoding="utf-8")
+        facade = (APP_ROOT / "native/src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
+
+        self.assertIn('icon: "user-home"', sidebar)
+        self.assertIn('icon: "computer"', sidebar)
+        self.assertIn("bridge.sidebarIconSource", preview_state)
+        self.assertIn("function sidebarIconSource", adapter)
+        self.assertIn("iconSourceForNames({iconName}", facade)
+        self.assertIn("symbolicIconSourceForNames({iconName}", facade)
+
+    def test_theme_images_are_synchronous_but_thumbnails_remain_async(self):
+        for relative in [
+            "components/views/FileIconView.qml",
+            "components/views/FileListView.qml",
+            "components/layout/PreviewPanel.qml",
+            "components/layout/Sidebar.qml",
+        ]:
+            with self.subTest(relative=relative):
+                source = (APP_ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("asynchronous: false", source)
+        icon_view = (APP_ROOT / "components/views/FileIconView.qml").read_text(encoding="utf-8")
+        self.assertIn("source: tile.activePreviewUrl", icon_view)
+        self.assertIn("asynchronous: true", icon_view)
 
     def test_theme_icon_fallbacks_retain_cached_image_while_loading(self):
         for relative in [
@@ -231,6 +317,61 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
                 source = (APP_ROOT / relative).read_text(encoding="utf-8")
                 self.assertIn("cache: true", source)
                 self.assertIn("retainWhileLoading: true", source)
+
+    def test_file_views_separate_click_selection_from_drag_preparation(self):
+        icon_view = (APP_ROOT / "components/views/FileIconView.qml").read_text(encoding="utf-8")
+        list_view = (APP_ROOT / "components/views/FileListView.qml").read_text(encoding="utf-8")
+        shared = (APP_ROOT / "components/views/ViewShared.js").read_text(encoding="utf-8")
+
+        self.assertIn("appState.handleSelection(fileName, index, ctrl, shift, false)", shared)
+        self.assertIn("appState.prepareSelectionForDrag(fileName, index)", shared)
+        self.assertIn("ViewShared.prepareSelectionForDrag", icon_view)
+        self.assertIn("ViewShared.prepareSelectionForDrag", list_view)
+        self.assertIn("property bool dragStartScheduled: false", list_view)
+        self.assertIn("!(hover.pressedButtons & Qt.LeftButton)", list_view)
+
+
+class ExplorerSidebarClosureTests(unittest.TestCase):
+    def test_favorites_use_native_model_transactions_and_proxy_dragging(self):
+        sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        adapter = (APP_ROOT / "compatibility/NativeAppStateAdapter.qml").read_text(encoding="utf-8")
+
+        self.assertIn("ListView", sidebar)
+        self.assertIn("model: nativeFavoritesModel ? AppState.sidebarFavoritesModel : AppState.sidebarFavorites", sidebar)
+        self.assertIn("target: null", sidebar)
+        self.assertIn("AppState.beginSidebarFavoriteDrag", sidebar)
+        self.assertIn("AppState.previewSidebarFavoriteMove", sidebar)
+        self.assertIn("AppState.commitSidebarFavoriteDrag", sidebar)
+        self.assertIn("AppState.cancelSidebarFavoriteDrag", sidebar)
+        self.assertIn("favoriteInsertionMarker", sidebar)
+        self.assertIn("favoriteProxy", sidebar)
+        self.assertIn("enabled: sbItem.acceptsDrop && !favoritesList.favoriteDragActive", sidebar)
+        self.assertNotIn("application/x-astrea-sidebar-favorite", sidebar)
+        self.assertNotIn("if (drop.accepted)", sidebar)
+        self.assertIn("sidebarFavoritesModel", app_state)
+        self.assertIn("beginSidebarFavoriteDrag", adapter)
+
+    def test_favorite_drag_proxy_reuses_sidebar_item_visuals(self):
+        sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
+
+        self.assertIn("SidebarItem {\n                id: favoriteProxy", sidebar)
+        self.assertIn("icon: favoritesList.favoriteDragIcon", sidebar)
+        self.assertIn("label: favoritesList.favoriteDragLabel", sidebar)
+        self.assertIn("path: favoritesList.favoriteDragPath", sidebar)
+        self.assertIn("isFavoriteRow: false", sidebar)
+        self.assertIn("enabled: false", sidebar)
+        self.assertNotIn("Rectangle {\n                id: favoriteProxy", sidebar)
+
+    def test_devices_bind_variant_maps_and_render_backend_subtitle(self):
+        sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
+
+        self.assertIn("deviceId:    modelData.id", sidebar)
+        self.assertIn("icon:        modelData.icon || \"drive-harddisk\"", sidebar)
+        self.assertIn("label:       modelData.title || modelData.devicePath || \"Device\"", sidebar)
+        self.assertIn("subtitle:    modelData.subtitle || \"\"", sidebar)
+        self.assertIn("visible: deviceItem.subtitle !== \"\"", sidebar)
+        self.assertIn("text: deviceItem.subtitle", sidebar)
 
 if __name__ == "__main__":
     unittest.main()

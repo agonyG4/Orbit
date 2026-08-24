@@ -417,8 +417,7 @@ void FileOperationsController::handleFinished(
             emit clipboardChanged();
         }
     }
-    emit operationStateChanged();
-    setRunning(false);
+    publishTerminalState();
     emit operationFinished(result);
 }
 
@@ -431,8 +430,7 @@ void FileOperationsController::handleFailure(const BackendError &error)
     m_operationStatus.clear();
     m_operationState = QStringLiteral("failed");
     m_operationItems.clear();
-    setRunning(false);
-    emit operationStateChanged();
+    publishTerminalState();
 }
 
 void FileOperationsController::setRunning(bool runningValue)
@@ -444,12 +442,19 @@ void FileOperationsController::setRunning(bool runningValue)
     emit operationStateChanged();
 }
 
+void FileOperationsController::publishTerminalState()
+{
+    m_running = false;
+    emit operationStateChanged();
+}
+
 void FileOperationsController::resetOperationState()
 {
     m_operationRequestId = 0;
-    m_operationStatus.clear();
-    setRunning(false);
-    emit operationStateChanged();
+    m_operationStatus = QStringLiteral("Cancelled");
+    m_operationError.clear();
+    m_operationState = QStringLiteral("cancelled");
+    publishTerminalState();
 }
 
 FileOperationRequest FileOperationsController::makePasteRequest(

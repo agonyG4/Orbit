@@ -458,7 +458,7 @@ Item {
             readonly property bool   itemExecutable: isHeaderRow ? false : fileExecutable
             readonly property string itemName:    isHeaderRow ? "" : fileName
             readonly property int    itemSourceIndex: isHeaderRow ? -1 : sourceIndex
-            readonly property string itemIconName: isHeaderRow ? "" : (fileIconName || AppState.fileIconName(itemName, itemIsDir, itemExecutable))
+            readonly property string itemIconName: isHeaderRow ? "" : (fileIconName || "")
             readonly property int    modelRevision: AppState.fileModelRevision
             readonly property string livePreviewUrl: {
                 if (isHeaderRow || itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -485,10 +485,11 @@ Item {
             readonly property int    dragPreviewSize: Math.max(42, Math.round(root.iconFrameSize * 0.9))
             readonly property url    dragImageUrl: DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    isHeaderRow ? Qt.resolvedUrl("") : AppState.portalIconSource(itemIconName, dragPreviewSize))
+                                                    isHeaderRow ? Qt.resolvedUrl("") : AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName))
 
             // Drag support
             property bool dragging: false
+            property bool dragStartScheduled: false
             property real pressX: 0
             property real pressY: 0
             Drag.active: dragging
@@ -547,10 +548,10 @@ Item {
                             Image {
                                 anchors.centerIn: parent
                                 visible: !row.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.portalIconSource(itemIconName, root.iconFrameSize)
+                                source: AppState.fileIconSource(row.itemPath, row.itemIsDir, row.itemExecutable, root.iconFrameSize, row.itemIconName)
                                 width: root.iconFrameSize; height: root.iconFrameSize
                                 fillMode: Image.PreserveAspectFit
-                                asynchronous: true
+                                asynchronous: false
                                 cache: true
                                 retainWhileLoading: true
                                 smooth: true
@@ -676,15 +677,23 @@ Item {
                 }
 
                 onPositionChanged: function(mouse) {
-                    if (row.dragging || !(pressedButtons & Qt.LeftButton)) return
+                    if (row.dragging || row.dragStartScheduled || !(pressedButtons & Qt.LeftButton)) return
                     const dist = Math.abs(mouse.x - row.pressX) + Math.abs(mouse.y - row.pressY)
                     if (dist < root.dragStartThreshold) return
-                    root.resetActivationCandidate()
-                    AppState.handleSelection(itemName, itemSourceIndex, false, false, true)
-                    row.dragging = true
+                    row.dragStartScheduled = true
+                    const pendingPath = itemPath
+                    Qt.callLater(function() {
+                        row.dragStartScheduled = false
+                        if (row.itemPath !== pendingPath || !(hover.pressedButtons & Qt.LeftButton))
+                            return
+                        root.resetActivationCandidate()
+                        ViewShared.prepareSelectionForDrag(AppState, itemName, itemSourceIndex)
+                        row.dragging = true
+                    })
                 }
 
                 onClicked: function(mouse) {
+                    row.dragStartScheduled = false
                     row.dragging = false
                     if (mouse.button === Qt.LeftButton) {
                         ViewShared.focusFileSurface(root)
@@ -694,9 +703,11 @@ Item {
                 }
 
                 onReleased: {
+                    row.dragStartScheduled = false
                     row.dragging = false
                 }
                 onCanceled: {
+                    row.dragStartScheduled = false
                     row.dragging = false
                 }
             }

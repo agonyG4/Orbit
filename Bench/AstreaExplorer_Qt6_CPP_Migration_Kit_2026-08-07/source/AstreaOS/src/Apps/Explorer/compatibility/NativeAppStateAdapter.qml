@@ -18,6 +18,8 @@ QtObject {
     readonly property string trashInfoPath: facade.trashInfoPath
     readonly property string trashVirtualPath: facade.trashVirtualPath
     readonly property string recentVirtualPath: facade.recentVirtualPath
+    readonly property string effectiveIconTheme: facade.effectiveIconTheme
+    readonly property var iconThemeRevision: facade.iconThemeRevision
 
     property string currentPath: facade.currentPath
     property var history: facade.history
@@ -69,6 +71,7 @@ QtObject {
     property string sidebarHiddenDefaultFavoritesJson: facade.sidebarHiddenDefaultFavoritesJson
     property var sidebarFavorites: facade.sidebarFavorites
     property var sidebarHiddenDefaultFavorites: facade.sidebarHiddenDefaultFavorites
+    property var sidebarFavoritesModel: facade.sidebarFavoritesModel
     property int sidebarFavoritesRevision: facade.sidebarFavoritesRevision
     property var defaultSidebarFavoritePaths: facade.defaultSidebarFavoritePaths
     property bool inTrashView: facade.inTrashView
@@ -108,6 +111,40 @@ QtObject {
     signal clipboardStateChanged()
     signal filesystemActionFinished(int requestId, string operation, bool ok, var data, string error)
     signal openWithReady(string path, var applications)
+    signal fileOperationChanged(var snapshot)
+    signal archiveOperationChanged(var snapshot)
+
+    function currentFileOperationSnapshot() {
+        return {
+            running: facade.fileOperationRunning,
+            progress: facade.fileOperationProgress,
+            percent: facade.fileOperationPercent,
+            fileName: facade.fileOperationFileName,
+            status: facade.fileOperationStatus,
+            error: facade.fileOperationError,
+            destination: facade.fileOperationDestination,
+            doneCount: facade.fileOperationDoneCount,
+            totalCount: facade.fileOperationTotalCount,
+            mode: facade.fileOperationMode,
+            state: facade.fileOperationState,
+            items: facade.fileOperationItems
+        }
+    }
+
+    function currentArchiveOperationSnapshot() {
+        return {
+            running: facade.archiveExtractionRunning,
+            progress: facade.archiveExtractionProgress,
+            percent: facade.archiveExtractionPercent,
+            fileName: facade.archiveExtractionFileName,
+            status: facade.archiveExtractionStatus,
+            error: facade.archiveExtractionError,
+            destination: facade.archiveExtractionDestination,
+            doneCount: facade.archiveExtractionDoneCount,
+            totalCount: facade.archiveExtractionTotalCount,
+            remainingText: facade.archiveExtractionRemainingText
+        }
+    }
 
     property Connections facadeConnections: Connections {
         target: root.facade
@@ -119,6 +156,12 @@ QtObject {
         }
         function onOpenWithReady(path, applications) {
             root.openWithReady(path, applications)
+        }
+        function onFileOperationStateChanged() {
+            root.fileOperationChanged(root.currentFileOperationSnapshot())
+        }
+        function onArchiveStateChanged() {
+            root.archiveOperationChanged(root.currentArchiveOperationSnapshot())
         }
     }
 
@@ -196,6 +239,7 @@ QtObject {
     function selectAll() { facade.selectAll() }
     function selectByName(name) { facade.selectByName(name) }
     function selectByPath(path) { facade.selectByPath(path) }
+    function prepareSelectionForDrag(name, index) { facade.prepareSelectionForDrag(name, index) }
     function createTab(path) { return facade.createTab(path || "") }
     function closeTab(index) { facade.closeTab(index) }
     function closeTabById(tabId) { facade.closeTabById(tabId) }
@@ -274,6 +318,13 @@ QtObject {
     function refreshPreviewMetadata() { facade.refreshPreviewMetadata() }
     function requestThumbnailWarm(path, offset, limit) { facade.requestThumbnailWarm(path, offset, limit) }
     function themedIconSource(iconName, size, themeName) { return facade.themedIconSource(iconName, size, themeName) }
+    function sidebarIconSource(iconName, size) { return facade.sidebarIconSource(iconName, size) }
+    function fileIconName(path, isDirectory, isExecutable) {
+        return facade.fileIconName(path, isDirectory, isExecutable)
+    }
+    function fileIconSource(path, isDirectory, isExecutable, size, semanticIconName) {
+        return facade.fileIconSource(path, isDirectory, isExecutable, size, semanticIconName || "")
+    }
     function writePortalResult(json) { return facade.writePortalResult(json) }
     function setPendingPasteRename(name) { facade.pendingPasteRename = name }
     function setZoom(level) { facade.setZoom(level) }
@@ -289,4 +340,10 @@ QtObject {
     function pinSidebarFavorite(path, label, icon) { facade.pinSidebarFavorite(path, label || "", icon || "") }
     function removeSidebarFavorite(path) { facade.removeSidebarFavorite(path) }
     function moveSidebarFavorite(path, index) { facade.moveSidebarFavorite(path, index) }
+    function beginSidebarFavoriteDrag(path) { return facade.beginSidebarFavoriteDrag(path) }
+    function previewSidebarFavoriteMove(path, index) {
+        return facade.previewSidebarFavoriteMove(path, index)
+    }
+    function commitSidebarFavoriteDrag() { return facade.commitSidebarFavoriteDrag() }
+    function cancelSidebarFavoriteDrag() { facade.cancelSidebarFavoriteDrag() }
 }

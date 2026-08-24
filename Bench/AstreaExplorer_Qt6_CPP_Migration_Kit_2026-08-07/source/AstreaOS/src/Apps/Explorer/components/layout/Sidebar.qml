@@ -184,7 +184,7 @@ Item {
                     anchors.centerIn: parent
                     fillMode: Image.PreserveAspectFit
                     smooth: true
-                    asynchronous: true
+                    asynchronous: false
                     sourceSize: Qt.size(14, 14)
                     layer.enabled: true
                     layer.effect: MultiEffect {
@@ -214,24 +214,132 @@ Item {
 
         // ── Pessoal ───────────────────────────────────────────────────
         SidebarSection { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.pessoal"]) || "PERSONAL") }
-        SidebarItem { icon: "inode-directory";      label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.pasta_pessoal"]) || "Home Folder"); path: AppState.homePath }
+        SidebarItem { icon: "user-home";            label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.pasta_pessoal"]) || "Home Folder"); path: AppState.homePath }
         SidebarItem { icon: "document-open-recent"; label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.recentes"]) || "Recents");      path: AppState.recentVirtualPath }
 
         Item { width: 1; height: 4 }
 
         // ── Favoritos ─────────────────────────────────────────────────
         SidebarSection { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.favoritos"]) || "FAVORITES") }
-        Repeater {
-            model: {
-                var revision = AppState.sidebarFavoritesRevision
-                return AppState.sidebarFavorites
+        Item {
+            id: favoritesArea
+            width: parent.width
+            height: favoritesList.contentHeight
+
+            ListView {
+                id: favoritesList
+                property bool favoriteDragActive: false
+                property string favoriteDragPath: ""
+                property string favoriteDragLabel: ""
+                property string favoriteDragIcon: "inode-directory"
+                property real favoriteDragY: 0
+                property int favoriteDropIndex: -1
+                readonly property bool nativeFavoritesModel: AppState.sidebarFavoritesModel !== null
+
+                width: parent.width
+                height: contentHeight
+                interactive: false
+                clip: false
+                boundsBehavior: Flickable.StopAtBounds
+                model: nativeFavoritesModel ? AppState.sidebarFavoritesModel : AppState.sidebarFavorites
+
+                function insertionIndexAt(y) {
+                    if (count <= 0)
+                        return -1
+                    var pointerY = Math.max(0, Math.min(y, contentHeight))
+                    for (var row = 0; row < count; row++) {
+                        var item = itemAtIndex(row)
+                        if (item && pointerY < item.y + item.height * 0.5)
+                            return row
+                    }
+                    return count - 1
+                }
+
+                function updateFavoriteDrag(y) {
+                    if (!favoriteDragActive)
+                        return
+                    favoriteDragY = Math.max(0, Math.min(y, contentHeight))
+                    var targetIndex = insertionIndexAt(favoriteDragY)
+                    if (targetIndex < 0 || targetIndex === favoriteDropIndex)
+                        return
+                    favoriteDropIndex = targetIndex
+                    AppState.previewSidebarFavoriteMove(favoriteDragPath, targetIndex)
+                }
+
+                function finishFavoriteDrag(commit) {
+                    if (!favoriteDragActive)
+                        return
+                    if (commit)
+                        AppState.commitSidebarFavoriteDrag()
+                    else
+                        AppState.cancelSidebarFavoriteDrag()
+                    favoriteDragActive = false
+                    favoriteDragPath = ""
+                    favoriteDragLabel = ""
+                    favoriteDragIcon = "inode-directory"
+                    favoriteDropIndex = -1
+                }
+
+                move: Transition {
+                    NumberAnimation {
+                        properties: "x,y"
+                        duration: 120
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                moveDisplaced: Transition {
+                    NumberAnimation {
+                        properties: "x,y"
+                        duration: 120
+                        easing.type: Easing.OutCubic
+                    }
+                }
+
+                delegate: SidebarItem {
+                    property var favoriteData: favoritesList.nativeFavoritesModel ? model : modelData
+                    icon: favoriteData.icon || "inode-directory"
+                    label: favoriteData.label || AppState.sidebarLabelForPath(favoriteData.path)
+                    path: favoriteData.path
+                    isFavoriteRow: true
+                    favoriteIndex: index
+                    width: favoritesList.width - 16
+                    opacity: favoriteDragging ? 0 : 1
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+                    }
+                }
             }
+
+            Rectangle {
+                id: favoriteInsertionMarker
+                x: 8
+                y: favoritesList.favoriteDropIndex < 0
+                    ? 0
+                    : Math.max(0, Math.min(favoritesList.contentHeight - height,
+                                           favoritesList.favoriteDropIndex * 32 - 1))
+                width: favoritesList.width - 16
+                height: 2
+                radius: 1
+                z: 10
+                visible: favoritesList.favoriteDragActive
+                color: UI.Theme.accent
+                opacity: 0.9
+            }
+
             SidebarItem {
-                icon: modelData.icon || "inode-directory"
-                label: modelData.label || AppState.sidebarLabelForPath(modelData.path)
-                path: modelData.path
-                isFavoriteRow: true
-                favoriteIndex: index
+                id: favoriteProxy
+                y: Math.max(0, Math.min(favoritesList.contentHeight - height,
+                                         favoritesList.favoriteDragY - height * 0.5))
+                width: favoritesList.width - 16
+                height: 32
+                z: 11
+                visible: favoritesList.favoriteDragActive
+                icon: favoritesList.favoriteDragIcon
+                label: favoritesList.favoriteDragLabel
+                path: favoritesList.favoriteDragPath
+                isFavoriteRow: false
+                enabled: false
             }
         }
 
@@ -239,22 +347,22 @@ Item {
 
         // ── Dispositivos ──────────────────────────────────────────────
         SidebarSection { label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.dispositivos"]) || "DEVICES") }
-        SidebarItem { icon: "drive-harddisk"; label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.sistema"]) || "System"); path: "/" }
+        SidebarItem { icon: "computer"; label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.label.sistema"]) || "System"); path: "/" }
         Repeater {
             model: AppState.deviceModel
             DeviceSidebarItem {
-                deviceId:    model.id
-                icon:        model.icon
-                label:       model.title
-                subtitle:    model.subtitle
-                path:        model.mountPath
-                devicePath:  model.devicePath
-                mounted:     model.mounted
-                canMount:    model.canMount
-                canUnmount:  model.canUnmount
-                canRemount:  model.canRemount
-                autoMount:   model.autoMount
-                busy:        model.busy
+                deviceId:    modelData.id
+                icon:        modelData.icon || "drive-harddisk"
+                label:       modelData.title || modelData.devicePath || "Device"
+                subtitle:    modelData.subtitle || ""
+                path:        modelData.mountPath || modelData.desiredMountPath || ""
+                devicePath:  modelData.devicePath || ""
+                mounted:     Boolean(modelData.mounted)
+                canMount:    Boolean(modelData.canMount)
+                canUnmount:  Boolean(modelData.canUnmount)
+                canRemount:  Boolean(modelData.canRemount)
+                autoMount:   Boolean(modelData.autoMount)
+                busy:        Boolean(modelData.busy)
             }
         }
         SidebarItem {
@@ -668,6 +776,7 @@ Item {
         property bool isFavoriteRow: false
         property int favoriteIndex: -1
         property bool favoriteDragging: false
+        property real favoriteDragAnchorY: 0
         readonly property bool acceptsDrop: (action === "" && path.indexOf("/") === 0) || isFavoriteRow
 
         readonly property bool active: action === "network"
@@ -742,7 +851,7 @@ Item {
                     anchors.centerIn: parent
                     fillMode: Image.PreserveAspectFit
                     smooth: true
-                    asynchronous: true
+                    asynchronous: false
                     sourceSize: Qt.size(16, 16)
                     opacity: sbItem.active ? 1.0 : 0.92
                     layer.enabled: true
@@ -800,35 +909,47 @@ Item {
 
         DragHandler {
             id: favoriteDragHandler
-            enabled: sbItem.isFavoriteRow
-            onActiveChanged: sbItem.favoriteDragging = active
+            enabled: sbItem.isFavoriteRow && favoritesList.nativeFavoritesModel
+            target: null
+            onActiveChanged: {
+                if (active) {
+                    if (!AppState.beginSidebarFavoriteDrag(sbItem.path)) {
+                        sbItem.favoriteDragging = false
+                        return
+                    }
+                    sbItem.favoriteDragging = true
+                    sbItem.favoriteDragAnchorY = sbItem.y + sbItem.height * 0.5
+                    favoritesList.favoriteDragActive = true
+                    favoritesList.favoriteDragPath = sbItem.path
+                    favoritesList.favoriteDragLabel = sbItem.label
+                    favoritesList.favoriteDragIcon = sbItem.icon
+                    favoritesList.favoriteDragY = sbItem.favoriteDragAnchorY
+                    favoritesList.favoriteDropIndex = favoritesList.insertionIndexAt(
+                        favoritesList.favoriteDragY)
+                } else if (sbItem.favoriteDragging) {
+                    favoritesList.finishFavoriteDrag(true)
+                    sbItem.favoriteDragging = false
+                }
+            }
+            onTranslationChanged: {
+                if (active)
+                    favoritesList.updateFavoriteDrag(sbItem.favoriteDragAnchorY + translation.y)
+            }
+            onCanceled: {
+                if (sbItem.favoriteDragging) {
+                    favoritesList.finishFavoriteDrag(false)
+                    sbItem.favoriteDragging = false
+                }
+            }
         }
-
-        Drag.active: sbItem.favoriteDragging
-        Drag.dragType: Drag.Automatic
-        Drag.supportedActions: Qt.MoveAction
-        Drag.mimeData: ({
-            "application/x-astrea-sidebar-favorite": sbItem.isFavoriteRow ? sbItem.path : ""
-        })
 
         DropArea {
             id: sidebarDropTarget
             anchors.fill: parent
             z: 0
-            enabled: sbItem.acceptsDrop
+            enabled: sbItem.acceptsDrop && !favoritesList.favoriteDragActive
 
             onDropped: function(drop) {
-                if (drop.accepted)
-                    return
-                if (sbItem.isFavoriteRow
-                        && drop.hasFormat("application/x-astrea-sidebar-favorite")) {
-                    var draggedPath = drop.getDataAsString("application/x-astrea-sidebar-favorite")
-                    if (draggedPath && draggedPath !== sbItem.path) {
-                        AppState.moveSidebarFavorite(draggedPath, sbItem.favoriteIndex)
-                    }
-                    drop.acceptProposedAction()
-                    return
-                }
                 root.handleDroppedUrls(drop, sbItem.path)
             }
         }
@@ -890,7 +1011,7 @@ Item {
                     anchors.centerIn: parent
                     fillMode: Image.PreserveAspectFit
                     smooth: true
-                    asynchronous: true
+                    asynchronous: false
                     sourceSize: Qt.size(16, 16)
                     opacity: deviceItem.busy ? 0.40 : (deviceItem.active ? 1.0 : 0.88)
                     layer.enabled: true
@@ -919,6 +1040,17 @@ Item {
                         pixelSize: 13
                         weight: deviceItem.active ? Font.DemiBold : Font.Normal
                     }
+                    elide: Text.ElideRight
+                    opacity: deviceItem.busy ? 0.50 : 1.0
+                    Behavior on opacity { NumberAnimation { duration: 160 } }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: deviceItem.subtitle !== ""
+                    text: deviceItem.subtitle
+                    color: Qt.rgba(Theme.text.r, Theme.text.g, Theme.text.b, 0.58)
+                    font.pixelSize: 10
                     elide: Text.ElideRight
                     opacity: deviceItem.busy ? 0.50 : 1.0
                     Behavior on opacity { NumberAnimation { duration: 160 } }
