@@ -22,6 +22,8 @@ private slots:
     void emptySelectionPreservesClipboardState();
     void repeatedCutIsOrderInsensitiveAndClearsClipboard();
     void pasteDelegatesTypedRequestAndPublishesProgress();
+    void progressSignalsCarryLiveUpdates();
+    void terminalSignalIsSingleAndCoherent();
     void exposesTerminalItemResults();
     void pastePreflightsConflictsBeforeStarting();
     void dragTransferDoesNotMutateClipboard();
@@ -134,6 +136,101 @@ void FileOperationsControllerTest::pasteDelegatesTypedRequestAndPublishesProgres
     QTRY_COMPARE(finishedSpy.count(), 1);
     QCOMPARE(controller.running(), false);
     QCOMPARE(finishedSpy.takeFirst().at(0).value<FileOperationResult>().ok, true);
+}
+
+void FileOperationsControllerTest::progressSignalsCarryLiveUpdates()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+    QVector<int> emittedPercents;
+    QVector<bool> emittedRunning;
+    connect(
+        &controller,
+        &FileOperationsController::operationStateChanged,
+        &controller,
+        [&]() {
+            emittedPercents.append(controller.operationPercent());
+            emittedRunning.append(controller.running());
+        });
+
+    const BackendRequestId requestId = controller.transferFiles(
+        {QStringLiteral("/tmp/source.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("copy"));
+    QVERIFY(requestId > 0);
+    emittedPercents.clear();
+    emittedRunning.clear();
+
+    for (const int percent : {25, 50, 75}) {
+        FileOperationProgress progress;
+        progress.requestId = requestId;
+        progress.doneCount = percent == 75 ? 1 : 0;
+        progress.totalCount = 1;
+        progress.percent = percent;
+        client.completeFileOperationProgress(requestId, progress);
+    }
+
+    QCOMPARE(emittedPercents, QVector<int>({25, 50, 75}));
+    QCOMPARE(emittedRunning, QVector<bool>({true, true, true}));
+    QCOMPARE(controller.operationState(), QStringLiteral("running"));
+}
+
+void FileOperationsControllerTest::terminalSignalIsSingleAndCoherent()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+    QVector<QString> emittedStates;
+    QVector<bool> emittedRunning;
+    connect(
+        &controller,
+        &FileOperationsController::operationStateChanged,
+        &controller,
+        [&]() {
+            emittedStates.append(controller.operationState());
+            emittedRunning.append(controller.running());
+        });
+
+    const BackendRequestId successRequest = controller.transferFiles(
+        {QStringLiteral("/tmp/success.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("copy"));
+    emittedStates.clear();
+    emittedRunning.clear();
+    FileOperationResult success;
+    success.requestId = successRequest;
+    success.ok = true;
+    success.doneCount = 1;
+    success.totalCount = 1;
+    success.percent = 100;
+    client.completeFileOperation(successRequest, success);
+    QCOMPARE(emittedStates, QVector<QString>({QStringLiteral("success")}));
+    QCOMPARE(emittedRunning, QVector<bool>({false}));
+
+    const BackendRequestId failureRequest = controller.transferFiles(
+        {QStringLiteral("/tmp/failure.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("copy"));
+    emittedStates.clear();
+    emittedRunning.clear();
+    client.failRequest(
+        failureRequest,
+        QStringLiteral("permission_denied"),
+        QStringLiteral("permission denied"));
+    QCOMPARE(emittedStates, QVector<QString>({QStringLiteral("failed")}));
+    QCOMPARE(emittedRunning, QVector<bool>({false}));
+
+    const BackendRequestId cancelledRequest = controller.transferFiles(
+        {QStringLiteral("/tmp/cancelled.txt")},
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("copy"));
+    emittedStates.clear();
+    emittedRunning.clear();
+    controller.cancelOperation();
+    QCOMPARE(client.cancelledRequests().constLast(), cancelledRequest);
+    QCOMPARE(emittedStates, QVector<QString>({QStringLiteral("cancelled")}));
+    QCOMPARE(emittedRunning, QVector<bool>({false}));
 }
 
 void FileOperationsControllerTest::exposesTerminalItemResults()
@@ -306,6 +403,8 @@ void FileOperationsControllerTest::cancelDelegatesToBackendAndClearsBusyState()
     controller.cancelOperation();
     QCOMPARE(client.cancelledRequests(), QVector<BackendRequestId>({requestId}));
     QCOMPARE(controller.running(), false);
+    QCOMPARE(controller.operationState(), QStringLiteral("cancelled"));
+    QCOMPARE(controller.operationStatus(), QStringLiteral("Cancelled"));
 }
 
 QTEST_MAIN(FileOperationsControllerTest)

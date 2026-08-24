@@ -96,6 +96,7 @@ private slots:
 
 private:
     void setRunning(bool running);
+    void publishTerminalState();
     void resetOperationState();
     Backend::FileOperationRequest makePasteRequest(
         const QString &destination,

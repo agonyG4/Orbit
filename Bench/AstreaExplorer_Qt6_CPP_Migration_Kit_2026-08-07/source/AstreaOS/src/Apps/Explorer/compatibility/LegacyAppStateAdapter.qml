@@ -18,6 +18,36 @@ QtObject {
     readonly property string trashFilesPath: ""
     readonly property string trashInfoPath: ""
     readonly property string recentVirtualPath: "recent://"
+    readonly property string effectiveIconTheme: ""
+    readonly property int iconThemeRevision: 0
+    readonly property var sidebarFavoritesModel: null
+
+    signal fileOperationChanged(var snapshot)
+    signal archiveOperationChanged(var snapshot)
+
+    function currentFileOperationSnapshot() {
+        return {
+            running: false, progress: 0, percent: 0, fileName: "", status: "",
+            error: "", destination: "", doneCount: 0, totalCount: 0,
+            mode: "", state: "", items: []
+        }
+    }
+
+    function currentArchiveOperationSnapshot() {
+        return {
+            running: false, progress: 0, percent: 0, fileName: "", status: "",
+            error: "", destination: "", doneCount: 0, totalCount: 0,
+            remainingText: ""
+        }
+    }
+
+    function themedIconSource(iconName, size, themeName) { return "" }
+    function sidebarIconSource(iconName, size) { return "" }
+    function fileIconName(path, isDirectory, isExecutable) {
+        return isDirectory ? "inode-directory" : "application-x-generic"
+    }
+    function fileIconSource(path, isDirectory, isExecutable, size, semanticIconName) { return "" }
+    function prepareSelectionForDrag(name, index) {}
 
     // Keep startup calls safe while the public AppState Loader resolves the
     // native adapter. The legacy object must remain inert and must never
@@ -36,4 +66,8 @@ QtObject {
     function requestUnmountDevice(path, mountPath) { return 0 }
     function requestRemountDevice(path, mountPath, openAfterMount) { return 0 }
     function connectToNetwork(address) { return 0 }
+    function beginSidebarFavoriteDrag(path) { return false }
+    function previewSidebarFavoriteMove(path, index) { return false }
+    function commitSidebarFavoriteDrag() { return false }
+    function cancelSidebarFavoriteDrag() {}
 }

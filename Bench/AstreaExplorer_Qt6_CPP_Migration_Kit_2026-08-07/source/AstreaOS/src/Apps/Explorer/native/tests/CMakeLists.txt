@@ -30,6 +30,27 @@ target_compile_definitions(tst_real_main_qml PRIVATE
 
 add_test(NAME real_main_qml COMMAND tst_real_main_qml)
 
+qt_add_executable(tst_operation_progress_presenter
+    tst_operation_progress_presenter.cpp
+)
+
+target_link_libraries(tst_operation_progress_presenter PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+)
+
+target_compile_definitions(tst_operation_progress_presenter PRIVATE
+    ASTREA_EXPLORER_RUNTIME_ROOT="${ASTREA_EXPLORER_RUNTIME_ROOT}"
+)
+
+add_test(NAME operation_progress_presenter COMMAND tst_operation_progress_presenter)
+set_tests_properties(operation_progress_presenter PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 qt_add_executable(tst_app_state_compatibility
     tst_app_state_compatibility.cpp
 )

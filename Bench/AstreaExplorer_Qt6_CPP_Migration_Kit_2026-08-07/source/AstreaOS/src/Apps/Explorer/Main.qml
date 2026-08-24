@@ -465,6 +465,11 @@ ApplicationWindow {
                         visible: AppState.loadError !== ""
                     }
 
+                CommonComponents.OperationProgressPresenter {
+                    id: operationProgressPresenter
+                    operationState: AppState.fileOps
+                }
+
                     AstreaFiles.OperationProgressCard {
                         id: extractionProgressCard
                         anchors {
@@ -472,26 +477,18 @@ ApplicationWindow {
                             bottom: parent.bottom; bottomMargin: 14
                         }
                         width: Math.min(320, parent.width - 28)
-                        readonly property bool archiveVisible: AppState.archiveExtractionRunning
-                        readonly property bool fileOpVisible: AppState.fileOperationRunning && !archiveVisible
-                        visible: fileOpVisible || archiveVisible
-                        opacity: visible ? 1 : 0
+                        visible: operationProgressPresenter.cardVisible
+                        opacity: operationProgressPresenter.cardOpacity
                         z: 20
-                        title: fileOpVisible
-                            ? (AppState.fileOperationStatus || "Copiando...")
-                            : (AppState.archiveExtractionStatus || "Extraindo...")
-                        detail: fileOpVisible
-                            ? AppState.fileOperationFileName
-                            : AppState.archiveExtractionFileName
-                        destination: (fileOpVisible ? AppState.fileOperationDestination : AppState.archiveExtractionDestination) !== ""
-                            ? (fileOpVisible ? AppState.fileOperationDestination : AppState.archiveExtractionDestination).split("/").filter(Boolean).pop()
-                            : ""
-                        progress: fileOpVisible ? AppState.fileOperationProgress : AppState.archiveExtractionProgress
-                        percent: fileOpVisible ? AppState.fileOperationPercent : AppState.archiveExtractionPercent
-                        completedItems: fileOpVisible ? AppState.fileOperationDoneCount : AppState.archiveExtractionDoneCount
-                        totalItems: fileOpVisible ? AppState.fileOperationTotalCount : AppState.archiveExtractionTotalCount
-                        remainingText: fileOpVisible ? "" : AppState.archiveExtractionRemainingText
-                        failed: fileOpVisible ? AppState.fileOperationError !== "" : AppState.archiveExtractionError !== ""
+                        title: operationProgressPresenter.title
+                        detail: operationProgressPresenter.detail
+                        destination: operationProgressPresenter.destination
+                        progress: operationProgressPresenter.progress
+                        percent: operationProgressPresenter.percent
+                        completedItems: operationProgressPresenter.completedItems
+                        totalItems: operationProgressPresenter.totalItems
+                        remainingText: operationProgressPresenter.remainingText
+                        failed: operationProgressPresenter.failed
                         panelColor: Theme.panel
                         borderColor: Theme.border
                         primaryTextColor: Theme.text
@@ -499,7 +496,6 @@ ApplicationWindow {
                         trackColor: Theme.hover
                         fillColor: Theme.text
                         errorColor: "#ff8b8b"
-                        Behavior on opacity { NumberAnimation { duration: 120 } }
                     }
                 }
 

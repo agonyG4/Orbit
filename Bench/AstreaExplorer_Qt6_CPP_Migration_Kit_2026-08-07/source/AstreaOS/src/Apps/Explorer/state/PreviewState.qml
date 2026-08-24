@@ -16,24 +16,30 @@ QtObject {
     property var startupWarmQueue: []
     property bool startupWorkEnabled: false
     property real zoomLevel: bridge ? bridge.zoomLevel : 1.0
+    readonly property var iconThemeRevision: app ? app.iconThemeRevision : 0
 
     function refreshPreviewMetadata() { if (bridge) bridge.refreshPreviewMetadata() }
-    function fileIconName(fileName, isFolder, isExecutable) {
-        if (isFolder) {
-            var folder = String(fileName || "").toLowerCase()
-            var known = { "desktop": "user-desktop", "downloads": "folder-download", "documentos": "folder-documents", "documents": "folder-documents", "imagens": "folder-images", "pictures": "folder-images", "music": "folder-music", "música": "folder-music", "videos": "folder-videos", "vídeos": "folder-videos", "trash": "user-trash", "lixeira": "user-trash" }
-            return known[folder] || "inode-directory"
-        }
-        if (isExecutable) return "application-x-executable"
-        var ext = String(fileName || "").split(".").pop().toLowerCase()
-        var icons = { "pdf": "application-pdf", "txt": "text-plain", "md": "text-markdown", "png": "image-png", "jpg": "application-image-jpg", "jpeg": "application-image-jpg", "gif": "application-image-gif", "svg": "image-svg+xml", "webp": "image-webp", "mp3": "audio-x-generic", "wav": "audio-x-generic", "mp4": "video-x-generic", "zip": "application-x-zip", "tar": "application-x-tar", "gz": "application-x-gzip", "desktop": "application-x-desktop", "sh": "text-x-script", "py": "text-x-python", "qml": "text-x-qml", "rs": "text-rust" }
-        return icons[ext] || (ext === String(fileName || "").toLowerCase() ? "unknown" : "text-x-generic")
+    function fileIconName(path, isFolder, isExecutable) {
+        var revision = iconThemeRevision
+        if (bridge && typeof bridge.fileIconName === "function")
+            return bridge.fileIconName(path || "", isFolder, isExecutable)
+        return isFolder ? "inode-directory" : "application-x-generic"
     }
     function themedIconSource(iconName, size, themeName) {
         return bridge ? bridge.themedIconSource(iconName, size, themeName) : ""
     }
-    function portalIconSource(iconName, size) { return themedIconSource(iconName, size, "MacTahoe") }
-    function sidebarIconSource(iconName, size) { return themedIconSource(iconName, size, "MacTahoe-dark") }
+    function fileIconSource(path, isFolder, isExecutable, size, semanticIconName) {
+        var revision = iconThemeRevision
+        return bridge && typeof bridge.fileIconSource === "function"
+            ? bridge.fileIconSource(path || "", isFolder, isExecutable, size, semanticIconName || "")
+            : ""
+    }
+    function portalIconSource(iconName, size) { return themedIconSource(iconName, size, "") }
+    function sidebarIconSource(iconName, size) {
+        return bridge && typeof bridge.sidebarIconSource === "function"
+            ? bridge.sidebarIconSource(iconName, size)
+            : ""
+    }
     function isPreviewableFile(fileName, isDir) {
         return !isDir && /\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(String(fileName || ""))
     }

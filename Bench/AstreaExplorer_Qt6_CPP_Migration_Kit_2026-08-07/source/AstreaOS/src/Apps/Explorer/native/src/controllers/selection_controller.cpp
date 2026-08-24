@@ -142,6 +142,18 @@ void SelectionController::selectByPath(const QString &path)
     applySelection({path}, {name}, path, name, path, index);
 }
 
+void SelectionController::prepareSelectionForDrag(const QString &name, int index)
+{
+    if (name.isEmpty()) {
+        return;
+    }
+    const QString path = pathAt(index);
+    if (!path.isEmpty() && isPathSelected(path)) {
+        return;
+    }
+    handleSelection(name, index, false, false, false);
+}
+
 void SelectionController::handleSelection(
     const QString &name,
     int index,

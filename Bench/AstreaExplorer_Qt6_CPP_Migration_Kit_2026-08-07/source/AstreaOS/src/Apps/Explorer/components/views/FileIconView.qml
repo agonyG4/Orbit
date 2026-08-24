@@ -155,7 +155,10 @@ Item {
                 return
 
             root.resetActivationCandidate()
-            AppState.handleSelection(root.queuedDragItemName, root.queuedDragItemSourceIndex, false, false, true)
+            ViewShared.prepareSelectionForDrag(
+                AppState,
+                root.queuedDragItemName,
+                root.queuedDragItemSourceIndex)
             root.queuedDragItemUrl = root.dragUriListForItem(root.queuedDragItemName, root.queuedDragItemPath, root.queuedDragItemUrl)
             root.queuedDragItemPath = root.dragPathsForItem(root.queuedDragItemName, root.queuedDragItemPath).join("\n")
 
@@ -577,7 +580,7 @@ Item {
                         readonly property bool   itemIsDir: modelData.fileIsDir
                         readonly property bool   itemExecutable: Boolean(modelData.fileExecutable)
                         readonly property string itemName:  modelData.fileName
-                        readonly property string cachedIconName: modelData.fileIconName || AppState.fileIconName(itemName, itemIsDir, itemExecutable)
+                        readonly property string cachedIconName: modelData.fileIconName || ""
                         readonly property int    modelRevision: AppState.fileModelRevision
                         readonly property string livePreviewUrl: {
                             if (itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -597,7 +600,7 @@ Item {
                         readonly property int    dragPreviewSize: Math.max(48, Math.round(grid.iconSize * 0.78))
                         readonly property url    dragImageUrl: DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    AppState.portalIconSource(cachedIconName, dragPreviewSize))
+                                                    AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName))
 
                         onModelDataChanged: {
                             activePreviewUrl = ""
@@ -633,10 +636,10 @@ Item {
                             Image {
                                 anchors.centerIn: parent
                                 visible: !tile.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.portalIconSource(tile.cachedIconName, grid.iconDecodeSize)
+                                source: AppState.fileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName)
                                 width: grid.iconSize; height: grid.iconSize
                                 fillMode: Image.PreserveAspectFit
-                                asynchronous: true
+                                asynchronous: false
                                 cache: true
                                 retainWhileLoading: true
                                 smooth: true

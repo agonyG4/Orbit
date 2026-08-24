@@ -29,6 +29,7 @@ public:
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void selectByName(const QString &name);
     Q_INVOKABLE void selectByPath(const QString &path);
+    Q_INVOKABLE void prepareSelectionForDrag(const QString &name, int index);
     Q_INVOKABLE void handleSelection(
         const QString &name,
         int index,

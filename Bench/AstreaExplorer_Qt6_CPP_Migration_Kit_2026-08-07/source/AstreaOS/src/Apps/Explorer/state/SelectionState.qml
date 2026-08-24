@@ -83,4 +83,10 @@ QtObject {
             }
         }
     }
+
+    function prepareSelectionForDrag(name, index) {
+        if (isSelected(name))
+            return
+        handleSelection(name, index, false, false, false)
+    }
 }

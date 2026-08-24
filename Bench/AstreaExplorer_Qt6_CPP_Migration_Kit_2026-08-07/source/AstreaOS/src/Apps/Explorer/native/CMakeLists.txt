@@ -98,6 +98,20 @@ add_custom_target(astrea_explorer_rust_components
         "${ASTREA_EXPLORER_PORTAL_ARTIFACT}"
         "${ASTREA_EXPLORER_LAUNCH_ARTIFACT}")
 
+add_library(astrea_explorer_native_icons STATIC
+    src/services/icon_theme_service.h
+    src/services/icon_theme_service.cpp
+)
+
+target_include_directories(astrea_explorer_native_icons PUBLIC
+    src
+)
+
+target_link_libraries(astrea_explorer_native_icons PUBLIC
+    Qt6::Core
+    Qt6::Gui
+)
+
 add_library(astrea_explorer_native_backend STATIC
     src/backend/backend_types.h
     src/backend/backend_transport.h
@@ -111,11 +125,15 @@ add_library(astrea_explorer_native_backend STATIC
     src/backend/fake_backend_client.cpp
     src/models/directory_model.h
     src/models/directory_model.cpp
+    src/models/sidebar_favorites_model.h
+    src/models/sidebar_favorites_model.cpp
 )
 
 add_library(astrea_explorer_native_runtime STATIC
     src/runtime/explorer_runtime_paths.h
     src/runtime/explorer_runtime_paths.cpp
+    src/runtime/astrea_icon_image_provider.h
+    src/runtime/astrea_icon_image_provider.cpp
 )
 
 target_include_directories(astrea_explorer_native_runtime PUBLIC
@@ -124,6 +142,9 @@ target_include_directories(astrea_explorer_native_runtime PUBLIC
 
 target_link_libraries(astrea_explorer_native_runtime PUBLIC
     Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    astrea_explorer_native_icons
 )
 
 add_library(astrea_explorer_native_operations STATIC
@@ -284,6 +305,22 @@ target_link_libraries(tst_directory_model PRIVATE
 
 add_test(NAME directory_model COMMAND tst_directory_model)
 
+qt_add_executable(tst_sidebar_favorites_model
+    tests/tst_sidebar_favorites_model.cpp
+)
+
+target_include_directories(tst_sidebar_favorites_model PRIVATE
+    src
+)
+
+target_link_libraries(tst_sidebar_favorites_model PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_backend
+)
+
+add_test(NAME sidebar_favorites_model COMMAND tst_sidebar_favorites_model)
+
 qt_add_executable(tst_runtime_paths
     tests/tst_runtime_paths.cpp
 )
@@ -339,6 +376,7 @@ target_include_directories(astrea_explorer_native_navigation PUBLIC
 target_link_libraries(astrea_explorer_native_navigation PUBLIC
     Qt6::Core
     astrea_explorer_native_backend
+    astrea_explorer_native_icons
     astrea_explorer_native_settings
     astrea_explorer_native_operations
     astrea_explorer_native_recent
@@ -601,6 +639,41 @@ target_link_libraries(tst_app_state_facade PRIVATE
 )
 
 add_test(NAME app_state_facade COMMAND tst_app_state_facade)
+
+qt_add_executable(tst_icon_theme_service
+    tests/tst_icon_theme_service.cpp
+)
+
+target_include_directories(tst_icon_theme_service PRIVATE
+    src
+)
+
+target_link_libraries(tst_icon_theme_service PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    astrea_explorer_native_icons
+)
+
+add_test(NAME icon_theme_service COMMAND tst_icon_theme_service)
+
+qt_add_executable(tst_icon_image_provider
+    tests/tst_icon_image_provider.cpp
+)
+
+target_include_directories(tst_icon_image_provider PRIVATE
+    src
+)
+
+target_link_libraries(tst_icon_image_provider PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::Test
+    astrea_explorer_native_runtime
+)
+
+add_test(NAME icon_image_provider COMMAND tst_icon_image_provider)
 
 qt_add_executable(tst_shadow_parity
     tests/parity/fixture_tree.h

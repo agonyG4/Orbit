@@ -30,6 +30,7 @@
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "models/directory_model.h"
+#include "runtime/astrea_icon_image_provider.h"
 #include "runtime/explorer_runtime_paths.h"
 #include "services/clipboard_service.h"
 #include "services/directory_watch_service.h"
@@ -168,6 +169,7 @@ int ExplorerApplication::run(int argc, char **argv)
     }
     using namespace Astrea::Explorer::Native::Backend;
     using namespace Astrea::Explorer::Native::Services;
+    IconThemeService iconThemeService(&application);
     PersistentWorkerTransportOptions transportOptions;
     if (runtimePaths.valid) {
         transportOptions.backendProgram = runtimePaths.backendProgram;
@@ -233,7 +235,8 @@ int ExplorerApplication::run(int argc, char **argv)
         &openWith,
         &launchService,
         &wallpaper,
-        &mimeApps);
+        &mimeApps,
+        &iconThemeService);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,
@@ -242,6 +245,9 @@ int ExplorerApplication::run(int argc, char **argv)
         &appState);
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(
+        QStringLiteral("astrea-icons"),
+        new Astrea::Explorer::Native::Runtime::AstreaIconImageProvider(&iconThemeService));
     const I18nContext i18n = loadI18nContext(runtimePaths.root);
     application.setProperty("astreaRuntimeRoot", runtimePaths.root);
     application.setProperty(

@@ -53,9 +53,12 @@ QtObject {
     property string sidebarHiddenDefaultFavoritesJson: nativeAppState.sidebarHiddenDefaultFavoritesJson
     property var sidebarFavorites: nativeAppState.sidebarFavorites
     property var sidebarHiddenDefaultFavorites: nativeAppState.sidebarHiddenDefaultFavorites
+    readonly property var sidebarFavoritesModel: nativeAppState.sidebarFavoritesModel
     readonly property int sidebarFavoritesRevision: nativeAppState.sidebarFavoritesRevision
     readonly property bool inTrashView: nativeAppState.inTrashView
     readonly property var defaultSidebarFavoritePaths: nativeAppState.defaultSidebarFavoritePaths
+    readonly property string effectiveIconTheme: nativeAppState.effectiveIconTheme || ""
+    readonly property var iconThemeRevision: nativeAppState.iconThemeRevision || 0
 
     property string currentPath: nativeAppState.currentPath
     property var history: nativeAppState.history
@@ -342,8 +345,24 @@ QtObject {
         }
     }
 
-    function isSelected(name) { return nativeAppState.isSelected(name) }
-    function isPathSelected(path) { return nativeAppState.isPathSelected(path) }
+    function isSelected(name) {
+        if (!name)
+            return false
+
+        const files = selectedFiles
+        if (files && files.indexOf(name) !== -1)
+            return true
+
+        return name === selectedFile
+    }
+
+    function isPathSelected(path) {
+        if (!path)
+            return false
+
+        const paths = selectedPaths
+        return paths && paths.indexOf(path) !== -1
+    }
     function clearSelection() { nativeAppState.clearSelection() }
     function handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection) {
         nativeAppState.handleSelection(name, index, ctrlMode, shiftMode, preserveCurrentSelection)
@@ -351,6 +370,7 @@ QtObject {
     function selectAll() { nativeAppState.selectAll() }
     function selectByName(name) { nativeAppState.selectByName(name) }
     function selectByPath(path) { nativeAppState.selectByPath(path) }
+    function prepareSelectionForDrag(name, index) { nativeAppState.prepareSelectionForDrag(name, index) }
 
     function createTab(initialPath) { nativeAppState.createTab(initialPath || "") }
     function closeTab(index) { nativeAppState.closeTab(index) }
@@ -424,6 +444,9 @@ QtObject {
 
     function refreshPreviewMetadata() { preview.refreshPreviewMetadata() }
     function fileIconName(fileName, isFolder, isExecutable) { return preview.fileIconName(fileName, isFolder, isExecutable) }
+    function fileIconSource(path, isFolder, isExecutable, size, semanticIconName) {
+        return preview.fileIconSource(path, isFolder, isExecutable, size, semanticIconName || "")
+    }
     function portalIconSource(iconName, size) { return preview.portalIconSource(iconName, size) }
     function sidebarIconSource(iconName, size) { return preview.sidebarIconSource(iconName, size) }
     function isPreviewableFile(fileName, isDir) { return preview.isPreviewableFile(fileName, isDir) }
@@ -565,6 +588,18 @@ QtObject {
     }
     function moveSidebarFavorite(path, index) {
         nativeAppState.moveSidebarFavorite(path, index)
+    }
+    function beginSidebarFavoriteDrag(path) {
+        return nativeAppState.beginSidebarFavoriteDrag(path)
+    }
+    function previewSidebarFavoriteMove(path, index) {
+        return nativeAppState.previewSidebarFavoriteMove(path, index)
+    }
+    function commitSidebarFavoriteDrag() {
+        return nativeAppState.commitSidebarFavoriteDrag()
+    }
+    function cancelSidebarFavoriteDrag() {
+        nativeAppState.cancelSidebarFavoriteDrag()
     }
 
     function isTrashPath(path) {

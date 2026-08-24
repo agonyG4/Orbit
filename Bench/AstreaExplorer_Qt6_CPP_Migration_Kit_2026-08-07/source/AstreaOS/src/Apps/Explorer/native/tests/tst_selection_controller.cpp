@@ -18,8 +18,10 @@ class SelectionControllerTest final : public QObject
 
 private slots:
     void selectsSingleItem();
+    void replacesSelectionWithoutModifiers();
     void togglesCtrlMultiSelection();
     void selectsShiftRange();
+    void preservesSelectionForDragOnlyWhenSelected();
     void selectsAllItems();
     void reconcilesSelectionByStablePath();
     void removesSelectedPathsAfterReplacement();
@@ -61,6 +63,19 @@ void SelectionControllerTest::selectsSingleItem()
     QVERIFY(!selection.isSelected(QStringLiteral("one.txt")));
 }
 
+void SelectionControllerTest::replacesSelectionWithoutModifiers()
+{
+    DirectoryModel model;
+    QVERIFY(model.applyEntries(selectionEntries(), 1));
+    SelectionController selection(&model);
+
+    selection.handleSelection(QStringLiteral("one.txt"), 0, false, false, false);
+    selection.handleSelection(QStringLiteral("two.txt"), 1, false, false, false);
+
+    QCOMPARE(selection.selectedFiles(), QStringList({QStringLiteral("two.txt")}));
+    QVERIFY(!selection.isSelected(QStringLiteral("one.txt")));
+}
+
 void SelectionControllerTest::togglesCtrlMultiSelection()
 {
     DirectoryModel model;
@@ -95,6 +110,24 @@ void SelectionControllerTest::selectsShiftRange()
              QStringLiteral("three.txt"),
              QStringLiteral("four.txt")}));
     QCOMPARE(selection.selectedFile(), QStringLiteral("four.txt"));
+}
+
+void SelectionControllerTest::preservesSelectionForDragOnlyWhenSelected()
+{
+    DirectoryModel model;
+    QVERIFY(model.applyEntries(selectionEntries(), 1));
+    SelectionController selection(&model);
+
+    selection.handleSelection(QStringLiteral("one.txt"), 0, false, false, false);
+    selection.handleSelection(QStringLiteral("three.txt"), 2, true, false, false);
+    selection.prepareSelectionForDrag(QStringLiteral("one.txt"), 0);
+
+    QCOMPARE(
+        selection.selectedFiles(),
+        QStringList({QStringLiteral("one.txt"), QStringLiteral("three.txt")}));
+
+    selection.prepareSelectionForDrag(QStringLiteral("four.txt"), 3);
+    QCOMPARE(selection.selectedFiles(), QStringList({QStringLiteral("four.txt")}));
 }
 
 void SelectionControllerTest::selectsAllItems()
