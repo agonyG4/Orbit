@@ -1,6 +1,0 @@
-<RCC>
-  <qresource prefix="/qt/qml/Astrea/Explorer/Native/">
-    <file alias="qml/qmldir">/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase331-release/Astrea/Explorer/Native/qml/qmldir</file>
-  </qresource>
-</RCC>
-

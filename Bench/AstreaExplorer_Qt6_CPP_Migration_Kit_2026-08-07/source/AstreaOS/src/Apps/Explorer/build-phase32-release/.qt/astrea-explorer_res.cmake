@@ -1,7 +1,0 @@
-
-set(target "astrea-explorer")
-set(working_dir "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native")
-set(src_and_dest_list
-
-)
-set(timestamp_file "/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase32-release/.qt/astrea-explorer_res.txt")

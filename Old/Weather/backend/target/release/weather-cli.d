@@ -1,1 +1,0 @@
-/home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/target/release/weather-cli: /home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/weather-cli/src/main.rs /home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/weather-core/src/lib.rs

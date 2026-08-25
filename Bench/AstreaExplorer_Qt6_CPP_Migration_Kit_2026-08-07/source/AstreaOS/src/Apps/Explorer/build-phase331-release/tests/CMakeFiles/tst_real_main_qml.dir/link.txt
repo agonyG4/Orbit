@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tst_real_main_qml.dir/link.d CMakeFiles/tst_real_main_qml.dir/tst_real_main_qml_autogen/mocs_compilation.cpp.o CMakeFiles/tst_real_main_qml.dir/tst_real_main_qml.cpp.o -o tst_real_main_qml  /usr/lib/libQt6Test.so.6.11.1 /usr/lib/libQt6Core.so.6.11.1

@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tst_directory_model.dir/link.d CMakeFiles/tst_directory_model.dir/tst_directory_model_autogen/mocs_compilation.cpp.o CMakeFiles/tst_directory_model.dir/tests/tst_directory_model.cpp.o -o tst_directory_model  /usr/lib/libQt6Test.so.6.11.1 libastrea_explorer_native_backend.a /usr/lib/libQt6Core.so.6.11.1

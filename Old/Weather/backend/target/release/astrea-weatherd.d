@@ -1,1 +1,0 @@
-/home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/target/release/astrea-weatherd: /home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/weather-core/src/lib.rs /home/agony/.local/share/Astrea-Rolling/Apps/Weather/backend/weatherd/src/main.rs

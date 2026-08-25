@@ -1,9 +1,0 @@
--rootPath
-/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/native/tests
--cmake-output
--output-file
-/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase331-release/tests/.qt/qml_imports/tst_recent_persistence_build.cmake
--importPath
-/home/agony/GitHub/Orbit/Bench/AstreaExplorer_Qt6_CPP_Migration_Kit_2026-08-07/source/AstreaOS/src/Apps/Explorer/build-phase331-release/tests
--importPath
-/usr/lib/qt6/qml

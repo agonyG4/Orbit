@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tst_launch_service.dir/link.d CMakeFiles/tst_launch_service.dir/tst_launch_service_autogen/mocs_compilation.cpp.o CMakeFiles/tst_launch_service.dir/tests/tst_launch_service.cpp.o -o tst_launch_service  /usr/lib/libQt6Test.so.6.11.1 libastrea_explorer_native_launch.a /usr/lib/libQt6Core.so.6.11.1

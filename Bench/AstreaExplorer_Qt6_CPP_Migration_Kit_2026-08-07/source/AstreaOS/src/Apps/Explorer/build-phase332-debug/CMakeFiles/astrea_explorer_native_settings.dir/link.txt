@@ -1,2 +1,0 @@
-/usr/bin/ar qc libastrea_explorer_native_settings.a CMakeFiles/astrea_explorer_native_settings.dir/astrea_explorer_native_settings_autogen/mocs_compilation.cpp.o CMakeFiles/astrea_explorer_native_settings.dir/src/services/settings_service.cpp.o
-/usr/bin/ranlib libastrea_explorer_native_settings.a
