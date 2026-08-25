@@ -254,7 +254,7 @@ void RuntimePathsTest::configuredDevelopmentRootIsUsed()
     QProcessEnvironment environment = environmentWithoutRoot();
     environment.insert(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"), developmentRoot);
     const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
-        fixture.filePath(QStringLiteral("checkout/runtime/src/Apps/Explorer/native/build")),
+        fixture.filePath(QStringLiteral("checkout/runtime/build")),
         fixture.filePath(QStringLiteral("home-without-installed-root")),
         environment);
 

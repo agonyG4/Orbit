@@ -130,7 +130,8 @@ int ExplorerApplication::run(int argc, char **argv)
 
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
 #ifdef ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT
-    if (!environment.contains(QStringLiteral("ASTREA_ROOT"))) {
+    if (!environment.contains(QStringLiteral("ASTREA_ROOT"))
+        && !environment.contains(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"))) {
         environment.insert(
             QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"),
             QStringLiteral(ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT));
