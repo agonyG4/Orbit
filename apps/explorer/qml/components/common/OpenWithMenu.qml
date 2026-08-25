@@ -3,8 +3,8 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
 import "../.."
-import "../../AstreaComponents" as ShellComponents
-import "../../AstreaI18n" as AstreaI18n
+import Astrea.Components 1.0 as ShellComponents
+import Astrea.I18n 1.0 as AstreaI18n
 
 Item {
     id: root

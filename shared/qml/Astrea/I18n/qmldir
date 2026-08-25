@@ -1,2 +1,2 @@
-module AstreaI18n
+module Astrea.I18n
 singleton I18n 1.0 I18n.qml

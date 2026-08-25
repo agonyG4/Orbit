@@ -1,3 +1,3 @@
-import "../Core/components/menu" as Menu
+import Astrea.Components 1.0 as Menu
 
 Menu.ContextMenuDivider {}

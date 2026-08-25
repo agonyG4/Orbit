@@ -3,9 +3,9 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import "components/layout" as LayoutComponents
 import "components/views" as ViewComponents
-import "AstreaComponents" as UI
+import Astrea.Components 1.0 as UI
 import "."
-import "AstreaI18n" as AstreaI18n
+import Astrea.I18n 1.0 as AstreaI18n
 
 Dialog {
     id: dialog

@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
+find_program(ASTREA_CARGO_EXECUTABLE cargo REQUIRED)
 qt_standard_project_setup(REQUIRES 6.11)
 
 include(GNUInstallDirs)

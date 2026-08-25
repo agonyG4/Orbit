@@ -1,11 +1,11 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
-import "../../AstreaFiles/DragDropSupport.js" as DragDropSupport
+import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
 import "ViewShared.js" as ViewShared
-import "../../AstreaI18n" as AstreaI18n
+import Astrea.I18n 1.0 as AstreaI18n
 
 // ── FileListView ──────────────────────────────────────────────────────────────
 // Column-based list with sortable header. Optimised for large directories.
@@ -113,7 +113,7 @@ Item {
     }
 
     function handleDroppedUrls(drop, destinationPath) {
-        return DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)
+        return AstreaFiles.DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)
     }
 
     function dragPathsForItem(itemName, itemPath) {
@@ -483,7 +483,7 @@ Item {
             readonly property int    previewRequestSize: root.previewSize
             readonly property int    previewDisplaySize: Math.min(root.iconFrameSize, Math.round(root.iconFrameSize * 0.82))
             readonly property int    dragPreviewSize: Math.max(42, Math.round(root.iconFrameSize * 0.9))
-            readonly property url    dragImageUrl: DragDropSupport.dragImageUrl(
+            readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
                                                     isHeaderRow ? Qt.resolvedUrl("") : AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName))
 

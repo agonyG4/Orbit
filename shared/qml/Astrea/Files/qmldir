@@ -1,5 +1,6 @@
 module Astrea.Files
 
+DragDropSupport 1.0 DragDropSupport.js
 FileContextMenu 1.0 ui/FileContextMenu.qml
 ContextMenuAction 1.0 ui/ContextMenuAction.qml
 ContextMenuDivider 1.0 ui/ContextMenuDivider.qml

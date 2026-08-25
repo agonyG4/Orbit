@@ -3,12 +3,11 @@ import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
 import QtQuick.Layouts
 import QtQuick.Effects
-import "../../AstreaFiles/DragDropSupport.js" as DragDropSupport
+import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as Common
-import "../../AstreaComponents" as UI
-import "../../AstreaFiles" as AstreaFiles
-import "../../AstreaI18n" as AstreaI18n
+import Astrea.Components 1.0 as UI
+import Astrea.I18n 1.0 as AstreaI18n
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Root transparente — serve apenas como âncora de posição na janela.

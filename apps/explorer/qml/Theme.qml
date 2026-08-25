@@ -1,6 +1,6 @@
 pragma Singleton
 import QtQuick 2.15
-import "AstreaComponents" as Components
+import Astrea.Components 1.0 as Components
 
 Item {
     id: theme

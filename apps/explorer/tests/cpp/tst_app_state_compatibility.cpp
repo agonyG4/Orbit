@@ -167,6 +167,7 @@ void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeReg
     const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_INHERITED_MARKER");
     qputenv("ASTREA_EXPLORER_INHERITED_MARKER", QByteArrayLiteral("1"));
     QQmlEngine engine;
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
     engine.addImportPath(stubs.path());
     engine.rootContext()->setContextProperty(
         QStringLiteral("astreaNativeAppStateAvailable"), false);
@@ -203,6 +204,7 @@ void AppStateCompatibilityTest::portalAndFileDialogPathsResolveThroughPublicAppS
     QVERIFY(createQmlDependencyStubs(stubs.path()));
 
     QQmlEngine engine;
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
     engine.addImportPath(stubs.path());
     const QString runtimeRoot = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/");
@@ -308,6 +310,7 @@ void AppStateCompatibilityTest::reactiveSelectionMembershipUpdatesAfterReplaceme
     QVERIFY(createQmlDependencyStubs(stubs.path()));
 
     QQmlEngine engine;
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
     engine.addImportPath(stubs.path());
     engine.rootContext()->setContextProperty(
         QStringLiteral("astreaNativeAppStateAvailable"), true);
@@ -389,6 +392,7 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QVERIFY(stubs.isValid());
     QVERIFY(createQmlDependencyStubs(stubs.path()));
     QQmlEngine engine;
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
     engine.addImportPath(stubs.path());
     engine.rootContext()->setContextProperty(
         QStringLiteral("astreaNativeAppStateAvailable"), true);
