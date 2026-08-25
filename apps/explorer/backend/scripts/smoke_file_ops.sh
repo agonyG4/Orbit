@@ -2,10 +2,13 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin="${EXPLORER_BACKEND_BIN:-${repo_dir}/target/debug/explorer_backend}"
+repo_root="$(cd "${repo_dir}/../../.." && pwd)"
+cargo_target_dir="${CARGO_TARGET_DIR:-${repo_root}/build/debug/cargo-target}"
+bin="${EXPLORER_BACKEND_BIN:-${cargo_target_dir}/debug/explorer_backend}"
 
 if [[ ! -x "${bin}" ]]; then
-    cargo build --manifest-path "${repo_dir}/Cargo.toml" >/dev/null
+    CARGO_TARGET_DIR="${cargo_target_dir}" cargo build --locked \
+        --manifest-path "${repo_dir}/Cargo.toml" --package explorer_backend >/dev/null
 fi
 
 tmp="$(mktemp -d -p "${TMPDIR:-/workspace}")"

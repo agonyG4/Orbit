@@ -7,9 +7,8 @@ context property. The public QML file does not import the native module
 unconditionally: the native executable sets the process-local
 engine-owned `astreaNativeAppStateAvailable` capability after registering the
 facade, and the file loads `compatibility/NativeAppStateAdapter.qml` only when
-that capability is true and the adapter is ready. Without the capability,
-it loads the legacy adapter and never resolves `Astrea.Explorer.Native`, which
-preserves Quickshell/portal fallback loading.
+that capability is true and the adapter is ready. Without the capability, it
+loads the compatibility adapter without native registration.
 The wrapper delegates only domains already represented by native controllers
 and keeps legacy implementations for the rest.
 
@@ -75,12 +74,8 @@ Legacy/transitional domains are paste conflict behavior, archive and file
 operation flows, trash/delete/restore, previews and thumbnail warming, recent
 item fallback state, devices and network dialogs, portal fallback,
 open-with and launch menus, helper-backed sidebar actions, and toolbar search
-suggestions. The legacy navigation module and its directory/search/watch
-`Process` objects remain as guarded fallback/reference code and are disabled
-as a group whenever native navigation is authoritative.
-The legacy navigation module remains in the source tree for fallback/reference
-purposes, but its initialization and directory/search/watch `Process` objects
-are guarded whenever the native bridge is active.
+suggestions. These QML compatibility surfaces remain guarded reference code
+until a separately qualified native owner replaces them.
 
 ## Future candidates
 
@@ -112,7 +107,7 @@ The complete QML symbol inventory was generated with:
 
 ```sh
 rg -o 'AppState\.[A-Za-z_][A-Za-z0-9_]*' \
-  source/AstreaOS/src/Apps/Explorer --glob '*.qml' --glob '*.js' \
+  apps/explorer/qml --glob '*.qml' --glob '*.js' \
   | sed 's/.*AppState\.//' | sort -u
 ```
 

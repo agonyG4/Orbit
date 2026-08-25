@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, install, and smoke-test the Explorer from a clean prefix."""
+"""Build, install, and smoke-test Explorer from the Orbit repository root."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ import sys
 import tempfile
 
 
-KIT_ROOT = Path(__file__).resolve().parents[1]
-NATIVE_ROOT = KIT_ROOT / "source/AstreaOS/src/Apps/Explorer/native"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -32,6 +31,9 @@ def required_files(prefix: Path) -> list[Path]:
         runtime / "Apps/Explorer/Main.qml",
         runtime / "Apps/Explorer/qmldir",
         runtime / "Apps/Explorer/PortalDialog.qml",
+        runtime / "Astrea/Components/qmldir",
+        runtime / "Astrea/Files/qmldir",
+        runtime / "Astrea/I18n/qmldir",
         runtime / "System/services/astrea-services.sh",
     ]
 
@@ -52,12 +54,19 @@ def assert_clean_prefix(prefix: Path) -> None:
         if not os.access(path, os.X_OK):
             raise SystemExit(f"installed required executable is not executable: {path}")
 
-    forbidden_parts = {"build", "target", "__pycache__", "QuickshellComponents"}
-    forbidden_suffixes = {".pyc", ".pyo"}
+    forbidden_parts = {
+        "target",
+        "__pycache__",
+        ".pytest_cache",
+        "CMakeFiles",
+        ".qt",
+        ".rcc",
+        "QuickshellComponents",
+    }
     for path in prefix.rglob("*"):
         if any(part in forbidden_parts or part.startswith("build") for part in path.parts):
             raise SystemExit(f"build/cache directory leaked into install prefix: {path}")
-        if path.is_file() and path.suffix in forbidden_suffixes:
+        if path.is_file() and path.suffix in {".pyc", ".pyo"}:
             raise SystemExit(f"compiled Python artifact leaked into install prefix: {path}")
 
 
@@ -65,6 +74,7 @@ def smoke(binary: Path, isolated_root: Path, *, portal: bool = False) -> None:
     environment = os.environ.copy()
     for name in (
         "ASTREA_ROOT",
+        "ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT",
         "ASTREA_EXPLORER_BIN",
         "ASTREA_EXPLORER_START_PATH",
         "ASTREA_EXPLORER_REMOTE_PREFIXES",
@@ -74,6 +84,7 @@ def smoke(binary: Path, isolated_root: Path, *, portal: bool = False) -> None:
         "QML_IMPORT_PATH",
     ):
         environment.pop(name, None)
+
     home = isolated_root / "home"
     config = isolated_root / "xdg-config"
     data = isolated_root / "xdg-data"
@@ -95,9 +106,9 @@ def smoke(binary: Path, isolated_root: Path, *, portal: bool = False) -> None:
             "XDG_CACHE_HOME": str(cache),
             "XDG_RUNTIME_DIR": str(runtime_dir),
             "XDG_CURRENT_DESKTOP": "AstreaTest",
+            "QT_QPA_PLATFORM": "offscreen",
         }
     )
-    environment["QT_QPA_PLATFORM"] = "offscreen"
     command = [str(binary)]
     if portal:
         command.append("--portal")
@@ -119,12 +130,24 @@ def main() -> int:
     cmake = shutil.which("cmake")
     if cmake is None:
         raise SystemExit("cmake is required")
-    with tempfile.TemporaryDirectory(prefix="astrea-explorer-clean-install-") as temporary:
+
+    with tempfile.TemporaryDirectory(prefix="orbit-clean-install-") as temporary:
         root = Path(temporary)
         build = root / "build"
         prefix = root / "prefix"
-        run([cmake, "-S", str(NATIVE_ROOT), "-B", str(build), "-G", "Unix Makefiles",
-             "-DCMAKE_BUILD_TYPE=Debug", f"-DCMAKE_INSTALL_PREFIX={prefix}"])
+        run(
+            [
+                cmake,
+                "-S",
+                str(REPO_ROOT),
+                "-B",
+                str(build),
+                "-G",
+                "Unix Makefiles",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                f"-DCMAKE_INSTALL_PREFIX={prefix}",
+            ]
+        )
         run([cmake, "--build", str(build), "--target", "astrea-explorer", "-j2"])
         run([cmake, "--install", str(build)])
 
