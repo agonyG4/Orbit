@@ -6,10 +6,8 @@ use std::time::Duration;
 
 #[test]
 fn cli_desktop_launch_forwards_targets_to_final_argv() {
-    let root = std::env::temp_dir().join(format!(
-        "astrea-launch-cli-contract-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("astrea-launch-cli-contract-{}", std::process::id()));
     let applications = root.join("data/applications");
     let config = root.join("config");
     let state = root.join("state");
@@ -59,7 +57,11 @@ fn cli_desktop_launch_forwards_targets_to_final_argv() {
         .env("PATH", &root)
         .output()
         .expect("run astrea-launch CLI");
-    assert!(result.status.success(), "stderr: {}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 
     for _ in 0..40 {
         if output.is_file() {
@@ -68,9 +70,9 @@ fn cli_desktop_launch_forwards_targets_to_final_argv() {
         thread::sleep(Duration::from_millis(25));
     }
     let recorded = fs::read_to_string(&output).expect("recorder output");
-    assert_eq!(recorded.lines().collect::<Vec<_>>(), vec![
-        target_one.to_str().unwrap(),
-        target_two.to_str().unwrap(),
-    ]);
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        vec![target_one.to_str().unwrap(), target_two.to_str().unwrap(),]
+    );
     let _ = fs::remove_dir_all(root);
 }

@@ -1406,9 +1406,14 @@ void AppStateFacade::emptyTrash()
     }
 }
 
+bool AppStateFacade::archiveWorkflowOccupied() const
+{
+    return m_archiveRunning || m_archivePasswordPrompt || m_archiveConflict;
+}
+
 void AppStateFacade::startArchiveExtraction(const QString &path, const QString &folderName)
 {
-    if (m_archiveRunning || m_filesystemService == nullptr || path.isEmpty()) {
+    if (archiveWorkflowOccupied() || m_filesystemService == nullptr || path.isEmpty()) {
         return;
     }
     m_archivePath = path;
@@ -1496,7 +1501,7 @@ void AppStateFacade::cancelArchiveConflict()
 }
 void AppStateFacade::startFolderCompression(const QString &path, const QString &format)
 {
-    if (m_archiveRunning || m_filesystemService == nullptr || path.isEmpty()) {
+    if (archiveWorkflowOccupied() || m_filesystemService == nullptr || path.isEmpty()) {
         return;
     }
     const QString suffix = format.isEmpty() ? QStringLiteral("tar.gz") : format;

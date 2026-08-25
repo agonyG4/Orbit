@@ -455,6 +455,7 @@ private:
     void persistSettings();
     void syncSidebarFavoritesModel();
     void persistSidebarFavoriteItems(const QVariantList &items);
+    bool archiveWorkflowOccupied() const;
     void startArchivePasswordContinuation(const QString &password);
 
     NavigationController *m_navigation = nullptr;

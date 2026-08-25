@@ -756,10 +756,16 @@ install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer"
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Core/components"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Core"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
-        PATTERN "*.json" PATTERN "*.svg" PATTERN "*.png")
+        PATTERN "*.json" PATTERN "*.svg" PATTERN "*.png"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "*.pyo" EXCLUDE)
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Features/Files"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Features"
-    FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir")
+    FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "*.pyo" EXCLUDE)
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/System/i18n"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/System"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
@@ -770,7 +776,10 @@ install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/System/i18n"
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Astrea/Components"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Astrea"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir"
-        PATTERN "*.json" PATTERN "*.svg" PATTERN "*.png")
+        PATTERN "*.json" PATTERN "*.svg" PATTERN "*.png"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "*.pyo" EXCLUDE)
 install(DIRECTORY "${ASTREA_EXPLORER_RUNTIME_ROOT}/Astrea/Files"
     DESTINATION "${ASTREA_INSTALL_RUNTIME_ROOT}/Astrea"
     FILES_MATCHING PATTERN "*.qml" PATTERN "*.js" PATTERN "qmldir")
