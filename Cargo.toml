@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/explorer/backend",
+    "services/launch",
+    "services/filechooser-portal",
+]

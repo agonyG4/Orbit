@@ -29,6 +29,11 @@ env/
 # Rust build output
 target/
 
+# Orbit development build trees
+/build/
+/build/debug/
+/build/release/
+
 # CMake, Qt, and other native build output
 build*/
 cmake-build-*/
