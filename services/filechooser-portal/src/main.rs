@@ -27,7 +27,8 @@ struct PortalRequest {
     parent_window: String,
 }
 
-type DialogFuture<'a> = Pin<Box<dyn Future<Output = Result<PortalSelection, PortalError>> + Send + 'a>>;
+type DialogFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<PortalSelection, PortalError>> + Send + 'a>>;
 
 trait DialogRunner: Send + Sync {
     fn run<'a>(
@@ -118,7 +119,9 @@ impl AstreaFileChooser {
         })?;
         let (cancel, cancellation) = watch::channel(false);
         if *self.shutdown.borrow() {
-            return Err(zbus::fdo::Error::Failed("portal is shutting down".to_string()));
+            return Err(zbus::fdo::Error::Failed(
+                "portal is shutting down".to_string(),
+            ));
         }
         let mut shutdown = self.shutdown.clone();
         let cancel_for_shutdown = cancel.clone();
@@ -322,10 +325,7 @@ mod tests {
         }
     }
 
-    async fn close_request(
-        connection: &zbus::Connection,
-        path: &str,
-    ) -> zbus::Result<()> {
+    async fn close_request(connection: &zbus::Connection, path: &str) -> zbus::Result<()> {
         let proxy = Proxy::new(
             connection,
             BUS_NAME,

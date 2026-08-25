@@ -32,6 +32,8 @@ Run the Python/QML checks with:
 
 ```sh
 python3 -m unittest discover -s apps/explorer/tests/qml -p 'test*.py'
+python3 -m unittest discover -s shared/qml/Astrea/I18n -p 'test*.py'
+python3 shared/qml/Astrea/I18n/validate_i18n.py
 python3 scripts/verify_orbit_source_gate.py
 python3 scripts/verify_explorer_clean_install.py
 ```
@@ -39,6 +41,10 @@ python3 scripts/verify_explorer_clean_install.py
 The clean-install check builds from the repository root into an isolated
 prefix, clears runtime environment overrides, and smoke-tests normal and
 portal Explorer startup.
+
+The shared Components NotificationClient contract test has a pre-existing
+`astrea-notify` contract mismatch; it is tracked separately from this
+structural-reset qualification and is not changed here.
 
 ## Repository shape
 

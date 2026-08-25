@@ -318,8 +318,9 @@ pub fn parse_cli_request(args: &[String]) -> Result<LaunchRequest, String> {
             }
             Ok(LaunchRequest::Desktop { id, targets })
         }
-        "--command" => exact_single_arg(args, "--command")
-            .map(|command| LaunchRequest::Command { command }),
+        "--command" => {
+            exact_single_arg(args, "--command").map(|command| LaunchRequest::Command { command })
+        }
         "--argv-json" => {
             let json = exact_single_arg(args, "--argv-json")?;
             let argv = serde_json::from_str::<Vec<String>>(&json)
@@ -526,28 +527,28 @@ pub fn parse_exec_line_with_context(
                     arg_started = true;
                 }
             }
-            '%' => {
-                match chars.next() {
-                    Some('%') => {
-                        if field_code.is_some() {
-                            return Err("desktop field code must be the only field in its argument".into());
-                        }
-                        current.push('%');
-                        arg_started = true;
+            '%' => match chars.next() {
+                Some('%') => {
+                    if field_code.is_some() {
+                        return Err(
+                            "desktop field code must be the only field in its argument".into()
+                        );
                     }
-                    Some(code @ ('f' | 'F' | 'u' | 'U' | 'i' | 'c' | 'k')) => {
-                        if field_code.is_some() || !current.is_empty() {
-                            return Err(format!(
-                                "desktop field code %{code} must be the only field in its argument"
-                            ));
-                        }
-                        field_code = Some(code);
-                        arg_started = true;
-                    }
-                    Some(code) => return Err(format!("unknown desktop field code %{code}")),
-                    None => return Err("desktop field code is missing a code".into()),
+                    current.push('%');
+                    arg_started = true;
                 }
-            }
+                Some(code @ ('f' | 'F' | 'u' | 'U' | 'i' | 'c' | 'k')) => {
+                    if field_code.is_some() || !current.is_empty() {
+                        return Err(format!(
+                            "desktop field code %{code} must be the only field in its argument"
+                        ));
+                    }
+                    field_code = Some(code);
+                    arg_started = true;
+                }
+                Some(code) => return Err(format!("unknown desktop field code %{code}")),
+                None => return Err("desktop field code is missing a code".into()),
+            },
             ch if ch.is_whitespace() && quote.is_none() => {
                 finish_exec_arg_with_context(
                     &mut args,

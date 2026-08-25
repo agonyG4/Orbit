@@ -27,11 +27,8 @@ fn expands_desktop_exec_field_codes_against_context() {
         icon: Some("accessories-text-editor".into()),
         desktop_file: "/tmp/example.desktop".into(),
     };
-    let args = parse_exec_line_with_context(
-        r#"editor %F --url %U %i %c %k %%"#,
-        &context,
-    )
-    .expect("exec line should parse");
+    let args = parse_exec_line_with_context(r#"editor %F --url %U %i %c %k %%"#, &context)
+        .expect("exec line should parse");
 
     assert_eq!(
         args,
@@ -54,16 +51,10 @@ fn expands_desktop_exec_field_codes_against_context() {
 
 #[test]
 fn rejects_unknown_or_embedded_desktop_field_codes() {
-    assert!(parse_exec_line_with_context(
-        "editor --name=%c",
-        &DesktopLaunchContext::default()
-    )
-    .is_err());
-    assert!(parse_exec_line_with_context(
-        "editor %x",
-        &DesktopLaunchContext::default()
-    )
-    .is_err());
+    assert!(
+        parse_exec_line_with_context("editor --name=%c", &DesktopLaunchContext::default()).is_err()
+    );
+    assert!(parse_exec_line_with_context("editor %x", &DesktopLaunchContext::default()).is_err());
 }
 
 #[test]
@@ -102,10 +93,16 @@ fn desktop_command_keeps_ordered_targets() {
     assert_eq!(
         command.argv,
         vec![
-            "example".to_string(), "/tmp/one".to_string(), "/tmp/two".to_string(),
-            "file:///tmp/one".to_string(), "file:///tmp/two".to_string(),
-            "https://example.test/item".to_string(), "--icon".to_string(),
-            "example".to_string(), "Example".to_string(), desktop.to_string_lossy().to_string()
+            "example".to_string(),
+            "/tmp/one".to_string(),
+            "/tmp/two".to_string(),
+            "file:///tmp/one".to_string(),
+            "file:///tmp/two".to_string(),
+            "https://example.test/item".to_string(),
+            "--icon".to_string(),
+            "example".to_string(),
+            "Example".to_string(),
+            desktop.to_string_lossy().to_string()
         ]
     );
 
@@ -272,11 +269,13 @@ fn parses_legacy_desktop_request_without_targets() {
 #[test]
 fn rejects_trailing_or_unknown_cli_arguments() {
     assert!(parse_cli_request(&vec!["--file".into(), "/tmp/a".into(), "extra".into()]).is_err());
-    assert!(parse_cli_request(&vec![
-        "--desktop".into(),
-        "org.example.Editor.desktop".into(),
-        "--unknown".into(),
-        "value".into(),
-    ])
-    .is_err());
+    assert!(
+        parse_cli_request(&vec![
+            "--desktop".into(),
+            "org.example.Editor.desktop".into(),
+            "--unknown".into(),
+            "value".into(),
+        ])
+        .is_err()
+    );
 }

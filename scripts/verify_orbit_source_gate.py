@@ -42,6 +42,9 @@ REQUIRED_PATHS = (
     "shared/qml/Astrea/Components/qmldir",
     "shared/qml/Astrea/Files/qmldir",
     "shared/qml/Astrea/I18n/qmldir",
+    "shared/qml/Astrea/I18n/test_i18n.py",
+    "shared/qml/Astrea/I18n/test_validate_i18n.py",
+    "shared/qml/Astrea/I18n/validate_i18n.py",
     "scripts/verify_explorer_clean_install.py",
 )
 FORBIDDEN_MARKERS = (

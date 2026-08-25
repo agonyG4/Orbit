@@ -128,7 +128,29 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
             "actionEnabled: menuRoot.archiveOperationAvailable && (modelData.format !== \"rar\" || menuRoot.rarAvailable)",
             menu,
         )
-        self.assertIn("if (m_archiveRunning || m_filesystemService == nullptr", facade)
+        self.assertIn("bool AppStateFacade::archiveWorkflowOccupied() const", facade)
+        self.assertIn(
+            "return m_archiveRunning || m_archivePasswordPrompt || m_archiveConflict;",
+            facade,
+        )
+        self.assertIn("if (archiveWorkflowOccupied() || m_filesystemService == nullptr", facade)
+
+    def test_dormant_archive_continuation_dialogs_follow_native_state(self):
+        main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")
+        adapter_qml = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("visible: AppState.archivePasswordPromptVisible", main_qml)
+        self.assertIn("visible: AppState.archiveConflictVisible", main_qml)
+        self.assertIn(
+            "property bool archivePasswordPromptVisible: facade.archivePasswordPromptVisible",
+            adapter_qml,
+        )
+        self.assertIn(
+            "property bool archiveConflictVisible: facade.archiveConflictVisible",
+            adapter_qml,
+        )
 
 
 class ExplorerDialogAndDragRegressionTests(unittest.TestCase):

@@ -4,7 +4,6 @@
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
-#include "controllers/app_state_facade.h"
 #include "controllers/navigation_controller.h"
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
@@ -13,6 +12,10 @@
 #include "services/filesystem_service.h"
 #include "services/recent_store.h"
 #include "services/settings_service.h"
+
+#define private public
+#include "controllers/app_state_facade.h"
+#undef private
 
 using namespace Astrea::Explorer::Native::Backend;
 using namespace Astrea::Explorer::Native::Services;
@@ -38,6 +41,11 @@ private slots:
     void rejectsConcurrentArchiveOperationsInEitherDirection();
     void acceptsArchiveAfterOwnedCompletion();
     void rejectsArchivePasswordWhileArchiveRuns();
+    void rejectsExtractionDuringPasswordContinuation();
+    void rejectsCompressionDuringPasswordContinuation();
+    void rejectsExtractionDuringConflictContinuation();
+    void rejectsCompressionDuringConflictContinuation();
+    void reportsArchiveWorkflowOccupancyForEachState();
     void rejectsArchivePasswordAfterCompletionWithStaleContext();
     void rejectsArchiveConflictWithoutExplicitConflictState();
     void rejectsArchiveConflictWhileArchiveRuns();
@@ -62,6 +70,101 @@ DirectoryEntry facadeSelectionEntry(const QString &name, const QString &path)
     entry.filePath = path;
     entry.fileUrl = QUrl::fromLocalFile(path);
     return entry;
+}
+
+struct ArchiveWorkflowSnapshot
+{
+    BackendRequestId request = 0;
+    QString path;
+    QString destination;
+    QString fileName;
+    QString status;
+    QString error;
+    QString passwordError;
+    QString destinationResult;
+    QString conflictDestination;
+    QString conflictName;
+    QString conflictPolicy;
+    bool running = false;
+    bool passwordPrompt = false;
+    bool conflict = false;
+    double progress = 0.0;
+    int percent = 0;
+    int doneCount = 0;
+    int totalCount = 0;
+};
+
+ArchiveWorkflowSnapshot archiveWorkflowSnapshot(const AppStateFacade &facade)
+{
+    ArchiveWorkflowSnapshot snapshot;
+    snapshot.request = facade.m_archiveRequest;
+    snapshot.path = facade.m_archivePath;
+    snapshot.destination = facade.m_archiveDestination;
+    snapshot.fileName = facade.m_archiveFileName;
+    snapshot.status = facade.m_archiveStatus;
+    snapshot.error = facade.m_archiveError;
+    snapshot.passwordError = facade.m_archivePasswordError;
+    snapshot.destinationResult = facade.m_archiveDestinationResult;
+    snapshot.conflictDestination = facade.m_archiveConflictDestination;
+    snapshot.conflictName = facade.m_archiveConflictName;
+    snapshot.conflictPolicy = facade.m_archiveConflictPolicy;
+    snapshot.running = facade.m_archiveRunning;
+    snapshot.passwordPrompt = facade.m_archivePasswordPrompt;
+    snapshot.conflict = facade.m_archiveConflict;
+    snapshot.progress = facade.m_archiveProgress;
+    snapshot.percent = facade.m_archivePercent;
+    snapshot.doneCount = facade.m_archiveDoneCount;
+    snapshot.totalCount = facade.m_archiveTotalCount;
+    return snapshot;
+}
+
+void verifyArchiveWorkflowSnapshot(
+    const AppStateFacade &facade,
+    const ArchiveWorkflowSnapshot &expected)
+{
+    QCOMPARE(facade.m_archiveRequest, expected.request);
+    QCOMPARE(facade.m_archivePath, expected.path);
+    QCOMPARE(facade.m_archiveDestination, expected.destination);
+    QCOMPARE(facade.m_archiveFileName, expected.fileName);
+    QCOMPARE(facade.m_archiveStatus, expected.status);
+    QCOMPARE(facade.m_archiveError, expected.error);
+    QCOMPARE(facade.m_archivePasswordError, expected.passwordError);
+    QCOMPARE(facade.m_archiveDestinationResult, expected.destinationResult);
+    QCOMPARE(facade.m_archiveConflictDestination, expected.conflictDestination);
+    QCOMPARE(facade.m_archiveConflictName, expected.conflictName);
+    QCOMPARE(facade.m_archiveConflictPolicy, expected.conflictPolicy);
+    QCOMPARE(facade.m_archiveRunning, expected.running);
+    QCOMPARE(facade.m_archivePasswordPrompt, expected.passwordPrompt);
+    QCOMPARE(facade.m_archiveConflict, expected.conflict);
+    QCOMPARE(facade.m_archiveProgress, expected.progress);
+    QCOMPARE(facade.m_archivePercent, expected.percent);
+    QCOMPARE(facade.m_archiveDoneCount, expected.doneCount);
+    QCOMPARE(facade.m_archiveTotalCount, expected.totalCount);
+}
+
+void arrangeArchiveContinuation(
+    AppStateFacade &facade,
+    bool passwordPrompt,
+    bool conflict)
+{
+    facade.m_archiveRequest = 0;
+    facade.m_archivePath = QStringLiteral("/tmp/pending.zip");
+    facade.m_archiveDestination = QStringLiteral("/tmp/pending");
+    facade.m_archiveFileName = QStringLiteral("pending.zip");
+    facade.m_archiveStatus = QStringLiteral("Aguardando decisão");
+    facade.m_archiveError = QStringLiteral("previous error");
+    facade.m_archivePasswordError = QStringLiteral("password error");
+    facade.m_archiveDestinationResult = QStringLiteral("/tmp/previous-result");
+    facade.m_archiveConflictDestination = QStringLiteral("/tmp/pending");
+    facade.m_archiveConflictName = QStringLiteral("pending");
+    facade.m_archiveConflictPolicy = QStringLiteral("keep-both");
+    facade.m_archiveRunning = false;
+    facade.m_archivePasswordPrompt = passwordPrompt;
+    facade.m_archiveConflict = conflict;
+    facade.m_archiveProgress = 0.25;
+    facade.m_archivePercent = 25;
+    facade.m_archiveDoneCount = 2;
+    facade.m_archiveTotalCount = 8;
 }
 
 void AppStateFacadeTest::exposesPersistedSettingsAndNavigationOptions()
@@ -618,6 +721,136 @@ void AppStateFacadeTest::rejectsArchivePasswordWhileArchiveRuns()
     QCOMPARE(facade.archiveExtractionPercent(), percent);
     QCOMPARE(facade.archiveExtractionDoneCount(), doneCount);
     QCOMPARE(facade.archiveExtractionTotalCount(), totalCount);
+}
+
+void AppStateFacadeTest::rejectsExtractionDuringPasswordContinuation()
+{
+    FacadeFixture fixture;
+    FilesystemService filesystem(&fixture.client);
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &filesystem);
+    arrangeArchiveContinuation(facade, true, false);
+    QSignalSpy archiveSpy(&facade, &AppStateFacade::archiveStateChanged);
+    const ArchiveWorkflowSnapshot expected = archiveWorkflowSnapshot(facade);
+
+    facade.startArchiveExtraction(QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
+
+    QCOMPARE(fixture.client.utilityRequests().size(), 0);
+    QCOMPARE(archiveSpy.count(), 0);
+    verifyArchiveWorkflowSnapshot(facade, expected);
+}
+
+void AppStateFacadeTest::rejectsCompressionDuringPasswordContinuation()
+{
+    FacadeFixture fixture;
+    FilesystemService filesystem(&fixture.client);
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &filesystem);
+    arrangeArchiveContinuation(facade, true, false);
+    QSignalSpy archiveSpy(&facade, &AppStateFacade::archiveStateChanged);
+    const ArchiveWorkflowSnapshot expected = archiveWorkflowSnapshot(facade);
+
+    facade.startFolderCompression(QStringLiteral("/tmp/replacement-folder"), QStringLiteral("zip"));
+
+    QCOMPARE(fixture.client.utilityRequests().size(), 0);
+    QCOMPARE(archiveSpy.count(), 0);
+    verifyArchiveWorkflowSnapshot(facade, expected);
+}
+
+void AppStateFacadeTest::rejectsExtractionDuringConflictContinuation()
+{
+    FacadeFixture fixture;
+    FilesystemService filesystem(&fixture.client);
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &filesystem);
+    arrangeArchiveContinuation(facade, false, true);
+    QSignalSpy archiveSpy(&facade, &AppStateFacade::archiveStateChanged);
+    const ArchiveWorkflowSnapshot expected = archiveWorkflowSnapshot(facade);
+
+    facade.startArchiveExtraction(QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
+
+    QCOMPARE(fixture.client.utilityRequests().size(), 0);
+    QCOMPARE(archiveSpy.count(), 0);
+    verifyArchiveWorkflowSnapshot(facade, expected);
+}
+
+void AppStateFacadeTest::rejectsCompressionDuringConflictContinuation()
+{
+    FacadeFixture fixture;
+    FilesystemService filesystem(&fixture.client);
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &filesystem);
+    arrangeArchiveContinuation(facade, false, true);
+    QSignalSpy archiveSpy(&facade, &AppStateFacade::archiveStateChanged);
+    const ArchiveWorkflowSnapshot expected = archiveWorkflowSnapshot(facade);
+
+    facade.startFolderCompression(QStringLiteral("/tmp/replacement-folder"), QStringLiteral("zip"));
+
+    QCOMPARE(fixture.client.utilityRequests().size(), 0);
+    QCOMPARE(archiveSpy.count(), 0);
+    verifyArchiveWorkflowSnapshot(facade, expected);
+}
+
+void AppStateFacadeTest::reportsArchiveWorkflowOccupancyForEachState()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(
+        &fixture.navigation,
+        &fixture.selection,
+        &fixture.model,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr);
+
+    QCOMPARE(facade.archiveWorkflowOccupied(), false);
+    facade.m_archiveRunning = true;
+    QCOMPARE(facade.archiveWorkflowOccupied(), true);
+    facade.m_archiveRunning = false;
+    facade.m_archivePasswordPrompt = true;
+    QCOMPARE(facade.archiveWorkflowOccupied(), true);
+    facade.m_archivePasswordPrompt = false;
+    facade.m_archiveConflict = true;
+    QCOMPARE(facade.archiveWorkflowOccupied(), true);
+    facade.m_archiveRunning = true;
+    facade.m_archivePasswordPrompt = true;
+    QCOMPARE(facade.archiveWorkflowOccupied(), true);
 }
 
 void AppStateFacadeTest::rejectsArchivePasswordAfterCompletionWithStaleContext()

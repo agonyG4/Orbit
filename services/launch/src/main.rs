@@ -1,7 +1,6 @@
 use astrea_launch::{
-    config_path, default_config_text, ensure_default_config, history_path,
-    launchd_socket_path, load_config, parse_cli_request, read_history, run_launch_via_daemon,
-    serve_launchd,
+    config_path, default_config_text, ensure_default_config, history_path, launchd_socket_path,
+    load_config, parse_cli_request, read_history, run_launch_via_daemon, serve_launchd,
 };
 
 fn main() {
