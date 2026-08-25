@@ -30,6 +30,7 @@ private slots:
     void persistsUnifiedFavoriteOrder();
     void exposesTransactionalFavoriteModel();
     void exposesCoreQmlContract();
+    void locksPublicQmlContract();
     void exposesResolverAndDialogCompatibility();
     void propagatesNavigationAndBackendFailure();
     void preservesSelectionAcrossModelRefresh();
@@ -359,6 +360,280 @@ void AppStateFacadeTest::exposesCoreQmlContract()
     QCOMPARE(facade.fileModel(), &fixture.model);
     QVERIFY(facade.tabs().isEmpty());
     QVERIFY(facade.breadcrumbParts().isEmpty());
+}
+
+void AppStateFacadeTest::locksPublicQmlContract()
+{
+    struct PropertyContract
+    {
+        const char *name;
+        const char *type;
+        bool writable;
+    };
+
+    const QList<PropertyContract> properties {
+        {"fileModel", "QAbstractItemModel*", false},
+        {"sidebarFavoritesModel", "QAbstractItemModel*", false},
+        {"homePath", "QString", false},
+        {"runtimeRoot", "QString", false},
+        {"backendPath", "QString", false},
+        {"helperPath", "QString", false},
+        {"wallpaperManagerPath", "QString", false},
+        {"astreaLaunch", "QString", false},
+        {"windowsRun", "QString", false},
+        {"networkRootPath", "QString", false},
+        {"trashFilesPath", "QString", false},
+        {"trashInfoPath", "QString", false},
+        {"trashVirtualPath", "QString", false},
+        {"recentVirtualPath", "QString", false},
+        {"effectiveIconTheme", "QString", false},
+        {"iconThemeRevision", "qulonglong", false},
+        {"isPortalDialog", "bool", false},
+        {"currentPath", "QString", false},
+        {"history", "QStringList", false},
+        {"historyIdx", "int", false},
+        {"tabs", "QVariantList", false},
+        {"breadcrumbParts", "QVariantList", false},
+        {"activeTabIndex", "int", false},
+        {"loadingDir", "bool", false},
+        {"loadError", "QString", false},
+        {"remoteDirectoryActive", "bool", false},
+        {"searchActive", "bool", false},
+        {"searchVisible", "bool", false},
+        {"searchQuery", "QString", true},
+        {"selectedFile", "QString", true},
+        {"selectedFiles", "QStringList", false},
+        {"selectedPaths", "QStringList", false},
+        {"lastSelectedIndex", "int", false},
+        {"fileModelRevision", "int", false},
+        {"fileModelFilling", "bool", false},
+        {"showPreview", "bool", true},
+        {"previewsEnabled", "bool", true},
+        {"viewMode", "QString", true},
+        {"sortField", "QString", true},
+        {"sortAsc", "bool", true},
+        {"showHidden", "bool", true},
+        {"foldersFirst", "bool", true},
+        {"groupingEnabled", "bool", true},
+        {"zoomLevel", "double", true},
+        {"autoMountDeviceIdsJson", "QString", true},
+        {"sidebarFavoritesJson", "QString", true},
+        {"sidebarHiddenDefaultFavoritesJson", "QString", true},
+        {"sidebarFavorites", "QVariantList", false},
+        {"sidebarHiddenDefaultFavorites", "QVariantList", false},
+        {"sidebarFavoritesRevision", "int", false},
+        {"defaultSidebarFavoritePaths", "QStringList", false},
+        {"inTrashView", "bool", false},
+        {"dialogActive", "bool", true},
+        {"dialogMode", "QString", true},
+        {"dialogFilePatterns", "QStringList", true},
+        {"clipboardFiles", "QStringList", false},
+        {"clipboardMode", "QString", false},
+        {"fileOperationRunning", "bool", false},
+        {"fileOperationProgress", "double", false},
+        {"fileOperationPercent", "int", false},
+        {"fileOperationFileName", "QString", false},
+        {"fileOperationStatus", "QString", false},
+        {"fileOperationError", "QString", false},
+        {"fileOperationDestination", "QString", false},
+        {"fileOperationDoneCount", "int", false},
+        {"fileOperationTotalCount", "int", false},
+        {"fileOperationMode", "QString", false},
+        {"fileOperationState", "QString", false},
+        {"fileOperationItems", "QVariantList", false},
+        {"pasteConflictVisible", "bool", false},
+        {"pasteConflictItems", "QVariantList", false},
+        {"pendingPasteRename", "QString", true},
+        {"deviceModel", "QVariantList", false},
+        {"deviceError", "QString", false},
+        {"deviceOperationPath", "QString", false},
+        {"deviceOperationType", "QString", false},
+        {"deviceOperationTargetMountPath", "QString", false},
+        {"deviceOperationOpenAfterMount", "bool", false},
+        {"lastUnmountedMountPath", "QString", false},
+        {"archiveExtractionRunning", "bool", false},
+        {"archiveExtractionProgress", "double", false},
+        {"archiveExtractionPercent", "int", false},
+        {"archiveExtractionFileName", "QString", false},
+        {"archiveExtractionStatus", "QString", false},
+        {"archiveExtractionError", "QString", false},
+        {"archiveExtractionDestination", "QString", false},
+        {"archiveExtractionDoneCount", "int", false},
+        {"archiveExtractionTotalCount", "int", false},
+        {"archiveExtractionRemainingText", "QString", false},
+        {"archivePasswordPromptVisible", "bool", false},
+        {"archivePasswordError", "QString", false},
+        {"archiveConflictVisible", "bool", false},
+        {"archiveConflictDestination", "QString", false},
+        {"archiveConflictName", "QString", false},
+        {"appImageInstallRunning", "bool", false},
+        {"wallpaperApplyRunning", "bool", false},
+    };
+
+    const QMetaObject &metaObject = AppStateFacade::staticMetaObject;
+    QCOMPARE(metaObject.propertyCount() - metaObject.propertyOffset(), properties.size());
+    for (const PropertyContract &expected : properties) {
+        const int index = metaObject.indexOfProperty(expected.name);
+        QVERIFY2(index >= 0, qPrintable(QStringLiteral("missing property %1").arg(expected.name)));
+        const QMetaProperty property = metaObject.property(index);
+        QCOMPARE(property.typeName(), expected.type);
+        QCOMPARE(property.isWritable(), expected.writable);
+    }
+
+    struct MethodContract
+    {
+        const char *signature;
+        const char *returnType;
+    };
+    const QList<MethodContract> methods {
+        {"navigateTo(QString)", "qulonglong"},
+        {"submitSearch(QString,QString)", "qulonglong"},
+        {"startSearch()", "void"},
+        {"hideSearch()", "void"},
+        {"clearSearch()", "void"},
+        {"goBack()", "void"},
+        {"goForward()", "void"},
+        {"createTab(QString)", "void"},
+        {"closeTab(int)", "void"},
+        {"switchTab(int)", "void"},
+        {"closeTabById(int)", "void"},
+        {"switchTabById(int)", "void"},
+        {"tabIndexById(int)", "int"},
+        {"moveTab(int,int)", "void"},
+        {"refreshCurrentFolder()", "qulonglong"},
+        {"loadRecent()", "void"},
+        {"recordRecentAccess(QString,bool,QString)", "void"},
+        {"createFolder(QString,QString)", "qulonglong"},
+        {"renamePath(QString,QString)", "qulonglong"},
+        {"requestDirectorySuggestions(QString,QString)", "qulonglong"},
+        {"checkExecutable(QString)", "qulonglong"},
+        {"requestProperties(QString)", "qulonglong"},
+        {"createDesktopShortcut(QString)", "qulonglong"},
+        {"requestNetworkMountProbe(QString)", "qulonglong"},
+        {"connectToNetwork(QString)", "qulonglong"},
+        {"refreshDevices()", "void"},
+        {"ensureAutoMountDevices()", "void"},
+        {"replaceFileModel(QVariantList)", "bool"},
+        {"updateFileModelMetadata(QVariantList)", "int"},
+        {"removePathsFromFileModel(QStringList)", "int"},
+        {"increaseZoom()", "void"},
+        {"decreaseZoom()", "void"},
+        {"resetZoom()", "void"},
+        {"setZoom(double)", "void"},
+        {"selectedItem()", "QVariant"},
+        {"fileUrlForPath(QString)", "QString"},
+        {"joinPath(QString,QString)", "QString"},
+        {"selectedPathsInCurrentFolder()", "QStringList"},
+        {"selectedUriListInCurrentFolder()", "QString"},
+        {"fileMatchesDialogFilter(QString,bool)", "bool"},
+        {"dropFilePaths(QStringList,QString,QString)", "void"},
+        {"dropFiles(QVariantList,QString,QString)", "void"},
+        {"copySelected()", "void"},
+        {"cutSelected()", "void"},
+        {"pasteFiles()", "qulonglong"},
+        {"isCutPending(QString)", "bool"},
+        {"isCutPathPending(QString)", "bool"},
+        {"resolvePasteConflict(QString)", "void"},
+        {"renamePasteConflict(QString)", "void"},
+        {"cancelPasteConflict()", "void"},
+        {"deleteSelected()", "void"},
+        {"restoreSelected()", "void"},
+        {"emptyTrash()", "void"},
+        {"startArchiveExtraction(QString,QString)", "void"},
+        {"submitArchivePassword(QString)", "void"},
+        {"cancelArchivePassword()", "void"},
+        {"submitArchiveConflict(QString)", "void"},
+        {"cancelArchiveConflict()", "void"},
+        {"startFolderCompression(QString,QString)", "void"},
+        {"installAppImage(QString)", "void"},
+        {"setAsWallpaper(QString)", "void"},
+        {"openWithApplications(QString)", "QVariantList"},
+        {"launchOpenWith(QString,QString)", "bool"},
+        {"setDefaultOpenWith(QString,QString)", "bool"},
+        {"openItem(QString,bool,QString)", "void"},
+        {"openFile(QString)", "void"},
+        {"refreshPreviewMetadata()", "void"},
+        {"requestThumbnailWarm(QString,int,int)", "void"},
+        {"themedIconSource(QString,int,QString)", "QString"},
+        {"sidebarIconSource(QString,int)", "QString"},
+        {"fileIconName(QString,bool,bool)", "QString"},
+        {"fileIconSource(QString,bool,bool,int,QString)", "QString"},
+        {"writePortalResult(QString)", "bool"},
+        {"requestMountDevice(QString,bool,bool)", "qulonglong"},
+        {"requestUnmountDevice(QString,QString)", "qulonglong"},
+        {"requestRemountDevice(QString,QString,bool)", "qulonglong"},
+        {"toggleDeviceAutoMount(QString,bool)", "void"},
+        {"isRecentPath(QString)", "bool"},
+        {"isTrashPath(QString)", "bool"},
+        {"canPinSidebarFavorite(QString)", "bool"},
+        {"isSidebarFavorite(QString)", "bool"},
+        {"visibleDefaultSidebarFavorites(QVariantList)", "QVariantList"},
+        {"pinSidebarFavorite(QString,QString,QString)", "void"},
+        {"removeSidebarFavorite(QString)", "void"},
+        {"moveSidebarFavorite(QString,int)", "void"},
+        {"beginSidebarFavoriteDrag(QString)", "bool"},
+        {"previewSidebarFavoriteMove(QString,int)", "bool"},
+        {"commitSidebarFavoriteDrag()", "bool"},
+        {"cancelSidebarFavoriteDrag()", "void"},
+        {"announceContextMenuOpening(QString)", "void"},
+        {"isSelected(QString)", "bool"},
+        {"isPathSelected(QString)", "bool"},
+        {"clearSelection()", "void"},
+        {"selectAll()", "void"},
+        {"selectByName(QString)", "void"},
+        {"selectByPath(QString)", "void"},
+        {"prepareSelectionForDrag(QString,int)", "void"},
+        {"handleSelection(QString,int,bool,bool,bool)", "void"},
+    };
+
+    for (const MethodContract &expected : methods) {
+        const int index = metaObject.indexOfMethod(expected.signature);
+        QVERIFY2(index >= 0, qPrintable(QStringLiteral("missing method %1").arg(expected.signature)));
+        QCOMPARE(metaObject.method(index).returnMetaType().name(), expected.returnType);
+    }
+
+    for (const char *signalSignature : {
+             "openWithReady(QString,QVariantList)",
+             "currentPathChanged()",
+             "historyChanged()",
+             "tabsChanged()",
+             "activeTabIndexChanged()",
+             "loadingDirChanged()",
+             "loadErrorChanged()",
+             "remoteDirectoryActiveChanged()",
+             "searchStateChanged()",
+             "selectedFileChanged()",
+             "selectedFilesChanged()",
+             "selectedPathsChanged()",
+             "lastSelectedIndexChanged()",
+             "fileModelRevisionChanged()",
+             "showPreviewChanged()",
+             "viewModeChanged()",
+             "sortFieldChanged()",
+             "sortAscChanged()",
+             "showHiddenChanged()",
+             "foldersFirstChanged()",
+             "groupingEnabledChanged()",
+             "zoomLevelChanged()",
+             "autoMountDeviceIdsJsonChanged()",
+             "sidebarFavoritesJsonChanged()",
+             "sidebarHiddenDefaultFavoritesJsonChanged()",
+             "sidebarFavoritesChanged()",
+             "dialogStateChanged()",
+             "contextMenuOpening(QString)",
+             "clipboardStateChanged()",
+             "fileOperationStateChanged()",
+             "pasteConflictStateChanged()",
+             "deviceStateChanged()",
+             "archiveStateChanged()",
+             "wallpaperStateChanged()",
+             "iconThemeChanged()",
+             "filesystemActionFinished(quint64,QString,bool,QVariantMap,QString)",
+         }) {
+        QVERIFY2(
+            metaObject.indexOfSignal(signalSignature) >= 0,
+            qPrintable(QStringLiteral("missing signal %1").arg(signalSignature)));
+    }
 }
 
 void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
