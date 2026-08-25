@@ -25,19 +25,19 @@ const QStringList kRequiredFiles {
     QStringLiteral("Apps/Explorer/components/common/NavButton.qml"),
     QStringLiteral("Apps/Explorer/components/common/FileContextMenu.qml"),
     QStringLiteral("Apps/Explorer/PortalDialog.qml"),
-    QStringLiteral("Apps/Explorer/AstreaFiles/qmldir"),
-    QStringLiteral("Apps/Explorer/AstreaFiles/DragDropSupport.js"),
-    QStringLiteral("Apps/Explorer/AstreaFiles/ui/OperationProgressCard.qml"),
-    QStringLiteral("Apps/Explorer/AstreaI18n/qmldir"),
-    QStringLiteral("Apps/Explorer/AstreaI18n/I18n.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/qmldir"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Theme.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/qmldir"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Theme.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/State.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Tokens.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Shell.qml"),
-    QStringLiteral("Apps/Explorer/AstreaComponents/AppIcon.qml"),
+    QStringLiteral("Astrea/Components/qmldir"),
+    QStringLiteral("Astrea/Components/theme/Theme.qml"),
+    QStringLiteral("Astrea/Components/theme/Borealis/qmldir"),
+    QStringLiteral("Astrea/Components/theme/Borealis/Theme.qml"),
+    QStringLiteral("Astrea/Components/theme/Borealis/State.qml"),
+    QStringLiteral("Astrea/Components/theme/Borealis/Tokens.qml"),
+    QStringLiteral("Astrea/Components/theme/Borealis/Shell.qml"),
+    QStringLiteral("Astrea/Components/AppIcon.qml"),
+    QStringLiteral("Astrea/Files/qmldir"),
+    QStringLiteral("Astrea/Files/DragDropSupport.js"),
+    QStringLiteral("Astrea/Files/ui/OperationProgressCard.qml"),
+    QStringLiteral("Astrea/I18n/qmldir"),
+    QStringLiteral("Astrea/I18n/I18n.qml"),
     QStringLiteral("Core/components/Theme.qml"),
     QStringLiteral("Core/components/qmldir"),
     QStringLiteral("Core/components/theme/Theme.qml"),
@@ -57,9 +57,10 @@ const QStringList kRequiredDirectories {
     QStringLiteral("Apps/Explorer/components/layout"),
     QStringLiteral("Apps/Explorer/components/views"),
     QStringLiteral("Apps/Explorer/state"),
-    QStringLiteral("Apps/Explorer/AstreaComponents"),
-    QStringLiteral("Apps/Explorer/AstreaFiles"),
-    QStringLiteral("Apps/Explorer/AstreaI18n"),
+    QStringLiteral("Astrea"),
+    QStringLiteral("Astrea/Components"),
+    QStringLiteral("Astrea/Files"),
+    QStringLiteral("Astrea/I18n"),
     QStringLiteral("Core"),
     QStringLiteral("Core/components"),
     QStringLiteral("Features"),
@@ -231,6 +232,19 @@ ExplorerRuntimePaths ExplorerRuntimeResolver::resolve(
         return prefixInstalled;
     }
 
+    const QString developmentRoot = environment.value(
+        QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"));
+    if (!developmentRoot.trimmed().isEmpty()) {
+        ExplorerRuntimePaths development = fromCandidate(
+            developmentRoot,
+            QStringLiteral("configured development Astrea root"),
+            &diagnostics);
+        if (development.valid) {
+            development.diagnostics = std::move(diagnostics);
+            return development;
+        }
+    }
+
     const QString installedRoot = QDir(homeDirectory).filePath(QStringLiteral(".local/share/Astrea"));
     ExplorerRuntimePaths installed = fromCandidate(
         installedRoot,
@@ -239,24 +253,6 @@ ExplorerRuntimePaths ExplorerRuntimeResolver::resolve(
     if (installed.valid) {
         installed.diagnostics = std::move(diagnostics);
         return installed;
-    }
-
-    QString developmentCandidate = absoluteCleanPath(executableDirectory);
-    while (!developmentCandidate.isEmpty()) {
-        ExplorerRuntimePaths development = fromCandidate(
-            developmentCandidate,
-            QStringLiteral("development candidate"),
-            &diagnostics);
-        if (development.valid) {
-            development.diagnostics = std::move(diagnostics);
-            return development;
-        }
-
-        const QString parent = QDir::cleanPath(QDir(developmentCandidate).filePath(QStringLiteral("..")));
-        if (parent == developmentCandidate) {
-            break;
-        }
-        developmentCandidate = parent;
     }
 
     ExplorerRuntimePaths result;

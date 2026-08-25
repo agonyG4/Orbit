@@ -4,8 +4,8 @@ import QtQuick.Layouts 1.15
 import "components/layout" as LayoutComponents
 import "components/views" as ViewComponents
 import "components/common" as CommonComponents
-import "AstreaFiles" as AstreaFiles
-import "AstreaI18n" as AstreaI18n
+import Astrea.Files 1.0 as AstreaFiles
+import Astrea.I18n 1.0 as AstreaI18n
 
 ApplicationWindow {
     id: window

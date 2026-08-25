@@ -22,9 +22,9 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
     QVERIFY(runtime.mkpath(QStringLiteral("Core/components")));
     QVERIFY(runtime.mkpath(QStringLiteral("Features/Files")));
     QVERIFY(runtime.mkpath(QStringLiteral("System/i18n")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaComponents")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaFiles")));
-    QVERIFY(runtime.mkpath(QStringLiteral("Apps/Explorer/AstreaI18n")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Astrea/Components")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Astrea/Files")));
+    QVERIFY(runtime.mkpath(QStringLiteral("Astrea/I18n")));
 
     const QStringList requiredFiles {
         QStringLiteral("Apps/Explorer/Main.qml"),
@@ -42,20 +42,20 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
         QStringLiteral("Apps/Explorer/components/views/FileIconView.qml"),
         QStringLiteral("Apps/Explorer/components/common/NavButton.qml"),
         QStringLiteral("Apps/Explorer/components/common/FileContextMenu.qml"),
-        QStringLiteral("Apps/Explorer/AstreaFiles/qmldir"),
-        QStringLiteral("Apps/Explorer/AstreaFiles/DragDropSupport.js"),
-        QStringLiteral("Apps/Explorer/AstreaFiles/ui/OperationProgressCard.qml"),
-        QStringLiteral("Apps/Explorer/AstreaI18n/qmldir"),
-        QStringLiteral("Apps/Explorer/AstreaI18n/I18n.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/qmldir"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Theme.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/qmldir"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Theme.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/State.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Tokens.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/theme/Borealis/Shell.qml"),
+        QStringLiteral("Astrea/Files/qmldir"),
+        QStringLiteral("Astrea/Files/DragDropSupport.js"),
+        QStringLiteral("Astrea/Files/ui/OperationProgressCard.qml"),
+        QStringLiteral("Astrea/I18n/qmldir"),
+        QStringLiteral("Astrea/I18n/I18n.qml"),
+        QStringLiteral("Astrea/Components/qmldir"),
+        QStringLiteral("Astrea/Components/theme/Theme.qml"),
+        QStringLiteral("Astrea/Components/theme/Borealis/qmldir"),
+        QStringLiteral("Astrea/Components/theme/Borealis/Theme.qml"),
+        QStringLiteral("Astrea/Components/theme/Borealis/State.qml"),
+        QStringLiteral("Astrea/Components/theme/Borealis/Tokens.qml"),
+        QStringLiteral("Astrea/Components/theme/Borealis/Shell.qml"),
         QStringLiteral("Apps/Explorer/PortalDialog.qml"),
-        QStringLiteral("Apps/Explorer/AstreaComponents/AppIcon.qml"),
+        QStringLiteral("Astrea/Components/AppIcon.qml"),
         QStringLiteral("Core/components/Theme.qml"),
         QStringLiteral("Core/components/qmldir"),
         QStringLiteral("Core/components/theme/Theme.qml"),
@@ -100,6 +100,7 @@ QProcessEnvironment environmentWithoutRoot()
 {
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     environment.remove(QStringLiteral("ASTREA_ROOT"));
+    environment.remove(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"));
     return environment;
 }
 
@@ -115,8 +116,8 @@ private slots:
     void invalidExplicitRootIsRejectedWithoutFallback();
     void invalidInstalledRootFallsThroughToDevelopment();
     void installedPrefixRootBeatsUserAndDevelopment();
-    void validInstalledRootBeatsDevelopment();
-    void developmentRootIsFoundFromExecutableAncestors();
+    void configuredDevelopmentRootBeatsUserRoot();
+    void configuredDevelopmentRootIsUsed();
     void optionalRuntimePathsStayUnderResolvedRoot();
     void resourceAndExecutableCapabilitiesAreSeparate();
     void missingBackendDoesNotReportNormalRuntimeReady();
@@ -190,10 +191,12 @@ void RuntimePathsTest::invalidInstalledRootFallsThroughToDevelopment()
     QFile incomplete(fixture.filePath(QStringLiteral("home/.local/share/Astrea/README")));
     QVERIFY(incomplete.open(QIODevice::WriteOnly));
 
+    QProcessEnvironment environment = environmentWithoutRoot();
+    environment.insert(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"), developmentRoot);
     const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
         fixture.filePath(QStringLiteral("checkout/runtime/build/native")),
         fixture.filePath(QStringLiteral("home")),
-        environmentWithoutRoot());
+        environment);
 
     QVERIFY(result.valid);
     QCOMPARE(result.root, QDir::cleanPath(developmentRoot));
@@ -221,7 +224,7 @@ void RuntimePathsTest::installedPrefixRootBeatsUserAndDevelopment()
     QCOMPARE(result.root, QDir::cleanPath(prefixRoot));
 }
 
-void RuntimePathsTest::validInstalledRootBeatsDevelopment()
+void RuntimePathsTest::configuredDevelopmentRootBeatsUserRoot()
 {
     QTemporaryDir fixture;
     QVERIFY(fixture.isValid());
@@ -230,26 +233,30 @@ void RuntimePathsTest::validInstalledRootBeatsDevelopment()
     createRuntimeRoot(installedRoot);
     createRuntimeRoot(developmentRoot);
 
+    QProcessEnvironment environment = environmentWithoutRoot();
+    environment.insert(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"), developmentRoot);
     const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
         fixture.filePath(QStringLiteral("checkout/runtime/build/native")),
         fixture.filePath(QStringLiteral("home")),
-        environmentWithoutRoot());
+        environment);
 
     QVERIFY(result.valid);
-    QCOMPARE(result.root, QDir::cleanPath(installedRoot));
+    QCOMPARE(result.root, QDir::cleanPath(developmentRoot));
 }
 
-void RuntimePathsTest::developmentRootIsFoundFromExecutableAncestors()
+void RuntimePathsTest::configuredDevelopmentRootIsUsed()
 {
     QTemporaryDir fixture;
     QVERIFY(fixture.isValid());
     const QString developmentRoot = fixture.filePath(QStringLiteral("checkout/runtime"));
     createRuntimeRoot(developmentRoot);
 
+    QProcessEnvironment environment = environmentWithoutRoot();
+    environment.insert(QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"), developmentRoot);
     const ExplorerRuntimePaths result = ExplorerRuntimeResolver::resolve(
         fixture.filePath(QStringLiteral("checkout/runtime/src/Apps/Explorer/native/build")),
         fixture.filePath(QStringLiteral("home-without-installed-root")),
-        environmentWithoutRoot());
+        environment);
 
     QVERIFY(result.valid);
     QCOMPARE(result.root, QDir::cleanPath(developmentRoot));

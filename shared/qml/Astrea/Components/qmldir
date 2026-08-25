@@ -1,4 +1,4 @@
-module components
+module Astrea.Components
 singleton Theme 1.0 theme/Theme.qml
 NavItem 1.0 NavItem.qml
 Button 1.0 Button.qml

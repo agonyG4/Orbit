@@ -2,7 +2,10 @@ import unittest
 from pathlib import Path
 
 
-APP_ROOT = Path(__file__).resolve().parents[1]
+EXPLORER_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
+APP_ROOT = EXPLORER_ROOT / "qml"
+FILES_MODULE_ROOT = REPO_ROOT / "shared" / "qml" / "Astrea" / "Files"
 
 
 class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
@@ -66,7 +69,7 @@ class ExplorerRecentPersistenceTests(unittest.TestCase):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
         native_source = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in (APP_ROOT / "native" / "src").rglob("*.cpp")
+            for path in (EXPLORER_ROOT / "src").rglob("*.cpp")
         )
 
         old_marker = "ASTREA_EXPLORER_" + "NATIVE_RUNTIME"
@@ -114,7 +117,7 @@ class ExplorerRecentPersistenceTests(unittest.TestCase):
 class ExplorerArchiveAdmissionTests(unittest.TestCase):
     def test_archive_actions_are_disabled_while_native_archive_is_running(self):
         menu = (APP_ROOT / "components/common/FileContextMenu.qml").read_text(encoding="utf-8")
-        facade = (APP_ROOT / "native/src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
+        facade = (EXPLORER_ROOT / "src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
 
         self.assertIn("readonly property bool archiveOperationAvailable", menu)
         self.assertIn("!AppState.archiveExtractionRunning", menu)
@@ -140,7 +143,7 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
                 self.assertIn("ViewShared.focusFileSurface(root)", source)
 
     def test_drag_drop_detects_internal_multi_selection_without_drop_source(self):
-        drag_support = (APP_ROOT / "AstreaFiles" / "DragDropSupport.js").read_text(encoding="utf-8")
+        drag_support = (FILES_MODULE_ROOT / "DragDropSupport.js").read_text(encoding="utf-8")
         icon_view = (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8")
         list_view = (APP_ROOT / "components" / "views" / "FileListView.qml").read_text(encoding="utf-8")
 
@@ -150,14 +153,14 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
         self.assertIn("handleDroppedUrls(AppState, drop, destinationPath)", list_view)
 
     def test_drag_drop_uses_normalized_paths_for_multi_file_moves(self):
-        drag_support = (APP_ROOT / "AstreaFiles" / "DragDropSupport.js").read_text(encoding="utf-8")
+        drag_support = (FILES_MODULE_ROOT / "DragDropSupport.js").read_text(encoding="utf-8")
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
         file_ops_qml = (APP_ROOT / "state" / "FileOperationsState.qml").read_text(encoding="utf-8")
 
         self.assertIn('dataAsString(drop, "text/uri-list")', drag_support)
         self.assertIn('dataAsString(drop, "text/plain")', drag_support)
         self.assertIn("appState.dropFilePaths(", drag_support)
-        self.assertIn("DragDropSupport.dropPaths(drop)", (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8"))
+        self.assertIn("AstreaFiles.DragDropSupport.dropPaths(drop)", (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8"))
         self.assertIn("function dropFilePaths(paths, destinationPath, mode)", app_state)
         self.assertIn("function dropFilePaths(paths, destination, mode)", file_ops_qml)
         self.assertIn("pendingPasteRename", file_ops_qml)
@@ -167,7 +170,7 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
         file_dialog = (APP_ROOT / "FileDialog.qml").read_text(encoding="utf-8")
         portal_dialog = (APP_ROOT / "PortalDialog.qml").read_text(encoding="utf-8")
 
-        self.assertIn('import "AstreaComponents" as UI', file_dialog)
+        self.assertIn("import Astrea.Components 1.0 as UI", file_dialog)
         self.assertIn("property bool allowMultiple", file_dialog)
         self.assertIn("signal filesChosen(var files)", file_dialog)
         self.assertIn("UI.Button", file_dialog)
@@ -253,7 +256,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
         adapter = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(encoding="utf-8")
-        icon_service = (APP_ROOT / "native" / "src" / "services" / "icon_theme_service.cpp").read_text(encoding="utf-8")
+        icon_service = (EXPLORER_ROOT / "src" / "services" / "icon_theme_service.cpp").read_text(encoding="utf-8")
 
         self.assertIn("bridge.fileIconSource", preview_state)
         self.assertIn("iconThemeRevision", app_state)
@@ -269,7 +272,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         self.assertIn("symbolicCandidatesForNames", icon_service)
         self.assertNotIn("mode=symbolic", icon_service)
         self.assertNotIn("symbolicImage", icon_service)
-        provider = (APP_ROOT / "native/src/runtime/astrea_icon_image_provider.cpp").read_text(encoding="utf-8")
+        provider = (EXPLORER_ROOT / "src/runtime/astrea_icon_image_provider.cpp").read_text(encoding="utf-8")
         self.assertNotIn("IconRenderMode::Symbolic", provider)
         for forbidden in [
             "MacTahoe-dark",
@@ -284,7 +287,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
         preview_state = (APP_ROOT / "state/PreviewState.qml").read_text(encoding="utf-8")
         adapter = (APP_ROOT / "compatibility/NativeAppStateAdapter.qml").read_text(encoding="utf-8")
-        facade = (APP_ROOT / "native/src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
+        facade = (EXPLORER_ROOT / "src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
 
         self.assertIn('icon: "user-home"', sidebar)
         self.assertIn('icon: "computer"', sidebar)

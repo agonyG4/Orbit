@@ -5,7 +5,7 @@ This directory is the public Astrea QML component module.
 ## Contract
 
 Root-level QML files are the compatibility API used by apps through
-`AstreaComponents`.
+`Astrea.Components`.
 
 Most root files are small shims that forward to categorized implementations:
 

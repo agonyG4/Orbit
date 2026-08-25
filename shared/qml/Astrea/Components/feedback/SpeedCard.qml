@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import ".." as Components
-import "../AstreaI18n" as AstreaI18n
+import Astrea.I18n 1.0 as AstreaI18n
 
 Rectangle {
     id: root

@@ -2,8 +2,8 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import "../.."
 import "." as Common
-import "../../AstreaFiles" as AstreaFiles
-import "../../AstreaI18n" as AstreaI18n
+import Astrea.Files 1.0 as AstreaFiles
+import Astrea.I18n 1.0 as AstreaI18n
 
 Item {
     id: menuRoot

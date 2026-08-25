@@ -128,7 +128,14 @@ int ExplorerApplication::run(int argc, char **argv)
     QCoreApplication::setOrganizationName(QString::fromLatin1(kOrganizationName));
     QCoreApplication::setOrganizationDomain(QString::fromLatin1(kOrganizationDomain));
 
-    const QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+#ifdef ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT
+    if (!environment.contains(QStringLiteral("ASTREA_ROOT"))) {
+        environment.insert(
+            QStringLiteral("ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT"),
+            QStringLiteral(ASTREA_ORBIT_DEVELOPMENT_RUNTIME_ROOT));
+    }
+#endif
     const bool useBootstrap = application.arguments().contains(
         QString::fromLatin1(kBootstrapArgument));
     const bool usePortal = application.arguments().contains(QStringLiteral("--portal"));

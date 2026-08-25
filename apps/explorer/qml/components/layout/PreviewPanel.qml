@@ -1,7 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls.impl 2.15
 import "../.."
-import "../../AstreaI18n" as AstreaI18n
+import Astrea.I18n 1.0 as AstreaI18n
 
 Rectangle {
     id: root

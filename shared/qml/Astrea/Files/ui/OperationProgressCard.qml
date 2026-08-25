@@ -1,3 +1,3 @@
-import "../Core/components/feedback" as Feedback
+import Astrea.Components 1.0 as Feedback
 
 Feedback.ProgressCard {}

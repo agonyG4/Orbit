@@ -1,7 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
-import "../../AstreaFiles/DragDropSupport.js" as DragDropSupport
+import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
 import "ViewShared.js" as ViewShared
@@ -109,12 +109,12 @@ Item {
     }
 
     function handleDroppedUrls(drop, destinationPath) {
-        var paths = DragDropSupport.dropPaths(drop)
+        var paths = AstreaFiles.DragDropSupport.dropPaths(drop)
         if (!paths || paths.length === 0)
             return false
 
         const targetPath = destinationPath || AppState.currentPath
-        const dropMode = DragDropSupport.dropModeFor(drop, AppState)
+        const dropMode = AstreaFiles.DragDropSupport.dropModeFor(drop, AppState)
 
         drop.accepted = true
         Qt.callLater(function() {
@@ -598,7 +598,7 @@ Item {
                         readonly property int    previewRequestSize: grid.previewReqSize
                         readonly property int    previewDisplaySize: Math.min(grid.iconSize, Math.round(grid.iconSize * grid.previewFillRatios[AppState.thumbnailLevel()]))
                         readonly property int    dragPreviewSize: Math.max(48, Math.round(grid.iconSize * 0.78))
-                        readonly property url    dragImageUrl: DragDropSupport.dragImageUrl(
+                        readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
                                                     AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName))
 
