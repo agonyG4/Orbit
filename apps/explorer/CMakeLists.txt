@@ -389,6 +389,8 @@ add_library(astrea_explorer_native_navigation STATIC
     src/controllers/preview_controller.cpp
     src/controllers/device_controller.h
     src/controllers/device_controller.cpp
+    src/controllers/explorer_settings_controller.h
+    src/controllers/explorer_settings_controller.cpp
     src/controllers/app_state_facade.h
     src/controllers/app_state_facade.cpp
 )
@@ -502,6 +504,22 @@ target_link_libraries(tst_navigation_controller PRIVATE
 )
 
 add_test(NAME navigation_controller COMMAND tst_navigation_controller)
+
+qt_add_executable(tst_explorer_settings_controller
+    tests/cpp/tst_explorer_settings_controller.cpp
+)
+
+target_include_directories(tst_explorer_settings_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_explorer_settings_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME explorer_settings_controller COMMAND tst_explorer_settings_controller)
 
 qt_add_executable(tst_selection_controller
     tests/cpp/tst_selection_controller.cpp
