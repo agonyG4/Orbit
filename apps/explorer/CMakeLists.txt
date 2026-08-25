@@ -391,6 +391,8 @@ add_library(astrea_explorer_native_navigation STATIC
     src/controllers/device_controller.cpp
     src/controllers/explorer_settings_controller.h
     src/controllers/explorer_settings_controller.cpp
+    src/controllers/sidebar_favorites_controller.h
+    src/controllers/sidebar_favorites_controller.cpp
     src/controllers/app_state_facade.h
     src/controllers/app_state_facade.cpp
 )
@@ -520,6 +522,22 @@ target_link_libraries(tst_explorer_settings_controller PRIVATE
 )
 
 add_test(NAME explorer_settings_controller COMMAND tst_explorer_settings_controller)
+
+qt_add_executable(tst_sidebar_favorites_controller
+    tests/cpp/tst_sidebar_favorites_controller.cpp
+)
+
+target_include_directories(tst_sidebar_favorites_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_sidebar_favorites_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_navigation
+)
+
+add_test(NAME sidebar_favorites_controller COMMAND tst_sidebar_favorites_controller)
 
 qt_add_executable(tst_selection_controller
     tests/cpp/tst_selection_controller.cpp
