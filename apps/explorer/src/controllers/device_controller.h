@@ -56,6 +56,7 @@ public:
 
 public slots:
     void setAutoMount(const QString &deviceId, bool enabled);
+    void setAutoMountDeviceIdsJson(const QString &json);
 
 signals:
     void devicesChanged();

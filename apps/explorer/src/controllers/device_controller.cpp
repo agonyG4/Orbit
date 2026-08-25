@@ -163,6 +163,15 @@ void DeviceController::setAutoMount(const QString &deviceId, bool enabled)
     emit autoMountChanged();
 }
 
+void DeviceController::setAutoMountDeviceIdsJson(const QString &json)
+{
+    const QString previous = m_autoMountDeviceIdsJson;
+    loadAutoMountIds(json);
+    if (m_autoMountDeviceIdsJson != previous) {
+        emit autoMountChanged();
+    }
+}
+
 void DeviceController::handleDevicesReady(
     BackendRequestId requestId,
     const QVector<DeviceEntry> &devices)
@@ -268,6 +277,7 @@ void DeviceController::clearOperation()
 
 void DeviceController::loadAutoMountIds(const QString &json)
 {
+    m_autoMountIds.clear();
     const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
     if (!document.isArray()) {
         m_autoMountDeviceIdsJson = QStringLiteral("[]");
