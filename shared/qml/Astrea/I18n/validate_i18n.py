@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 
 I18N_ROOT = Path(__file__).resolve().parent
-REPOSITORY_ROOT = I18N_ROOT.parents[3]
-ACTIVE_QML_ROOTS = (
-    REPOSITORY_ROOT / "apps" / "explorer" / "qml",
-    REPOSITORY_ROOT / "shared" / "qml" / "Astrea",
+ORBIT_ROOT = I18N_ROOT.parents[3]
+CATALOG_ROOT = ORBIT_ROOT / "shared" / "qml" / "Astrea" / "I18n"
+ACTIVE_PRODUCTION_QML_ROOTS = (
+    ORBIT_ROOT / "apps" / "explorer" / "qml",
+    ORBIT_ROOT / "shared" / "qml" / "Astrea",
 )
 BAD_PATTERNS = (
     r"aaao",
@@ -31,7 +32,7 @@ DYNAMIC_PREFIX_KEYS = ("settings.language.country.",)
 
 def load(language: str) -> dict[str, str]:
     return json.loads(
-        (I18N_ROOT / f"{language}.json").read_text(encoding="utf-8")
+        (CATALOG_ROOT / f"{language}.json").read_text(encoding="utf-8")
     )
 
 
@@ -45,7 +46,7 @@ def main():
             errors.append(f"corrupted key: {key}")
 
     used: set[str] = set()
-    for qml_root in ACTIVE_QML_ROOTS:
+    for qml_root in ACTIVE_PRODUCTION_QML_ROOTS:
         for qml in qml_root.rglob("*.qml"):
             for match in KEY_RE.finditer(
                 qml.read_text(encoding="utf-8", errors="ignore")

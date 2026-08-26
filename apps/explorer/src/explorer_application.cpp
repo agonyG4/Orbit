@@ -276,10 +276,6 @@ int ExplorerApplication::run(int argc, char **argv)
     application.setProperty("astreaI18nStrings", i18n.strings);
     application.setProperty("astreaI18nFallbackStrings", i18n.fallbackStrings);
     application.setProperty("astreaI18nMessages", i18n.messages);
-    engine.rootContext()->setContextProperty(
-        QStringLiteral("astreaNativeAppStateAvailable"),
-        runtimeReady && !useBootstrap);
-
     if (usePortal) {
         const QByteArray optionsBytes = environment.value(
             QStringLiteral("ASTREA_FILE_DIALOG_OPTIONS"),
