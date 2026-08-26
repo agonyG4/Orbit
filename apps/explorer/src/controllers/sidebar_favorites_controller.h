@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QVariantList>
 #include <QStringList>
+#include <QVector>
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -45,8 +46,17 @@ private slots:
     void syncFromSettings();
 
 private:
+    struct DefaultFavorite
+    {
+        QString id;
+        QString path;
+        QString label;
+        QString icon;
+    };
+
     static QString normalizePath(const QString &path);
     static QStringList favoritePathOrder(const QVariantList &items);
+    QVector<DefaultFavorite> defaultFavorites() const;
     QStringList defaultPaths() const;
     QVariantMap defaultItem(const QString &path) const;
     bool isTrashPath(const QString &path) const;

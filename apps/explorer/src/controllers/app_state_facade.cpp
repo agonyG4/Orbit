@@ -36,7 +36,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     , m_navigation(dependencies.navigation)
     , m_selection(dependencies.selection)
     , m_model(dependencies.model)
-    , m_settings(dependencies.settings)
+    , m_settingsController(dependencies.settings)
     , m_sidebarFavorites(dependencies.sidebarFavorites)
     , m_archive(dependencies.archive)
     , m_fileOperations(dependencies.fileOperations)
@@ -62,20 +62,18 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
             &AppStateFacade::iconThemeChanged);
     }
 
-    if (m_settings != nullptr) {
-        m_settings->bindNavigation(m_navigation);
-        m_settings->bindDeviceController(m_devices);
-        connect(m_settings, &ExplorerSettingsController::showPreviewChanged, this, &AppStateFacade::showPreviewChanged);
-        connect(m_settings, &ExplorerSettingsController::viewModeChanged, this, &AppStateFacade::viewModeChanged);
-        connect(m_settings, &ExplorerSettingsController::sortFieldChanged, this, &AppStateFacade::sortFieldChanged);
-        connect(m_settings, &ExplorerSettingsController::sortAscendingChanged, this, &AppStateFacade::sortAscChanged);
-        connect(m_settings, &ExplorerSettingsController::showHiddenChanged, this, &AppStateFacade::showHiddenChanged);
-        connect(m_settings, &ExplorerSettingsController::foldersFirstChanged, this, &AppStateFacade::foldersFirstChanged);
-        connect(m_settings, &ExplorerSettingsController::groupingEnabledChanged, this, &AppStateFacade::groupingEnabledChanged);
-        connect(m_settings, &ExplorerSettingsController::zoomLevelChanged, this, &AppStateFacade::zoomLevelChanged);
-        connect(m_settings, &ExplorerSettingsController::autoMountDeviceIdsJsonChanged, this, &AppStateFacade::autoMountDeviceIdsJsonChanged);
+    if (m_settingsController != nullptr) {
+        connect(m_settingsController, &ExplorerSettingsController::showPreviewChanged, this, &AppStateFacade::showPreviewChanged);
+        connect(m_settingsController, &ExplorerSettingsController::viewModeChanged, this, &AppStateFacade::viewModeChanged);
+        connect(m_settingsController, &ExplorerSettingsController::sortFieldChanged, this, &AppStateFacade::sortFieldChanged);
+        connect(m_settingsController, &ExplorerSettingsController::sortAscendingChanged, this, &AppStateFacade::sortAscChanged);
+        connect(m_settingsController, &ExplorerSettingsController::showHiddenChanged, this, &AppStateFacade::showHiddenChanged);
+        connect(m_settingsController, &ExplorerSettingsController::foldersFirstChanged, this, &AppStateFacade::foldersFirstChanged);
+        connect(m_settingsController, &ExplorerSettingsController::groupingEnabledChanged, this, &AppStateFacade::groupingEnabledChanged);
+        connect(m_settingsController, &ExplorerSettingsController::zoomLevelChanged, this, &AppStateFacade::zoomLevelChanged);
+        connect(m_settingsController, &ExplorerSettingsController::autoMountDeviceIdsJsonChanged, this, &AppStateFacade::autoMountDeviceIdsJsonChanged);
     }
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         connect(
             m_navigation,
             &NavigationController::listingOptionsChanged,
@@ -92,11 +90,11 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
         connect(m_sidebarFavorites, &SidebarFavoritesController::favoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesJsonChanged);
         connect(m_sidebarFavorites, &SidebarFavoritesController::hiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarHiddenDefaultFavoritesJsonChanged);
         connect(m_sidebarFavorites, &SidebarFavoritesController::favoritesChanged, this, &AppStateFacade::sidebarFavoritesChanged);
-    } else if (m_settings != nullptr) {
-        connect(m_settings, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesJsonChanged);
-        connect(m_settings, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarHiddenDefaultFavoritesJsonChanged);
-        connect(m_settings, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
-        connect(m_settings, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
+    } else if (m_settingsController != nullptr) {
+        connect(m_settingsController, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesJsonChanged);
+        connect(m_settingsController, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarHiddenDefaultFavoritesJsonChanged);
+        connect(m_settingsController, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
+        connect(m_settingsController, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
     }
     if (m_archive != nullptr) {
         connect(m_archive, &ArchiveController::stateChanged, this, &AppStateFacade::archiveStateChanged);
@@ -541,7 +539,7 @@ bool AppStateFacade::fileModelFilling() const
 
 bool AppStateFacade::showPreview() const
 {
-    return m_settings == nullptr ? m_navigation->previews() : m_settings->showPreview();
+    return m_settingsController == nullptr ? m_navigation->previews() : m_settingsController->showPreview();
 }
 
 bool AppStateFacade::previewsEnabled() const
@@ -551,7 +549,7 @@ bool AppStateFacade::previewsEnabled() const
 
 QString AppStateFacade::viewMode() const
 {
-    return m_settings == nullptr ? QStringLiteral("list") : m_settings->viewMode();
+    return m_settingsController == nullptr ? QStringLiteral("list") : m_settingsController->viewMode();
 }
 
 QString AppStateFacade::sortField() const
@@ -576,12 +574,12 @@ bool AppStateFacade::foldersFirst() const
 
 bool AppStateFacade::groupingEnabled() const
 {
-    return m_settings == nullptr ? true : m_settings->groupingEnabled();
+    return m_settingsController == nullptr ? true : m_settingsController->groupingEnabled();
 }
 
 double AppStateFacade::zoomLevel() const
 {
-    return m_settings == nullptr ? 1.0 : m_settings->zoomLevel();
+    return m_settingsController == nullptr ? 1.0 : m_settingsController->zoomLevel();
 }
 
 QString AppStateFacade::autoMountDeviceIdsJson() const
@@ -589,19 +587,19 @@ QString AppStateFacade::autoMountDeviceIdsJson() const
     if (m_devices != nullptr) {
         return m_devices->autoMountDeviceIdsJson();
     }
-    return m_settings == nullptr ? QStringLiteral("[]") : m_settings->autoMountDeviceIdsJson();
+    return m_settingsController == nullptr ? QStringLiteral("[]") : m_settingsController->autoMountDeviceIdsJson();
 }
 
 QString AppStateFacade::sidebarFavoritesJson() const
 {
-    return m_settings == nullptr ? QStringLiteral("[]") : m_settings->sidebarFavoritesJson();
+    return m_settingsController == nullptr ? QStringLiteral("[]") : m_settingsController->sidebarFavoritesJson();
 }
 
 QString AppStateFacade::sidebarHiddenDefaultFavoritesJson() const
 {
-    return m_settings == nullptr
+    return m_settingsController == nullptr
         ? QStringLiteral("[]")
-        : m_settings->sidebarHiddenDefaultFavoritesJson();
+        : m_settingsController->sidebarHiddenDefaultFavoritesJson();
 }
 
 QVariantList AppStateFacade::sidebarFavorites() const
@@ -856,8 +854,8 @@ bool AppStateFacade::wallpaperApplyRunning() const { return m_wallpaperApplyRunn
 
 void AppStateFacade::setShowPreview(bool showPreviewValue)
 {
-    if (m_settings != nullptr) {
-        m_settings->setShowPreview(showPreviewValue);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setShowPreview(showPreviewValue);
         return;
     }
     if (m_navigation->previews() == showPreviewValue) {
@@ -873,16 +871,16 @@ void AppStateFacade::setPreviewsEnabled(bool enabled)
 
 void AppStateFacade::setViewMode(const QString &viewModeValue)
 {
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         return;
     }
-    m_settings->setViewMode(viewModeValue);
+    m_settingsController->setViewMode(viewModeValue);
 }
 
 void AppStateFacade::setSortField(const QString &sortFieldValue)
 {
-    if (m_settings != nullptr) {
-        m_settings->setSortField(sortFieldValue);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setSortField(sortFieldValue);
         return;
     }
     m_navigation->setSortField(sortFieldValue);
@@ -890,8 +888,8 @@ void AppStateFacade::setSortField(const QString &sortFieldValue)
 
 void AppStateFacade::setSortAsc(bool sortAscendingValue)
 {
-    if (m_settings != nullptr) {
-        m_settings->setSortAscending(sortAscendingValue);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setSortAscending(sortAscendingValue);
         return;
     }
     m_navigation->setSortAscending(sortAscendingValue);
@@ -899,8 +897,8 @@ void AppStateFacade::setSortAsc(bool sortAscendingValue)
 
 void AppStateFacade::setShowHidden(bool showHiddenValue)
 {
-    if (m_settings != nullptr) {
-        m_settings->setShowHidden(showHiddenValue);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setShowHidden(showHiddenValue);
         return;
     }
     m_navigation->setShowHidden(showHiddenValue);
@@ -908,8 +906,8 @@ void AppStateFacade::setShowHidden(bool showHiddenValue)
 
 void AppStateFacade::setFoldersFirst(bool foldersFirstValue)
 {
-    if (m_settings != nullptr) {
-        m_settings->setFoldersFirst(foldersFirstValue);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setFoldersFirst(foldersFirstValue);
         return;
     }
     m_navigation->setFoldersFirst(foldersFirstValue);
@@ -917,18 +915,18 @@ void AppStateFacade::setFoldersFirst(bool foldersFirstValue)
 
 void AppStateFacade::setGroupingEnabled(bool groupingEnabledValue)
 {
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         return;
     }
-    m_settings->setGroupingEnabled(groupingEnabledValue);
+    m_settingsController->setGroupingEnabled(groupingEnabledValue);
 }
 
 void AppStateFacade::setZoomLevel(double zoomLevelValue)
 {
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         return;
     }
-    m_settings->setZoomLevel(zoomLevelValue);
+    m_settingsController->setZoomLevel(zoomLevelValue);
 }
 
 void AppStateFacade::increaseZoom()
@@ -953,8 +951,8 @@ void AppStateFacade::setZoom(double level)
 
 void AppStateFacade::setAutoMountDeviceIdsJson(const QString &json)
 {
-    if (m_settings != nullptr) {
-        m_settings->setAutoMountDeviceIdsJson(json);
+    if (m_settingsController != nullptr) {
+        m_settingsController->setAutoMountDeviceIdsJson(json);
     } else if (m_devices != nullptr) {
         m_devices->setAutoMountDeviceIdsJson(json);
     }
@@ -962,18 +960,18 @@ void AppStateFacade::setAutoMountDeviceIdsJson(const QString &json)
 
 void AppStateFacade::setSidebarFavoritesJson(const QString &json)
 {
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         return;
     }
-    m_settings->setSidebarFavoritesJson(json);
+    m_settingsController->setSidebarFavoritesJson(json);
 }
 
 void AppStateFacade::setSidebarHiddenDefaultFavoritesJson(const QString &json)
 {
-    if (m_settings == nullptr) {
+    if (m_settingsController == nullptr) {
         return;
     }
-    m_settings->setSidebarHiddenDefaultFavoritesJson(json);
+    m_settingsController->setSidebarHiddenDefaultFavoritesJson(json);
 }
 
 void AppStateFacade::setDialogActive(bool active)

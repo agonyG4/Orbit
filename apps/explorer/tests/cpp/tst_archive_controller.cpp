@@ -22,6 +22,7 @@ private slots:
     void rejectsConcurrentExtractionWithoutMutation();
     void rejectsExtractionWhileCompressionRuns();
     void acceptsWorkAfterTerminalCompletion();
+    void emitsCompletionWithRequestIdentity();
     void rejectsExtractionDuringPasswordContinuation();
     void rejectsCompressionDuringPasswordContinuation();
     void rejectsExtractionDuringConflictContinuation();
@@ -67,6 +68,76 @@ void arrangeContinuation(ArchiveController &archive, bool passwordPrompt, bool c
     archive.m_percent = 25;
     archive.m_doneCount = 2;
     archive.m_totalCount = 8;
+}
+
+struct ArchiveWorkflowSnapshot
+{
+    BackendRequestId request = 0;
+    QString path;
+    QString destination;
+    QString fileName;
+    QString status;
+    QString error;
+    QString passwordError;
+    QString destinationResult;
+    QString conflictDestination;
+    QString conflictName;
+    QString conflictPolicy;
+    bool running = false;
+    bool passwordPrompt = false;
+    bool conflict = false;
+    double progress = 0.0;
+    int percent = 0;
+    int doneCount = 0;
+    int totalCount = 0;
+};
+
+ArchiveWorkflowSnapshot workflowSnapshot(const ArchiveController &archive)
+{
+    return {
+        archive.m_request,
+        archive.m_path,
+        archive.m_destination,
+        archive.m_fileName,
+        archive.m_status,
+        archive.m_error,
+        archive.m_passwordError,
+        archive.m_destinationResult,
+        archive.m_conflictDestination,
+        archive.m_conflictName,
+        archive.m_conflictPolicy,
+        archive.m_running,
+        archive.m_passwordPrompt,
+        archive.m_conflict,
+        archive.m_progress,
+        archive.m_percent,
+        archive.m_doneCount,
+        archive.m_totalCount,
+    };
+}
+
+void verifyWorkflowSnapshot(
+    const ArchiveController &archive,
+    const ArchiveWorkflowSnapshot &expected)
+{
+    QCOMPARE(archive.m_request, expected.request);
+    QCOMPARE(archive.m_path, expected.path);
+    QCOMPARE(archive.m_destination, expected.destination);
+    QCOMPARE(archive.m_fileName, expected.fileName);
+    QCOMPARE(archive.m_status, expected.status);
+    QCOMPARE(archive.m_error, expected.error);
+    QCOMPARE(archive.m_passwordError, expected.passwordError);
+    QCOMPARE(archive.m_destinationResult, expected.destinationResult);
+    QCOMPARE(archive.m_conflictDestination, expected.conflictDestination);
+    QCOMPARE(archive.m_conflictName, expected.conflictName);
+    QCOMPARE(archive.m_conflictPolicy, expected.conflictPolicy);
+    QCOMPARE(archive.m_running, expected.running);
+    QCOMPARE(archive.m_passwordPrompt, expected.passwordPrompt);
+    QCOMPARE(archive.m_conflict, expected.conflict);
+    QCOMPARE(archive.m_progress, expected.progress);
+    QCOMPARE(archive.m_percent, expected.percent);
+    QCOMPARE(archive.m_doneCount, expected.doneCount);
+    QCOMPARE(archive.m_totalCount, expected.totalCount);
 }
 
 void ArchiveControllerTest::rejectsConcurrentExtractionWithoutMutation()
@@ -129,15 +200,41 @@ void ArchiveControllerTest::acceptsWorkAfterTerminalCompletion()
     QCOMPARE(fixture.archive.status(), QStringLiteral("Comprimindo..."));
 }
 
+void ArchiveControllerTest::emitsCompletionWithRequestIdentity()
+{
+    ArchiveFixture fixture;
+    QSignalSpy finishedSpy(&fixture.archive, &ArchiveController::operationFinished);
+
+    fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/request.zip"), QStringLiteral("request"));
+    QCOMPARE(fixture.client.utilityRequests().size(), 1);
+
+    UtilityResult completed;
+    completed.operation = QStringLiteral("archive-extract");
+    completed.ok = true;
+    completed.data.insert(QStringLiteral("destination"), QStringLiteral("/tmp/request-result"));
+    fixture.client.completeUtility(1, completed);
+
+    QTRY_COMPARE(finishedSpy.count(), 1);
+    const QList<QVariant> arguments = finishedSpy.constFirst();
+    QCOMPARE(arguments.at(0).toULongLong(), quint64(1));
+    QCOMPARE(arguments.at(1).toString(), QStringLiteral("archive-extract"));
+    QCOMPARE(arguments.at(2).toBool(), true);
+    QCOMPARE(
+        arguments.at(3).toMap().value(QStringLiteral("destination")).toString(),
+        QStringLiteral("/tmp/request-result"));
+    QCOMPARE(arguments.at(4).toString(), QString());
+}
+
 void ArchiveControllerTest::rejectsExtractionDuringPasswordContinuation()
 {
     ArchiveFixture fixture;
     arrangeContinuation(fixture.archive, true, false);
     QSignalSpy stateSpy(&fixture.archive, &ArchiveController::stateChanged);
+    const ArchiveWorkflowSnapshot expected = workflowSnapshot(fixture.archive);
     fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
     QCOMPARE(fixture.client.utilityRequests().size(), 0);
     QCOMPARE(stateSpy.count(), 0);
-    QVERIFY(fixture.archive.passwordPromptVisible());
+    verifyWorkflowSnapshot(fixture.archive, expected);
 }
 
 void ArchiveControllerTest::rejectsCompressionDuringPasswordContinuation()
@@ -145,10 +242,11 @@ void ArchiveControllerTest::rejectsCompressionDuringPasswordContinuation()
     ArchiveFixture fixture;
     arrangeContinuation(fixture.archive, true, false);
     QSignalSpy stateSpy(&fixture.archive, &ArchiveController::stateChanged);
+    const ArchiveWorkflowSnapshot expected = workflowSnapshot(fixture.archive);
     fixture.archive.startFolderCompression(QStringLiteral("/tmp/replacement"), QStringLiteral("zip"));
     QCOMPARE(fixture.client.utilityRequests().size(), 0);
     QCOMPARE(stateSpy.count(), 0);
-    QVERIFY(fixture.archive.passwordPromptVisible());
+    verifyWorkflowSnapshot(fixture.archive, expected);
 }
 
 void ArchiveControllerTest::rejectsExtractionDuringConflictContinuation()
@@ -156,10 +254,11 @@ void ArchiveControllerTest::rejectsExtractionDuringConflictContinuation()
     ArchiveFixture fixture;
     arrangeContinuation(fixture.archive, false, true);
     QSignalSpy stateSpy(&fixture.archive, &ArchiveController::stateChanged);
+    const ArchiveWorkflowSnapshot expected = workflowSnapshot(fixture.archive);
     fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
     QCOMPARE(fixture.client.utilityRequests().size(), 0);
     QCOMPARE(stateSpy.count(), 0);
-    QVERIFY(fixture.archive.conflictVisible());
+    verifyWorkflowSnapshot(fixture.archive, expected);
 }
 
 void ArchiveControllerTest::rejectsCompressionDuringConflictContinuation()
@@ -167,10 +266,11 @@ void ArchiveControllerTest::rejectsCompressionDuringConflictContinuation()
     ArchiveFixture fixture;
     arrangeContinuation(fixture.archive, false, true);
     QSignalSpy stateSpy(&fixture.archive, &ArchiveController::stateChanged);
+    const ArchiveWorkflowSnapshot expected = workflowSnapshot(fixture.archive);
     fixture.archive.startFolderCompression(QStringLiteral("/tmp/replacement"), QStringLiteral("zip"));
     QCOMPARE(fixture.client.utilityRequests().size(), 0);
     QCOMPARE(stateSpy.count(), 0);
-    QVERIFY(fixture.archive.conflictVisible());
+    verifyWorkflowSnapshot(fixture.archive, expected);
 }
 
 void ArchiveControllerTest::reportsOccupancyForRunningPasswordAndConflictStates()
