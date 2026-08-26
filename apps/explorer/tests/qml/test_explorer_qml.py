@@ -118,6 +118,9 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
     def test_archive_actions_are_disabled_while_native_archive_is_running(self):
         menu = (APP_ROOT / "components/common/FileContextMenu.qml").read_text(encoding="utf-8")
         facade = (EXPLORER_ROOT / "src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
+        archive = (EXPLORER_ROOT / "src/controllers/archive_controller.cpp").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("readonly property bool archiveOperationAvailable", menu)
         self.assertIn("!AppState.archiveExtractionRunning", menu)
@@ -130,10 +133,10 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
         )
         self.assertIn("bool AppStateFacade::archiveWorkflowOccupied() const", facade)
         self.assertIn(
-            "return m_archiveRunning || m_archivePasswordPrompt || m_archiveConflict;",
-            facade,
+            "return m_running || m_passwordPrompt || m_conflict;",
+            archive,
         )
-        self.assertIn("if (archiveWorkflowOccupied() || m_filesystemService == nullptr", facade)
+        self.assertIn("if (archiveWorkflowOccupied() || m_archive == nullptr", facade)
 
     def test_dormant_archive_continuation_dialogs_follow_native_state(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")

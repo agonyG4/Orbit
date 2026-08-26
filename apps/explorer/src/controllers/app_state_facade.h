@@ -478,6 +478,8 @@ private slots:
     void handleModelChanged();
 
 private:
+    bool archiveWorkflowOccupied() const;
+
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;

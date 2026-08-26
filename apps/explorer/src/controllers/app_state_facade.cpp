@@ -1251,11 +1251,17 @@ void AppStateFacade::emptyTrash()
     }
 }
 
+bool AppStateFacade::archiveWorkflowOccupied() const
+{
+    return m_archive != nullptr && m_archive->workflowOccupied();
+}
+
 void AppStateFacade::startArchiveExtraction(const QString &path, const QString &folderName)
 {
-    if (m_archive != nullptr) {
-        m_archive->startArchiveExtraction(path, folderName);
+    if (archiveWorkflowOccupied() || m_archive == nullptr) {
+        return;
     }
+    m_archive->startArchiveExtraction(path, folderName);
 }
 
 void AppStateFacade::submitArchivePassword(const QString &password)
@@ -1287,9 +1293,10 @@ void AppStateFacade::cancelArchiveConflict()
 }
 void AppStateFacade::startFolderCompression(const QString &path, const QString &format)
 {
-    if (m_archive != nullptr) {
-        m_archive->startFolderCompression(path, format);
+    if (archiveWorkflowOccupied() || m_archive == nullptr) {
+        return;
     }
+    m_archive->startFolderCompression(path, format);
 }
 void AppStateFacade::installAppImage(const QString &path)
 {
