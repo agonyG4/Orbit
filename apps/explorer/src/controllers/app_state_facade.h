@@ -483,7 +483,7 @@ private:
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;
-    ExplorerSettingsController *m_settings = nullptr;
+    ExplorerSettingsController *m_settingsController = nullptr;
     SidebarFavoritesController *m_sidebarFavorites = nullptr;
     ArchiveController *m_archive = nullptr;
     FileOperationsController *m_fileOperations = nullptr;

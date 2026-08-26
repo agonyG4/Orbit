@@ -1,4 +1,5 @@
 #include <QDir>
+#include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -23,6 +24,32 @@ private slots:
     void dragCancelRestoresOriginalOrder();
     void dragCommitPersistsExactlyOnce();
     void filtersHiddenDefaultsFromProvidedItems();
+    void deduplicatesXdgPathsWithoutShiftingMetadata();
+    void preservesDistinctXdgMetadata();
+};
+
+class HomeEnvironmentGuard final
+{
+public:
+    explicit HomeEnvironmentGuard(const QString &home)
+        : m_hadHome(qEnvironmentVariableIsSet("HOME"))
+        , m_previousHome(qgetenv("HOME"))
+    {
+        qputenv("HOME", home.toUtf8());
+    }
+
+    ~HomeEnvironmentGuard()
+    {
+        if (m_hadHome) {
+            qputenv("HOME", m_previousHome);
+        } else {
+            qunsetenv("HOME");
+        }
+    }
+
+private:
+    bool m_hadHome = false;
+    QByteArray m_previousHome;
 };
 
 SettingsService settingsAt(const QTemporaryDir &directory)
@@ -33,6 +60,29 @@ SettingsService settingsAt(const QTemporaryDir &directory)
 QString pathAt(const QVariantList &items, int index)
 {
     return items.at(index).toMap().value(QStringLiteral("path")).toString();
+}
+
+QVariantMap itemAtPath(const QVariantList &items, const QString &path)
+{
+    for (const QVariant &value : items) {
+        const QVariantMap item = value.toMap();
+        if (item.value(QStringLiteral("path")).toString() == path) {
+            return item;
+        }
+    }
+    return {};
+}
+
+bool writeUserDirs(const QString &home, const QByteArray &contents)
+{
+    if (!QDir().mkpath(QDir(home).filePath(QStringLiteral(".config")))) {
+        return false;
+    }
+    QFile file(QDir(home).filePath(QStringLiteral(".config/user-dirs.dirs")));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
+    }
+    return file.write(contents) == contents.size();
 }
 
 void SidebarFavoritesControllerTest::loadsPersistedCustomFavoritesAndHiddenDefaults()
@@ -173,6 +223,119 @@ void SidebarFavoritesControllerTest::filtersHiddenDefaultsFromProvidedItems()
     const QVariantList filtered = favorites.visibleDefaults({hiddenItem, visibleItem});
     QCOMPARE(filtered.size(), 1);
     QCOMPARE(pathAt(filtered, 0), QStringLiteral("/custom/visible"));
+}
+
+void SidebarFavoritesControllerTest::deduplicatesXdgPathsWithoutShiftingMetadata()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    HomeEnvironmentGuard homeGuard(home.path());
+    QVERIFY(writeUserDirs(
+        home.path(),
+        QByteArrayLiteral(
+            "XDG_DESKTOP_DIR=\"$HOME\"\n"
+            "XDG_DOCUMENTS_DIR=\"$HOME\"\n"
+            "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n"
+            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n"
+            "XDG_MUSIC_DIR=\"$HOME/Music\"\n"
+            "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n"
+            "XDG_PUBLICSHARE_DIR=\"$HOME/Public\"\n"
+            "XDG_TEMPLATES_DIR=\"$HOME/Templates\"\n")));
+
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    SettingsService settings = settingsAt(settingsDirectory);
+    ExplorerSettingsController settingsController(&settings);
+    SidebarFavoritesController favorites(&settingsController);
+
+    const QString homePath = QDir::cleanPath(home.path());
+    const QStringList expectedPaths {
+        homePath,
+        QDir(homePath).filePath(QStringLiteral("Downloads")),
+        QDir(homePath).filePath(QStringLiteral("Pictures")),
+        QDir(homePath).filePath(QStringLiteral("Music")),
+        QDir(homePath).filePath(QStringLiteral("Videos")),
+        QDir(homePath).filePath(QStringLiteral("Public")),
+        QDir(homePath).filePath(QStringLiteral("Templates")),
+    };
+    QCOMPARE(favorites.defaultFavoritePaths(), expectedPaths);
+
+    const QVariantList items = favorites.favorites();
+    QCOMPARE(items.size(), expectedPaths.size());
+
+    const QVariantMap desktop = itemAtPath(items, homePath);
+    QCOMPARE(desktop.value(QStringLiteral("label")).toString(), QStringLiteral("Desktop"));
+    QCOMPARE(desktop.value(QStringLiteral("icon")).toString(), QStringLiteral("user-desktop"));
+    QCOMPARE(desktop.value(QStringLiteral("id")).toString(), QStringLiteral("builtin:0"));
+
+    const QString downloadsPath = QDir(homePath).filePath(QStringLiteral("Downloads"));
+    const QVariantMap downloads = itemAtPath(items, downloadsPath);
+    QCOMPARE(downloads.value(QStringLiteral("label")).toString(), QStringLiteral("Downloads"));
+    QCOMPARE(downloads.value(QStringLiteral("icon")).toString(), QStringLiteral("folder-download"));
+    QCOMPARE(downloads.value(QStringLiteral("id")).toString(), QStringLiteral("builtin:2"));
+
+    const QString picturesPath = QDir(homePath).filePath(QStringLiteral("Pictures"));
+    const QVariantMap pictures = itemAtPath(items, picturesPath);
+    QCOMPARE(pictures.value(QStringLiteral("label")).toString(), QStringLiteral("Pictures"));
+    QCOMPARE(pictures.value(QStringLiteral("icon")).toString(), QStringLiteral("folder-pictures"));
+    QCOMPARE(pictures.value(QStringLiteral("id")).toString(), QStringLiteral("builtin:3"));
+}
+
+void SidebarFavoritesControllerTest::preservesDistinctXdgMetadata()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    HomeEnvironmentGuard homeGuard(home.path());
+    QVERIFY(writeUserDirs(
+        home.path(),
+        QByteArrayLiteral(
+            "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n"
+            "XDG_DOCUMENTS_DIR=\"$HOME/Documents\"\n"
+            "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n"
+            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n"
+            "XDG_MUSIC_DIR=\"$HOME/Music\"\n"
+            "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n"
+            "XDG_PUBLICSHARE_DIR=\"$HOME/Public\"\n"
+            "XDG_TEMPLATES_DIR=\"$HOME/Templates\"\n")));
+
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    SettingsService settings = settingsAt(settingsDirectory);
+    ExplorerSettingsController settingsController(&settings);
+    SidebarFavoritesController favorites(&settingsController);
+
+    const QString homePath = QDir::cleanPath(home.path());
+    const QStringList paths {
+        QDir(homePath).filePath(QStringLiteral("Desktop")),
+        QDir(homePath).filePath(QStringLiteral("Documents")),
+        QDir(homePath).filePath(QStringLiteral("Downloads")),
+        QDir(homePath).filePath(QStringLiteral("Pictures")),
+        QDir(homePath).filePath(QStringLiteral("Music")),
+        QDir(homePath).filePath(QStringLiteral("Videos")),
+        QDir(homePath).filePath(QStringLiteral("Public")),
+        QDir(homePath).filePath(QStringLiteral("Templates")),
+    };
+    const QStringList labels {
+        QStringLiteral("Desktop"), QStringLiteral("Documents"), QStringLiteral("Downloads"),
+        QStringLiteral("Pictures"), QStringLiteral("Music"), QStringLiteral("Videos"),
+        QStringLiteral("Public"), QStringLiteral("Templates"),
+    };
+    const QStringList icons {
+        QStringLiteral("user-desktop"), QStringLiteral("folder-documents"),
+        QStringLiteral("folder-download"), QStringLiteral("folder-pictures"),
+        QStringLiteral("folder-music"), QStringLiteral("folder-videos"),
+        QStringLiteral("folder-publicshare"), QStringLiteral("folder-templates"),
+    };
+
+    QCOMPARE(favorites.defaultFavoritePaths(), paths);
+    const QVariantList items = favorites.favorites();
+    QCOMPARE(items.size(), paths.size());
+    for (int index = 0; index < paths.size(); ++index) {
+        const QVariantMap item = itemAtPath(items, paths.at(index));
+        QCOMPARE(item.value(QStringLiteral("label")).toString(), labels.at(index));
+        QCOMPARE(item.value(QStringLiteral("icon")).toString(), icons.at(index));
+        QCOMPARE(item.value(QStringLiteral("id")).toString(), QStringLiteral("builtin:%1").arg(index));
+    }
 }
 
 QTEST_GUILESS_MAIN(SidebarFavoritesControllerTest)

@@ -336,53 +336,90 @@ QStringList SidebarFavoritesController::favoritePathOrder(const QVariantList &it
     return paths;
 }
 
-QStringList SidebarFavoritesController::defaultPaths() const
+QVector<SidebarFavoritesController::DefaultFavorite>
+SidebarFavoritesController::defaultFavorites() const
 {
     const QString root = QDir::homePath();
-    const QStringList candidates {
-        xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), root),
-        xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), root),
-        xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), root),
-        xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), root),
-        xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), root),
-        xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), root),
-        xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), root),
-        xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), root),
+    const QVector<DefaultFavorite> candidates {
+        {QStringLiteral("builtin:0"),
+         xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), root),
+         QStringLiteral("Desktop"),
+         QStringLiteral("user-desktop")},
+        {QStringLiteral("builtin:1"),
+         xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), root),
+         QStringLiteral("Documents"),
+         QStringLiteral("folder-documents")},
+        {QStringLiteral("builtin:2"),
+         xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), root),
+         QStringLiteral("Downloads"),
+         QStringLiteral("folder-download")},
+        {QStringLiteral("builtin:3"),
+         xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), root),
+         QStringLiteral("Pictures"),
+         QStringLiteral("folder-pictures")},
+        {QStringLiteral("builtin:4"),
+         xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), root),
+         QStringLiteral("Music"),
+         QStringLiteral("folder-music")},
+        {QStringLiteral("builtin:5"),
+         xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), root),
+         QStringLiteral("Videos"),
+         QStringLiteral("folder-videos")},
+        {QStringLiteral("builtin:6"),
+         xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), root),
+         QStringLiteral("Public"),
+         QStringLiteral("folder-publicshare")},
+        {QStringLiteral("builtin:7"),
+         xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), root),
+         QStringLiteral("Templates"),
+         QStringLiteral("folder-templates")},
     };
-    QStringList result;
-    for (const QString &path : candidates) {
-        const QString normalized = normalizePath(path);
-        if (!normalized.isEmpty() && !result.contains(normalized)) {
-            result.append(normalized);
+    QVector<DefaultFavorite> result;
+    QStringList seen;
+    for (DefaultFavorite favorite : candidates) {
+        favorite.path = normalizePath(favorite.path);
+        if (!favorite.path.isEmpty() && !seen.contains(favorite.path)) {
+            result.append(favorite);
+            seen.append(favorite.path);
         }
+    }
+    return result;
+}
+
+QStringList SidebarFavoritesController::defaultPaths() const
+{
+    QStringList result;
+    const QVector<DefaultFavorite> defaults = defaultFavorites();
+    result.reserve(defaults.size());
+    for (const DefaultFavorite &favorite : defaults) {
+        result.append(favorite.path);
     }
     return result;
 }
 
 QVariantMap SidebarFavoritesController::defaultItem(const QString &path) const
 {
-    const QStringList defaults = defaultPaths();
-    const QStringList labels {
-        QStringLiteral("Desktop"), QStringLiteral("Documents"), QStringLiteral("Downloads"),
-        QStringLiteral("Pictures"), QStringLiteral("Music"), QStringLiteral("Videos"),
-        QStringLiteral("Public"), QStringLiteral("Templates"),
-    };
-    const QStringList icons {
-        QStringLiteral("user-desktop"), QStringLiteral("folder-documents"),
-        QStringLiteral("folder-download"), QStringLiteral("folder-pictures"),
-        QStringLiteral("folder-music"), QStringLiteral("folder-videos"),
-        QStringLiteral("folder-publicshare"), QStringLiteral("folder-templates"),
-    };
-    const int index = defaults.indexOf(path);
+    const QString normalized = normalizePath(path);
+    const QVector<DefaultFavorite> defaults = defaultFavorites();
+    const auto match = std::find_if(
+        defaults.cbegin(),
+        defaults.cend(),
+        [&normalized](const DefaultFavorite &favorite) {
+            return favorite.path == normalized;
+        });
     QVariantMap item;
     item.insert(QStringLiteral("path"), path);
-    item.insert(QStringLiteral("label"), index >= 0 ? labels.at(index) : QFileInfo(path).fileName());
-    item.insert(QStringLiteral("icon"), index >= 0 ? icons.at(index) : QStringLiteral("inode-directory"));
+    item.insert(
+        QStringLiteral("label"),
+        match != defaults.cend() ? match->label : QFileInfo(path).fileName());
+    item.insert(
+        QStringLiteral("icon"),
+        match != defaults.cend() ? match->icon : QStringLiteral("inode-directory"));
     item.insert(
         QStringLiteral("id"),
-        index >= 0 ? QStringLiteral("builtin:%1").arg(index)
+        match != defaults.cend() ? match->id
                    : QStringLiteral("custom:%1").arg(path));
-    item.insert(QStringLiteral("builtIn"), index >= 0);
+    item.insert(QStringLiteral("builtIn"), match != defaults.cend());
     return item;
 }
 
