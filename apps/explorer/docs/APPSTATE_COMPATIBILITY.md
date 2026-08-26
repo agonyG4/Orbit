@@ -25,14 +25,19 @@ Qt tests:
 | `searchActive`, `searchQuery`, `navigateTo`, `submitSearch`, `goBack`, `goForward`, `refreshCurrentFolder` | `NavigationController` |
 | `createTab`, `closeTab`, `switchTab` | `NavigationController` |
 | `selectedFile`, `selectedFiles`, `lastSelectedIndex`, `isSelected`, `clearSelection`, `selectAll`, `selectByName`, `handleSelection` | `SelectionController` |
-| `showPreview`, `viewMode`, `sortField`, `sortAsc`, `showHidden`, `foldersFirst`, `groupingEnabled`, `zoomLevel` | `SettingsService` plus `NavigationController` listing options |
-| `sidebarFavoritesJson`, `sidebarHiddenDefaultFavoritesJson` | `SettingsService` |
+| `showPreview`, `viewMode`, `sortField`, `sortAsc`, `showHidden`, `foldersFirst`, `groupingEnabled`, `zoomLevel` | `ExplorerSettingsController`, backed by `SettingsService` and `NavigationController` listing options |
+| `autoMountDeviceIdsJson` | `DeviceController` runtime set, persisted by `ExplorerSettingsController` |
+| `sidebarFavoritesJson`, `sidebarHiddenDefaultFavoritesJson` | `SidebarFavoritesController`, backed by `ExplorerSettingsController` and `SettingsService` |
 | `homePath`, `runtimeRoot`, `backendPath`, `helperPath`, `wallpaperManagerPath`, `astreaLaunch`, `windowsRun`, `networkRootPath`, `trashFilesPath`, `trashInfoPath`, `recentVirtualPath`, `isPortalDialog` | resolved runtime paths, process environment, and user paths |
 | `dialogActive`, `dialogMode`, `dialogFilePatterns`, `fileMatchesDialogFilter` | native facade dialog projection |
-| `sidebarFavorites`, `sidebarHiddenDefaultFavorites`, `sidebarFavoritesRevision`, default favorite helpers | `SettingsService` JSON projection |
-| `increaseZoom`, `decreaseZoom`, `resetZoom`, `setZoom` | `SettingsService` zoom setting |
+| `sidebarFavorites`, `sidebarHiddenDefaultFavorites`, `sidebarFavoritesRevision`, default favorite helpers | `SidebarFavoritesController` and its `SidebarFavoritesModel` |
+| `increaseZoom`, `decreaseZoom`, `resetZoom`, `setZoom` | `ExplorerSettingsController` zoom setting |
 | `loadRecent`, `recordRecentAccess` | `AppStateFacade` and `RecentController`/`RecentStore` |
 | `DirectoryModel.count`, `DirectoryModel.get(index)` | `DirectoryModel` QML compatibility projection |
+| `fileOperation*`, `pasteConflict*`, and clipboard operations | `FileOperationsController` and `ClipboardService` |
+| `archive*`, `startArchiveExtraction`, `startFolderCompression` | `ArchiveController` and `FilesystemService` |
+| `appImageInstallRunning`, `installAppImage` | `AppStateFacade` projection over `FilesystemService` |
+| `wallpaperApplyRunning`, `setAsWallpaper` | `AppStateFacade` projection over `WallpaperService` |
 
 The compatibility methods `replaceFileModel`, `updateFileModelMetadata`, and
 `removePathsFromFileModel` are also native-bound when the capability is active.
@@ -45,9 +50,10 @@ Native-authoritative domains are navigation/history/tabs/search, directory
 listing/model/loading/error state, the `recent://` directory projection via
 `RecentController`, Recent source loading/recording/persistence via
 `RecentStore`, directory watching, selection and model refresh
-reconciliation, listing/preview/view/zoom settings, sidebar favorite state,
-dialog filter state, resolver-rooted runtime paths, and copy/cut clipboard
-state including system clipboard publication through `ClipboardService`.
+reconciliation, listing/preview/view/zoom settings, auto-mount persistence and
+runtime state, sidebar favorite state, archive workflow state, dialog filter
+state, resolver-rooted runtime paths, and copy/cut clipboard state including
+system clipboard publication through `ClipboardService`.
 
 The Recent qualification covers the complete native boundary: desktop and file
 entries are normalized by `RecentStore` and `RecentController`, exposed
@@ -70,20 +76,18 @@ until the configured unique-path limit, serialized objects are capped at 1 MiB,
 and desktop paths are resolved through one cached application catalog per load
 to avoid repeated application-directory scans.
 
-Legacy/transitional domains are paste conflict behavior, archive and file
-operation flows, trash/delete/restore, previews and thumbnail warming, recent
-item fallback state, devices and network dialogs, portal fallback,
-open-with and launch menus, helper-backed sidebar actions, and toolbar search
-suggestions. These QML compatibility surfaces remain guarded reference code
-until a separately qualified native owner replaces them.
+Legacy/transitional domains are trash/delete/restore, previews and thumbnail
+warming, recent item fallback state, device and network dialogs, portal
+fallback, open-with and launch menus, helper-backed sidebar actions, and
+toolbar search suggestions. These QML compatibility surfaces remain guarded
+reference code until a separately qualified native owner replaces them.
 
 ## Future candidates
 
 These are candidates for later, separately qualified migrations; none are part
 of this phase:
 
-- paste/conflict and the remaining file-operation, archive, AppImage, and
-  trash workflows;
+- trash/delete/restore and any remaining paste-conflict behavior;
 - preview rendering, thumbnail warming, and device/network services;
 - portal fallback and open-with/launch menus;
 - helper-backed actions, toolbar suggestions, and scroll-state persistence.
@@ -118,8 +122,8 @@ groups are:
 
 | Transitional group | Members / responsibility | Replacement candidate |
 | --- | --- | --- |
-| clipboard and file operations | `clipboardFiles`, `clipboardMode`, `copySelected`, `cutSelected` are native-backed; `pasteFiles`, `pasteConflict*`, `fileOperation*`, `deleteSelected`, `restoreSelected`, `emptyTrash` remain legacy-backed | `FileOperationsController`, `FileOperationService`, `ClipboardService` |
-| archive/AppImage/wallpaper | `archive*`, `startArchiveExtraction`, `startFolderCompression`, `installAppImage`, `setAsWallpaper`, `wallpaperApplyRunning` | typed filesystem/archive/application services |
+| clipboard and file operations | `clipboardFiles`, `clipboardMode`, `copySelected`, `cutSelected`, `pasteFiles`, `pasteConflict*`, and `fileOperation*` are native-backed; trash/delete/restore remains transitional | `FileOperationsController`, `FileOperationService`, `ClipboardService` |
+| archive/AppImage/wallpaper | `archive*`, `startArchiveExtraction`, `startFolderCompression`, `installAppImage`, `setAsWallpaper`, `wallpaperApplyRunning` are native-backed through the facade projection | `ArchiveController`, `FilesystemService`, and `WallpaperService` |
 | devices and network | `deviceModel`, `deviceError`, `requestMountDevice`, `requestUnmountDevice`, `requestRemountDevice`, `toggleDeviceAutoMount`, `network*`, `connectToNetwork`, `openNetworkBrowser` | `DeviceController` and a native network/portal service |
 | preview and launch | `fileIconName`, `isPreviewableFile`, `portalIconSource`, `sidebarIconSource`, `formatSize`, `formatDate`, `itemColor`, `openItem`, `requestThumbnailWarm`, `scheduleVisibleThumbnailWarm`, zoom helpers | `PreviewController`, `LaunchService`, `OpenWithController` |
 | recents and scroll state | `recentVirtualPath`, `rememberScrollPosition` | `RecentController`/`RecentStore` for recents; scroll state remains QML |

@@ -1,24 +1,60 @@
 #pragma once
 
 #include <QAbstractItemModel>
+#include <QObject>
 #include <QVariant>
 #include <QVariantList>
 #include <QStringList>
 
-#include "controllers/device_controller.h"
-#include "controllers/file_operations_controller.h"
-#include "controllers/navigation_controller.h"
-#include "controllers/open_with_controller.h"
-#include "controllers/recent_controller.h"
-#include "controllers/selection_controller.h"
-#include "models/sidebar_favorites_model.h"
+#include "backend/backend_types.h"
 #include "runtime/explorer_runtime_paths.h"
-#include "services/settings_service.h"
-#include "services/filesystem_service.h"
-#include "services/icon_theme_service.h"
-#include "services/wallpaper_service.h"
+
+namespace Astrea::Explorer::Native::Services {
+
+class FilesystemService;
+class IconThemeService;
+class LaunchService;
+class MimeAppsService;
+class SettingsService;
+class WallpaperService;
+
+} // namespace Astrea::Explorer::Native::Services
 
 namespace Astrea::Explorer::Native::Backend {
+
+class ArchiveController;
+class DeviceController;
+class DirectoryModel;
+class ExplorerSettingsController;
+class FileOperationsController;
+class NavigationController;
+class OpenWithController;
+class RecentController;
+class SelectionController;
+class SidebarFavoritesController;
+
+struct AppStateFacadeDependencies
+{
+    NavigationController *navigation = nullptr;
+    SelectionController *selection = nullptr;
+    DirectoryModel *model = nullptr;
+
+    ExplorerSettingsController *settings = nullptr;
+    SidebarFavoritesController *sidebarFavorites = nullptr;
+    ArchiveController *archive = nullptr;
+
+    FileOperationsController *fileOperations = nullptr;
+    DeviceController *devices = nullptr;
+    RecentController *recent = nullptr;
+    Services::FilesystemService *filesystem = nullptr;
+    OpenWithController *openWith = nullptr;
+    Services::LaunchService *launch = nullptr;
+    Services::WallpaperService *wallpaper = nullptr;
+    Services::MimeAppsService *mimeApps = nullptr;
+    Services::IconThemeService *iconTheme = nullptr;
+
+    Runtime::ExplorerRuntimePaths runtimePaths;
+};
 
 class AppStateFacade final : public QObject
 {
@@ -121,22 +157,14 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(bool wallpaperApplyRunning READ wallpaperApplyRunning NOTIFY wallpaperStateChanged)
 
 public:
+    explicit AppStateFacade(
+        AppStateFacadeDependencies dependencies,
+        QObject *parent = nullptr);
     AppStateFacade(
         NavigationController *navigation,
         SelectionController *selection,
         DirectoryModel *model,
-        QObject *parent = nullptr,
-        Services::SettingsService *settingsService = nullptr,
-        FileOperationsController *fileOperations = nullptr,
-        DeviceController *devices = nullptr,
-        Runtime::ExplorerRuntimePaths runtimePaths = {},
-        RecentController *recentController = nullptr,
-        Services::FilesystemService *filesystemService = nullptr,
-        OpenWithController *openWith = nullptr,
-        Services::LaunchService *launchService = nullptr,
-        Services::WallpaperService *wallpaperService = nullptr,
-        Services::MimeAppsService *mimeAppsService = nullptr,
-        Services::IconThemeService *iconThemeService = nullptr);
+        QObject *parent = nullptr);
 
     QAbstractItemModel *fileModel() const;
     QAbstractItemModel *sidebarFavoritesModel() const;
@@ -448,44 +476,19 @@ signals:
 
 private slots:
     void handleModelChanged();
-    void handleListingOptionsChanged();
-    void persistCurrentPath();
 
 private:
-    void persistSettings();
-    void syncSidebarFavoritesModel();
-    void persistSidebarFavoriteItems(const QVariantList &items);
-    bool archiveWorkflowOccupied() const;
-    void startArchivePasswordContinuation(const QString &password);
-
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;
-    SidebarFavoritesModel *m_sidebarFavoritesModel = nullptr;
-    Services::SettingsService *m_settingsService = nullptr;
+    ExplorerSettingsController *m_settings = nullptr;
+    SidebarFavoritesController *m_sidebarFavorites = nullptr;
+    ArchiveController *m_archive = nullptr;
     FileOperationsController *m_fileOperations = nullptr;
     DeviceController *m_devices = nullptr;
     RecentController *m_recentController = nullptr;
     Services::FilesystemService *m_filesystemService = nullptr;
     BackendRequestId m_thumbnailWarmRequest = 0;
-    BackendRequestId m_archiveRequest = 0;
-    QString m_archivePath;
-    QString m_archiveDestination;
-    QString m_archiveConflictPolicy {QStringLiteral("keep-both")};
-    bool m_archiveRunning = false;
-    bool m_archivePasswordPrompt = false;
-    bool m_archiveConflict = false;
-    double m_archiveProgress = 0.0;
-    int m_archivePercent = 0;
-    int m_archiveDoneCount = 0;
-    int m_archiveTotalCount = 0;
-    QString m_archiveFileName;
-    QString m_archiveStatus;
-    QString m_archiveError;
-    QString m_archiveDestinationResult;
-    QString m_archivePasswordError;
-    QString m_archiveConflictDestination;
-    QString m_archiveConflictName;
     bool m_appImageInstallRunning = false;
     bool m_wallpaperApplyRunning = false;
     OpenWithController *m_openWith = nullptr;
@@ -495,9 +498,7 @@ private:
     Services::IconThemeService *m_iconThemeService = nullptr;
     QString m_openWithPath;
     Runtime::ExplorerRuntimePaths m_runtimePaths;
-    Services::ExplorerSettings m_settings;
     int m_fileModelRevision = 0;
-    int m_sidebarFavoritesRevision = 0;
     bool m_dialogActive = false;
     QString m_dialogMode {QStringLiteral("browse")};
     QStringList m_dialogFilePatterns;

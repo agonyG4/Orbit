@@ -14,124 +14,41 @@
 #include <algorithm>
 #include <utility>
 
+#include "controllers/archive_controller.h"
+#include "controllers/device_controller.h"
+#include "controllers/explorer_settings_controller.h"
+#include "controllers/file_operations_controller.h"
+#include "controllers/navigation_controller.h"
+#include "controllers/open_with_controller.h"
+#include "controllers/recent_controller.h"
+#include "controllers/selection_controller.h"
+#include "controllers/sidebar_favorites_controller.h"
+#include "models/directory_model.h"
+#include "services/filesystem_service.h"
+#include "services/icon_theme_service.h"
+#include "services/mime_apps_service.h"
+#include "services/wallpaper_service.h"
+
 namespace Astrea::Explorer::Native::Backend {
 
-namespace {
-
-QString normalizeFavoritePath(const QString &path)
-{
-    if (path.isEmpty() || !path.startsWith(QLatin1Char('/'))) {
-        return path;
-    }
-    return QDir::cleanPath(path);
-}
-
-QString xdgUserDirectory(const QString &key, const QString &fallback, const QString &home)
-{
-    const QString configPath = QDir(home).filePath(QStringLiteral(".config/user-dirs.dirs"));
-    QFile config(configPath);
-    if (!config.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return QDir(home).filePath(fallback);
-    }
-    const QByteArray contents = config.readAll();
-    const QRegularExpression expression(
-        QStringLiteral("^%1=\\\"([^\\\"]+)\\\"$").arg(QRegularExpression::escape(key)),
-        QRegularExpression::MultilineOption);
-    const QRegularExpressionMatch match = expression.match(QString::fromUtf8(contents));
-    if (!match.hasMatch()) {
-        return QDir(home).filePath(fallback);
-    }
-    QString value = match.captured(1);
-    value.replace(QStringLiteral("$HOME"), home);
-    return QDir::cleanPath(value);
-}
-
-QVariantMap defaultFavoriteItem(const QString &path, const QString &home)
-{
-    const QStringList defaults {
-        xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), home),
-        xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), home),
-        xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), home),
-        xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), home),
-        xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), home),
-        xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), home),
-        xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), home),
-        xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), home),
-    };
-    const QStringList labels {
-        QStringLiteral("Desktop"), QStringLiteral("Documents"), QStringLiteral("Downloads"),
-        QStringLiteral("Pictures"), QStringLiteral("Music"), QStringLiteral("Videos"),
-        QStringLiteral("Public"), QStringLiteral("Templates"),
-    };
-    const QStringList icons {
-        QStringLiteral("user-desktop"), QStringLiteral("folder-documents"),
-        QStringLiteral("folder-download"), QStringLiteral("folder-pictures"),
-        QStringLiteral("folder-music"), QStringLiteral("folder-videos"),
-        QStringLiteral("folder-publicshare"), QStringLiteral("folder-templates"),
-    };
-    QVariantMap item;
-    const int index = defaults.indexOf(path);
-    item.insert(QStringLiteral("path"), path);
-    item.insert(QStringLiteral("label"), index >= 0 ? labels.at(index) : QFileInfo(path).fileName());
-    item.insert(QStringLiteral("icon"), index >= 0 ? icons.at(index) : QStringLiteral("inode-directory"));
-    item.insert(
-        QStringLiteral("id"),
-        index >= 0 ? QStringLiteral("builtin:%1").arg(index)
-                   : QStringLiteral("custom:%1").arg(path));
-    item.insert(QStringLiteral("builtIn"), index >= 0);
-    return item;
-}
-
-QStringList favoritePathOrder(const QVariantList &items)
-{
-    QStringList paths;
-    paths.reserve(items.size());
-    for (const QVariant &value : items) {
-        paths.append(normalizeFavoritePath(value.toMap().value(QStringLiteral("path")).toString()));
-    }
-    return paths;
-}
-
-bool isSupportedArchiveConflictPolicy(const QString &policy)
-{
-    return policy == QStringLiteral("keep-both")
-        || policy == QStringLiteral("overwrite")
-        || policy == QStringLiteral("rename");
-}
-
-} // namespace
-
-AppStateFacade::AppStateFacade(
-    NavigationController *navigation,
-    SelectionController *selection,
-    DirectoryModel *model,
-    QObject *parent,
-    Services::SettingsService *settingsService,
-    FileOperationsController *fileOperations,
-    DeviceController *devices,
-    Runtime::ExplorerRuntimePaths runtimePaths,
-    RecentController *recentController,
-    Services::FilesystemService *filesystemService,
-    OpenWithController *openWith,
-    Services::LaunchService *launchService,
-    Services::WallpaperService *wallpaperService,
-    Services::MimeAppsService *mimeAppsService,
-    Services::IconThemeService *iconThemeService)
+AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject *parent)
     : QObject(parent)
-    , m_navigation(navigation)
-    , m_selection(selection)
-    , m_model(model)
-    , m_settingsService(settingsService)
-    , m_fileOperations(fileOperations)
-    , m_devices(devices)
-    , m_recentController(recentController)
-    , m_filesystemService(filesystemService)
-    , m_openWith(openWith)
-    , m_launchService(launchService)
-    , m_wallpaperService(wallpaperService)
-    , m_mimeAppsService(mimeAppsService)
-    , m_iconThemeService(iconThemeService)
-    , m_runtimePaths(std::move(runtimePaths))
+    , m_navigation(dependencies.navigation)
+    , m_selection(dependencies.selection)
+    , m_model(dependencies.model)
+    , m_settings(dependencies.settings)
+    , m_sidebarFavorites(dependencies.sidebarFavorites)
+    , m_archive(dependencies.archive)
+    , m_fileOperations(dependencies.fileOperations)
+    , m_devices(dependencies.devices)
+    , m_recentController(dependencies.recent)
+    , m_filesystemService(dependencies.filesystem)
+    , m_openWith(dependencies.openWith)
+    , m_launchService(dependencies.launch)
+    , m_wallpaperService(dependencies.wallpaper)
+    , m_mimeAppsService(dependencies.mimeApps)
+    , m_iconThemeService(dependencies.iconTheme)
+    , m_runtimePaths(std::move(dependencies.runtimePaths))
 {
     Q_ASSERT(m_navigation != nullptr);
     Q_ASSERT(m_selection != nullptr);
@@ -145,27 +62,50 @@ AppStateFacade::AppStateFacade(
             &AppStateFacade::iconThemeChanged);
     }
 
-    if (m_settingsService != nullptr) {
-        m_settings = m_settingsService->load();
+    if (m_settings != nullptr) {
+        m_settings->bindNavigation(m_navigation);
+        m_settings->bindDeviceController(m_devices);
+        connect(m_settings, &ExplorerSettingsController::showPreviewChanged, this, &AppStateFacade::showPreviewChanged);
+        connect(m_settings, &ExplorerSettingsController::viewModeChanged, this, &AppStateFacade::viewModeChanged);
+        connect(m_settings, &ExplorerSettingsController::sortFieldChanged, this, &AppStateFacade::sortFieldChanged);
+        connect(m_settings, &ExplorerSettingsController::sortAscendingChanged, this, &AppStateFacade::sortAscChanged);
+        connect(m_settings, &ExplorerSettingsController::showHiddenChanged, this, &AppStateFacade::showHiddenChanged);
+        connect(m_settings, &ExplorerSettingsController::foldersFirstChanged, this, &AppStateFacade::foldersFirstChanged);
+        connect(m_settings, &ExplorerSettingsController::groupingEnabledChanged, this, &AppStateFacade::groupingEnabledChanged);
+        connect(m_settings, &ExplorerSettingsController::zoomLevelChanged, this, &AppStateFacade::zoomLevelChanged);
+        connect(m_settings, &ExplorerSettingsController::autoMountDeviceIdsJsonChanged, this, &AppStateFacade::autoMountDeviceIdsJsonChanged);
     }
-    m_sidebarFavoritesModel = new SidebarFavoritesModel(this);
-    m_sidebarFavoritesModel->setItems(sidebarFavorites());
-    m_navigation->setShowHidden(m_settings.showHidden);
-    m_navigation->setSortField(m_settings.sortField);
-    m_navigation->setSortAscending(m_settings.sortAscending);
-    m_navigation->setFoldersFirst(m_settings.foldersFirst);
-    m_navigation->setPreviews(m_settings.showPreview);
-
-    connect(
-        m_navigation,
-        &NavigationController::listingOptionsChanged,
-        this,
-        &AppStateFacade::handleListingOptionsChanged);
-    connect(
-        m_navigation,
-        &NavigationController::currentPathChanged,
-        this,
-        &AppStateFacade::persistCurrentPath);
+    if (m_settings == nullptr) {
+        connect(
+            m_navigation,
+            &NavigationController::listingOptionsChanged,
+            this,
+            [this]() {
+                emit showPreviewChanged();
+                emit sortFieldChanged();
+                emit sortAscChanged();
+                emit showHiddenChanged();
+                emit foldersFirstChanged();
+            });
+    }
+    if (m_sidebarFavorites != nullptr) {
+        connect(m_sidebarFavorites, &SidebarFavoritesController::favoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesJsonChanged);
+        connect(m_sidebarFavorites, &SidebarFavoritesController::hiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarHiddenDefaultFavoritesJsonChanged);
+        connect(m_sidebarFavorites, &SidebarFavoritesController::favoritesChanged, this, &AppStateFacade::sidebarFavoritesChanged);
+    } else if (m_settings != nullptr) {
+        connect(m_settings, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesJsonChanged);
+        connect(m_settings, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarHiddenDefaultFavoritesJsonChanged);
+        connect(m_settings, &ExplorerSettingsController::sidebarFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
+        connect(m_settings, &ExplorerSettingsController::sidebarHiddenDefaultFavoritesJsonChanged, this, &AppStateFacade::sidebarFavoritesChanged);
+    }
+    if (m_archive != nullptr) {
+        connect(m_archive, &ArchiveController::stateChanged, this, &AppStateFacade::archiveStateChanged);
+        connect(
+            m_archive,
+            &ArchiveController::operationFinished,
+            this,
+            &AppStateFacade::filesystemActionFinished);
+    }
 
     connect(
         m_navigation,
@@ -301,7 +241,6 @@ AppStateFacade::AppStateFacade(
             this,
             [this]() {
                 emit deviceStateChanged();
-                emit autoMountDeviceIdsJsonChanged();
             });
     }
     if (m_filesystemService != nullptr) {
@@ -314,35 +253,10 @@ AppStateFacade::AppStateFacade(
                     && result.requestId != m_thumbnailWarmRequest) {
                     return;
                 }
-                if ((result.operation == QStringLiteral("archive-extract")
-                     || result.operation == QStringLiteral("archive-compress"))
-                    && result.requestId == m_archiveRequest) {
-                    m_archiveRunning = false;
-                    m_archivePercent = result.ok ? 100 : 0;
-                    m_archiveProgress = result.ok ? 1.0 : 0.0;
-                    m_archiveDoneCount = result.ok ? 1 : 0;
-                    m_archiveTotalCount = result.ok ? 1 : 0;
-                    m_archiveError = result.ok ? QString() : result.errorMessage;
-                    m_archiveStatus = result.ok ? QStringLiteral("Concluído") : QStringLiteral("Falha");
-                    if (result.ok) {
-                        QJsonValue resultPath = result.data.value(QStringLiteral("destination"));
-                        if (!resultPath.isString()) {
-                            resultPath = result.data.value(QStringLiteral("path"));
-                        }
-                        m_archiveDestinationResult = resultPath.toString();
-                        if (result.operation == QStringLiteral("archive-extract")
-                            && !m_archiveDestinationResult.isEmpty()) {
-                            m_navigation->navigateTo(m_archiveDestinationResult);
-                        }
-                    } else {
-                        m_archiveDestinationResult.clear();
-                    }
-                    // The terminal result releases the native archive slot before
-                    // publishing the snapshot. Re-entrant UI code may start the
-                    // next archive from that signal handler, so do not clear a
-                    // request id that a new operation has already installed.
-                    m_archiveRequest = 0;
-                    emit archiveStateChanged();
+                if (m_archive != nullptr
+                    && (result.operation == QStringLiteral("archive-extract")
+                        || result.operation == QStringLiteral("archive-compress"))) {
+                    return;
                 }
                 if (result.operation == QStringLiteral("install-appimage")) {
                     m_appImageInstallRunning = false;
@@ -421,6 +335,15 @@ AppStateFacade::AppStateFacade(
     }
 }
 
+AppStateFacade::AppStateFacade(
+    NavigationController *navigation,
+    SelectionController *selection,
+    DirectoryModel *model,
+    QObject *parent)
+    : AppStateFacade(AppStateFacadeDependencies {navigation, selection, model}, parent)
+{
+}
+
 QAbstractItemModel *AppStateFacade::fileModel() const
 {
     return m_model;
@@ -428,7 +351,7 @@ QAbstractItemModel *AppStateFacade::fileModel() const
 
 QAbstractItemModel *AppStateFacade::sidebarFavoritesModel() const
 {
-    return m_sidebarFavoritesModel;
+    return m_sidebarFavorites == nullptr ? nullptr : m_sidebarFavorites->model();
 }
 
 QString AppStateFacade::homePath() const
@@ -618,17 +541,17 @@ bool AppStateFacade::fileModelFilling() const
 
 bool AppStateFacade::showPreview() const
 {
-    return m_settings.showPreview;
+    return m_settings == nullptr ? m_navigation->previews() : m_settings->showPreview();
 }
 
 bool AppStateFacade::previewsEnabled() const
 {
-    return m_settings.showPreview;
+    return showPreview();
 }
 
 QString AppStateFacade::viewMode() const
 {
-    return m_settings.viewMode;
+    return m_settings == nullptr ? QStringLiteral("list") : m_settings->viewMode();
 }
 
 QString AppStateFacade::sortField() const
@@ -653,139 +576,56 @@ bool AppStateFacade::foldersFirst() const
 
 bool AppStateFacade::groupingEnabled() const
 {
-    return m_settings.groupingEnabled;
+    return m_settings == nullptr ? true : m_settings->groupingEnabled();
 }
 
 double AppStateFacade::zoomLevel() const
 {
-    return m_settings.zoomLevel;
+    return m_settings == nullptr ? 1.0 : m_settings->zoomLevel();
 }
 
 QString AppStateFacade::autoMountDeviceIdsJson() const
 {
-    return m_devices == nullptr
-        ? m_settings.autoMountDeviceIdsJson
-        : m_devices->autoMountDeviceIdsJson();
+    if (m_devices != nullptr) {
+        return m_devices->autoMountDeviceIdsJson();
+    }
+    return m_settings == nullptr ? QStringLiteral("[]") : m_settings->autoMountDeviceIdsJson();
 }
 
 QString AppStateFacade::sidebarFavoritesJson() const
 {
-    return m_settings.sidebarFavoritesJson;
+    return m_settings == nullptr ? QStringLiteral("[]") : m_settings->sidebarFavoritesJson();
 }
 
 QString AppStateFacade::sidebarHiddenDefaultFavoritesJson() const
 {
-    return m_settings.sidebarHiddenDefaultFavoritesJson;
+    return m_settings == nullptr
+        ? QStringLiteral("[]")
+        : m_settings->sidebarHiddenDefaultFavoritesJson();
 }
 
 QVariantList AppStateFacade::sidebarFavorites() const
 {
-    QVariantList persisted;
-    const QJsonDocument document = QJsonDocument::fromJson(
-        m_settings.sidebarFavoritesJson.toUtf8());
-    if (document.isArray()) {
-        for (const QJsonValue &value : document.array()) {
-            QVariantMap item;
-            if (value.isObject()) {
-                item = value.toObject().toVariantMap();
-            } else if (value.isString()) {
-                item.insert(QStringLiteral("path"), value.toString());
-            }
-            const QString path = item.value(QStringLiteral("path")).toString();
-            if (path.isEmpty()) {
-                continue;
-            }
-            item.insert(QStringLiteral("path"), normalizeFavoritePath(path));
-            if (item.value(QStringLiteral("label")).toString().isEmpty()) {
-                item.insert(
-                    QStringLiteral("label"),
-                    QFileInfo(item.value(QStringLiteral("path")).toString()).fileName());
-            }
-            if (item.value(QStringLiteral("icon")).toString().isEmpty()) {
-                item.insert(QStringLiteral("icon"), QStringLiteral("inode-directory"));
-            }
-            persisted.append(item);
-        }
-    }
-
-    const QVariantList hidden = sidebarHiddenDefaultFavorites();
-    const QStringList defaults = defaultSidebarFavoritePaths();
-    QVariantList result;
-    QStringList seen;
-    for (const QVariant &value : persisted) {
-        QVariantMap item;
-        item = value.toMap();
-        const QString path = normalizeFavoritePath(
-            item.value(QStringLiteral("path")).toString());
-        if (path.isEmpty() || seen.contains(path)) {
-            continue;
-        }
-        if (defaults.contains(path)) {
-            if (std::any_of(hidden.cbegin(), hidden.cend(), [&path](const QVariant &value) {
-                    return normalizeFavoritePath(value.toString()) == path;
-                })) {
-                continue;
-            }
-            item = defaultFavoriteItem(path, homePath());
-        }
-        seen.append(path);
-        result.append(item);
-    }
-    for (const QString &path : defaults) {
-        if (seen.contains(path)
-            || std::any_of(hidden.cbegin(), hidden.cend(), [&path](const QVariant &value) {
-                   return value.toString() == path;
-               })) {
-            continue;
-        }
-        result.append(defaultFavoriteItem(path, homePath()));
-        seen.append(path);
-    }
-    return result;
+    return m_sidebarFavorites == nullptr ? QVariantList() : m_sidebarFavorites->favorites();
 }
 
 QVariantList AppStateFacade::sidebarHiddenDefaultFavorites() const
 {
-    QVariantList result;
-    const QJsonDocument document = QJsonDocument::fromJson(
-        m_settings.sidebarHiddenDefaultFavoritesJson.toUtf8());
-    if (!document.isArray()) {
-        return result;
-    }
-    for (const QJsonValue &value : document.array()) {
-        if (value.isString()) {
-            result.append(normalizeFavoritePath(value.toString()));
-        }
-    }
-    return result;
+    return m_sidebarFavorites == nullptr
+        ? QVariantList()
+        : m_sidebarFavorites->hiddenDefaultFavorites();
 }
 
 int AppStateFacade::sidebarFavoritesRevision() const
 {
-    return m_sidebarFavoritesRevision;
+    return m_sidebarFavorites == nullptr ? 0 : m_sidebarFavorites->revision();
 }
 
 QStringList AppStateFacade::defaultSidebarFavoritePaths() const
 {
-    const QString root = homePath();
-    const QStringList candidates {
-        xdgUserDirectory(QStringLiteral("XDG_DESKTOP_DIR"), QStringLiteral("Desktop"), root),
-        xdgUserDirectory(QStringLiteral("XDG_DOCUMENTS_DIR"), QStringLiteral("Documents"), root),
-        xdgUserDirectory(QStringLiteral("XDG_DOWNLOAD_DIR"), QStringLiteral("Downloads"), root),
-        xdgUserDirectory(QStringLiteral("XDG_PICTURES_DIR"), QStringLiteral("Pictures"), root),
-        xdgUserDirectory(QStringLiteral("XDG_MUSIC_DIR"), QStringLiteral("Music"), root),
-        xdgUserDirectory(QStringLiteral("XDG_VIDEOS_DIR"), QStringLiteral("Videos"), root),
-        xdgUserDirectory(QStringLiteral("XDG_PUBLICSHARE_DIR"), QStringLiteral("Public"), root),
-        xdgUserDirectory(QStringLiteral("XDG_TEMPLATES_DIR"), QStringLiteral("Templates"), root),
-    };
-    QStringList result;
-    for (const QString &path : candidates) {
-        const QString normalized = normalizeFavoritePath(path);
-        if (!normalized.isEmpty() && !result.contains(normalized)) {
-            result.append(normalized);
-        }
-    }
-    return result;
+    return m_sidebarFavorites == nullptr
+        ? QStringList()
+        : m_sidebarFavorites->defaultFavoritePaths();
 }
 
 bool AppStateFacade::inTrashView() const
@@ -951,38 +791,79 @@ QString AppStateFacade::lastUnmountedMountPath() const
     return m_devices == nullptr ? QString() : m_devices->lastUnmountedMountPath();
 }
 
-bool AppStateFacade::archiveExtractionRunning() const { return m_archiveRunning; }
-double AppStateFacade::archiveExtractionProgress() const { return m_archiveProgress; }
-int AppStateFacade::archiveExtractionPercent() const { return m_archivePercent; }
-QString AppStateFacade::archiveExtractionFileName() const { return m_archiveFileName; }
-QString AppStateFacade::archiveExtractionStatus() const { return m_archiveStatus; }
-QString AppStateFacade::archiveExtractionError() const { return m_archiveError; }
+bool AppStateFacade::archiveExtractionRunning() const
+{
+    return m_archive != nullptr && m_archive->running();
+}
+double AppStateFacade::archiveExtractionProgress() const
+{
+    return m_archive == nullptr ? 0.0 : m_archive->progress();
+}
+int AppStateFacade::archiveExtractionPercent() const
+{
+    return m_archive == nullptr ? 0 : m_archive->percent();
+}
+QString AppStateFacade::archiveExtractionFileName() const
+{
+    return m_archive == nullptr ? QString() : m_archive->fileName();
+}
+QString AppStateFacade::archiveExtractionStatus() const
+{
+    return m_archive == nullptr ? QString() : m_archive->status();
+}
+QString AppStateFacade::archiveExtractionError() const
+{
+    return m_archive == nullptr ? QString() : m_archive->error();
+}
 QString AppStateFacade::archiveExtractionDestination() const
 {
-    return m_archiveRunning || m_archiveDestinationResult.isEmpty()
-        ? m_archiveDestination
-        : m_archiveDestinationResult;
+    return m_archive == nullptr ? QString() : m_archive->destination();
 }
-int AppStateFacade::archiveExtractionDoneCount() const { return m_archiveDoneCount; }
-int AppStateFacade::archiveExtractionTotalCount() const { return m_archiveTotalCount; }
-QString AppStateFacade::archiveExtractionRemainingText() const { return m_archiveRunning ? QStringLiteral("Aguardando...") : QString(); }
-bool AppStateFacade::archivePasswordPromptVisible() const { return m_archivePasswordPrompt; }
-QString AppStateFacade::archivePasswordError() const { return m_archivePasswordError; }
-bool AppStateFacade::archiveConflictVisible() const { return m_archiveConflict; }
-QString AppStateFacade::archiveConflictDestination() const { return m_archiveConflictDestination; }
-QString AppStateFacade::archiveConflictName() const { return m_archiveConflictName; }
+int AppStateFacade::archiveExtractionDoneCount() const
+{
+    return m_archive == nullptr ? 0 : m_archive->doneCount();
+}
+int AppStateFacade::archiveExtractionTotalCount() const
+{
+    return m_archive == nullptr ? 0 : m_archive->totalCount();
+}
+QString AppStateFacade::archiveExtractionRemainingText() const
+{
+    return m_archive == nullptr ? QString() : m_archive->remainingText();
+}
+bool AppStateFacade::archivePasswordPromptVisible() const
+{
+    return m_archive != nullptr && m_archive->passwordPromptVisible();
+}
+QString AppStateFacade::archivePasswordError() const
+{
+    return m_archive == nullptr ? QString() : m_archive->passwordError();
+}
+bool AppStateFacade::archiveConflictVisible() const
+{
+    return m_archive != nullptr && m_archive->conflictVisible();
+}
+QString AppStateFacade::archiveConflictDestination() const
+{
+    return m_archive == nullptr ? QString() : m_archive->conflictDestination();
+}
+QString AppStateFacade::archiveConflictName() const
+{
+    return m_archive == nullptr ? QString() : m_archive->conflictName();
+}
 bool AppStateFacade::appImageInstallRunning() const { return m_appImageInstallRunning; }
 bool AppStateFacade::wallpaperApplyRunning() const { return m_wallpaperApplyRunning; }
 
 void AppStateFacade::setShowPreview(bool showPreviewValue)
 {
-    if (m_settings.showPreview == showPreviewValue) {
+    if (m_settings != nullptr) {
+        m_settings->setShowPreview(showPreviewValue);
         return;
     }
-    m_settings.showPreview = showPreviewValue;
-    persistSettings();
+    if (m_navigation->previews() == showPreviewValue) {
+        return;
+    }
     m_navigation->setPreviews(showPreviewValue);
-    emit showPreviewChanged();
 }
 
 void AppStateFacade::setPreviewsEnabled(bool enabled)
@@ -992,73 +873,62 @@ void AppStateFacade::setPreviewsEnabled(bool enabled)
 
 void AppStateFacade::setViewMode(const QString &viewModeValue)
 {
-    if (m_settings.viewMode == viewModeValue) {
+    if (m_settings == nullptr) {
         return;
     }
-    m_settings.viewMode = viewModeValue;
-    persistSettings();
-    emit viewModeChanged();
+    m_settings->setViewMode(viewModeValue);
 }
 
 void AppStateFacade::setSortField(const QString &sortFieldValue)
 {
-    if (m_navigation->sortField() == sortFieldValue) {
+    if (m_settings != nullptr) {
+        m_settings->setSortField(sortFieldValue);
         return;
     }
-    m_settings.sortField = sortFieldValue;
-    persistSettings();
     m_navigation->setSortField(sortFieldValue);
 }
 
 void AppStateFacade::setSortAsc(bool sortAscendingValue)
 {
-    if (m_navigation->sortAscending() == sortAscendingValue) {
+    if (m_settings != nullptr) {
+        m_settings->setSortAscending(sortAscendingValue);
         return;
     }
-    m_settings.sortAscending = sortAscendingValue;
-    persistSettings();
     m_navigation->setSortAscending(sortAscendingValue);
 }
 
 void AppStateFacade::setShowHidden(bool showHiddenValue)
 {
-    if (m_navigation->showHidden() == showHiddenValue) {
+    if (m_settings != nullptr) {
+        m_settings->setShowHidden(showHiddenValue);
         return;
     }
-    m_settings.showHidden = showHiddenValue;
-    persistSettings();
     m_navigation->setShowHidden(showHiddenValue);
 }
 
 void AppStateFacade::setFoldersFirst(bool foldersFirstValue)
 {
-    if (m_navigation->foldersFirst() == foldersFirstValue) {
+    if (m_settings != nullptr) {
+        m_settings->setFoldersFirst(foldersFirstValue);
         return;
     }
-    m_settings.foldersFirst = foldersFirstValue;
-    persistSettings();
     m_navigation->setFoldersFirst(foldersFirstValue);
 }
 
 void AppStateFacade::setGroupingEnabled(bool groupingEnabledValue)
 {
-    if (m_settings.groupingEnabled == groupingEnabledValue) {
+    if (m_settings == nullptr) {
         return;
     }
-    m_settings.groupingEnabled = groupingEnabledValue;
-    persistSettings();
-    emit groupingEnabledChanged();
+    m_settings->setGroupingEnabled(groupingEnabledValue);
 }
 
 void AppStateFacade::setZoomLevel(double zoomLevelValue)
 {
-    zoomLevelValue = qBound(0.75, zoomLevelValue, 2.0);
-    if (qFuzzyCompare(m_settings.zoomLevel, zoomLevelValue)) {
+    if (m_settings == nullptr) {
         return;
     }
-    m_settings.zoomLevel = zoomLevelValue;
-    persistSettings();
-    emit zoomLevelChanged();
+    m_settings->setZoomLevel(zoomLevelValue);
 }
 
 void AppStateFacade::increaseZoom()
@@ -1083,52 +953,27 @@ void AppStateFacade::setZoom(double level)
 
 void AppStateFacade::setAutoMountDeviceIdsJson(const QString &json)
 {
-    if (m_settings.autoMountDeviceIdsJson == json) {
-        return;
+    if (m_settings != nullptr) {
+        m_settings->setAutoMountDeviceIdsJson(json);
+    } else if (m_devices != nullptr) {
+        m_devices->setAutoMountDeviceIdsJson(json);
     }
-    m_settings.autoMountDeviceIdsJson = json;
-    persistSettings();
-    emit autoMountDeviceIdsJsonChanged();
 }
 
 void AppStateFacade::setSidebarFavoritesJson(const QString &json)
 {
-    if (m_settings.sidebarFavoritesJson == json) {
+    if (m_settings == nullptr) {
         return;
     }
-    m_settings.sidebarFavoritesJson = json;
-    persistSettings();
-    emit sidebarFavoritesJsonChanged();
-    syncSidebarFavoritesModel();
-    ++m_sidebarFavoritesRevision;
-    emit sidebarFavoritesChanged();
+    m_settings->setSidebarFavoritesJson(json);
 }
 
 void AppStateFacade::setSidebarHiddenDefaultFavoritesJson(const QString &json)
 {
-    if (m_settings.sidebarHiddenDefaultFavoritesJson == json) {
+    if (m_settings == nullptr) {
         return;
     }
-    m_settings.sidebarHiddenDefaultFavoritesJson = json;
-    persistSettings();
-    emit sidebarHiddenDefaultFavoritesJsonChanged();
-    syncSidebarFavoritesModel();
-    ++m_sidebarFavoritesRevision;
-    emit sidebarFavoritesChanged();
-}
-
-void AppStateFacade::syncSidebarFavoritesModel()
-{
-    if (m_sidebarFavoritesModel != nullptr) {
-        m_sidebarFavoritesModel->setItems(sidebarFavorites());
-    }
-}
-
-void AppStateFacade::persistSidebarFavoriteItems(const QVariantList &items)
-{
-    setSidebarFavoritesJson(
-        QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(items))
-                              .toJson(QJsonDocument::Compact)));
+    m_settings->setSidebarHiddenDefaultFavoritesJson(json);
 }
 
 void AppStateFacade::setDialogActive(bool active)
@@ -1406,125 +1251,45 @@ void AppStateFacade::emptyTrash()
     }
 }
 
-bool AppStateFacade::archiveWorkflowOccupied() const
-{
-    return m_archiveRunning || m_archivePasswordPrompt || m_archiveConflict;
-}
-
 void AppStateFacade::startArchiveExtraction(const QString &path, const QString &folderName)
 {
-    if (archiveWorkflowOccupied() || m_filesystemService == nullptr || path.isEmpty()) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->startArchiveExtraction(path, folderName);
     }
-    m_archivePath = path;
-    const QString defaultName = QFileInfo(path).completeBaseName();
-    m_archiveDestination = QDir(m_navigation->currentPath()).filePath(
-        folderName.isEmpty() ? defaultName : folderName);
-    m_archiveConflictPolicy = QStringLiteral("keep-both");
-    m_archiveFileName = QFileInfo(path).fileName();
-    m_archiveStatus = QStringLiteral("Extraindo...");
-    m_archiveError.clear();
-    m_archiveDestinationResult.clear();
-    m_archivePasswordError.clear();
-    m_archivePasswordPrompt = false;
-    m_archiveConflict = false;
-    m_archiveConflictDestination.clear();
-    m_archiveConflictName.clear();
-    m_archivePercent = 0;
-    m_archiveProgress = 0.0;
-    m_archiveDoneCount = 0;
-    m_archiveTotalCount = 0;
-    m_archiveRunning = true;
-    emit archiveStateChanged();
-    m_archiveRequest = m_filesystemService->archiveExtract(
-        m_archivePath, m_archiveDestination, QString(), m_archiveConflictPolicy);
-}
-
-void AppStateFacade::startArchivePasswordContinuation(const QString &password)
-{
-    m_archivePasswordError.clear();
-    m_archiveError.clear();
-    m_archiveDestinationResult.clear();
-    m_archiveStatus = QStringLiteral("Extraindo...");
-    m_archivePercent = 0;
-    m_archiveProgress = 0.0;
-    m_archiveDoneCount = 0;
-    m_archiveTotalCount = 0;
-    m_archiveRunning = true;
-    emit archiveStateChanged();
-    m_archiveRequest = m_filesystemService->archiveExtract(
-        m_archivePath, m_archiveDestination, password, m_archiveConflictPolicy);
 }
 
 void AppStateFacade::submitArchivePassword(const QString &password)
 {
-    if (m_filesystemService == nullptr
-        || m_archivePath.isEmpty()
-        || !m_archivePasswordPrompt
-        || m_archiveRunning) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->submitArchivePassword(password);
     }
-    m_archivePasswordPrompt = false;
-    startArchivePasswordContinuation(password);
 }
 
 void AppStateFacade::cancelArchivePassword()
 {
-    if (!m_archivePasswordPrompt) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->cancelArchivePassword();
     }
-    m_archivePasswordPrompt = false;
-    emit archiveStateChanged();
 }
 
 void AppStateFacade::submitArchiveConflict(const QString &policy)
 {
-    if (m_filesystemService == nullptr
-        || m_archivePath.isEmpty()
-        || !m_archiveConflict
-        || m_archiveRunning
-        || !isSupportedArchiveConflictPolicy(policy)) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->submitArchiveConflict(policy);
     }
-    m_archiveConflictPolicy = policy;
-    m_archiveConflict = false;
-    startArchivePasswordContinuation(QString());
 }
 
 void AppStateFacade::cancelArchiveConflict()
 {
-    if (!m_archiveConflict) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->cancelArchiveConflict();
     }
-    m_archiveConflict = false;
-    emit archiveStateChanged();
 }
 void AppStateFacade::startFolderCompression(const QString &path, const QString &format)
 {
-    if (archiveWorkflowOccupied() || m_filesystemService == nullptr || path.isEmpty()) {
-        return;
+    if (m_archive != nullptr) {
+        m_archive->startFolderCompression(path, format);
     }
-    const QString suffix = format.isEmpty() ? QStringLiteral("tar.gz") : format;
-    m_archivePath = path;
-    m_archiveFileName = QFileInfo(path).fileName();
-    m_archiveDestination = QDir(m_navigation->currentPath()).filePath(
-        m_archiveFileName + QStringLiteral(".") + suffix);
-    m_archiveStatus = QStringLiteral("Comprimindo...");
-    m_archiveError.clear();
-    m_archiveDestinationResult.clear();
-    m_archivePasswordError.clear();
-    m_archivePasswordPrompt = false;
-    m_archiveConflict = false;
-    m_archiveConflictDestination.clear();
-    m_archiveConflictName.clear();
-    m_archivePercent = 0;
-    m_archiveProgress = 0.0;
-    m_archiveDoneCount = 0;
-    m_archiveTotalCount = 0;
-    m_archiveRunning = true;
-    emit archiveStateChanged();
-    m_archiveRequest = m_filesystemService->archiveCompress(
-        path, m_archiveDestination, suffix);
 }
 void AppStateFacade::installAppImage(const QString &path)
 {
@@ -1958,50 +1723,20 @@ bool AppStateFacade::isTrashPath(const QString &path) const
 
 bool AppStateFacade::canPinSidebarFavorite(const QString &path) const
 {
-    return path.startsWith(QLatin1Char('/')) && !isTrashPath(path);
+    return m_sidebarFavorites != nullptr && m_sidebarFavorites->canPin(path);
 }
 
 bool AppStateFacade::isSidebarFavorite(const QString &path) const
 {
-    const QString normalizedPath = normalizeFavoritePath(path);
-    for (const QVariant &value : sidebarFavorites()) {
-        if (normalizeFavoritePath(value.toMap().value(QStringLiteral("path")).toString())
-            == normalizedPath) {
-            return true;
-        }
-    }
-    const QVariantList hidden = sidebarHiddenDefaultFavorites();
-    for (const QString &defaultPath : defaultSidebarFavoritePaths()) {
-        if (defaultPath != normalizedPath) {
-            continue;
-        }
-        return std::none_of(
-            hidden.cbegin(),
-            hidden.cend(),
-            [&normalizedPath](const QVariant &value) {
-                return normalizeFavoritePath(value.toString()) == normalizedPath;
-            });
-    }
-    return false;
+    return m_sidebarFavorites != nullptr && m_sidebarFavorites->isFavorite(path);
 }
 
 QVariantList AppStateFacade::visibleDefaultSidebarFavorites(
     const QVariantList &items) const
 {
-    const QVariantList hidden = sidebarHiddenDefaultFavorites();
-    QVariantList visible;
-    for (const QVariant &value : items) {
-        const QVariantMap item = value.toMap();
-        const QString path = item.value(QStringLiteral("path")).toString();
-        const bool isHidden = std::any_of(
-            hidden.cbegin(),
-            hidden.cend(),
-            [&path](const QVariant &hiddenPath) { return hiddenPath.toString() == path; });
-        if (!isHidden) {
-            visible.append(item);
-        }
-    }
-    return visible;
+    return m_sidebarFavorites == nullptr
+        ? QVariantList()
+        : m_sidebarFavorites->visibleDefaults(items);
 }
 
 void AppStateFacade::pinSidebarFavorite(
@@ -2009,109 +1744,45 @@ void AppStateFacade::pinSidebarFavorite(
     const QString &label,
     const QString &icon)
 {
-    const QString normalizedPath = normalizeFavoritePath(path);
-    if (!canPinSidebarFavorite(normalizedPath)) {
-        return;
+    if (m_sidebarFavorites != nullptr) {
+        m_sidebarFavorites->pin(path, label, icon);
     }
-    if (defaultSidebarFavoritePaths().contains(normalizedPath)) {
-        QVariantList hidden;
-        for (const QVariant &value : sidebarHiddenDefaultFavorites()) {
-            if (normalizeFavoritePath(value.toString()) != normalizedPath) {
-                hidden.append(value);
-            }
-        }
-        setSidebarHiddenDefaultFavoritesJson(
-            QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(hidden))
-                                  .toJson(QJsonDocument::Compact)));
-        return;
-    }
-    if (isSidebarFavorite(normalizedPath)) {
-        return;
-    }
-
-    QVariantList favorites = sidebarFavorites();
-    QVariantMap item;
-    item.insert(QStringLiteral("label"), label.isEmpty() ? QFileInfo(normalizedPath).fileName() : label);
-    item.insert(QStringLiteral("icon"), icon.isEmpty() ? QStringLiteral("inode-directory") : icon);
-    item.insert(QStringLiteral("path"), normalizedPath);
-    favorites.append(item);
-    setSidebarFavoritesJson(
-        QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(favorites))
-                              .toJson(QJsonDocument::Compact)));
 }
 
 void AppStateFacade::removeSidebarFavorite(const QString &path)
 {
-    const QString normalizedPath = normalizeFavoritePath(path);
-    if (defaultSidebarFavoritePaths().contains(normalizedPath)) {
-        QVariantList hidden = sidebarHiddenDefaultFavorites();
-        if (std::none_of(
-                hidden.cbegin(),
-                hidden.cend(),
-                [&normalizedPath](const QVariant &value) {
-                    return normalizeFavoritePath(value.toString()) == normalizedPath;
-                })) {
-            hidden.append(normalizedPath);
-            setSidebarHiddenDefaultFavoritesJson(
-                QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(hidden))
-                                      .toJson(QJsonDocument::Compact)));
-        }
-        return;
+    if (m_sidebarFavorites != nullptr) {
+        m_sidebarFavorites->remove(path);
     }
-
-    QVariantList favorites;
-    for (const QVariant &value : sidebarFavorites()) {
-        if (normalizeFavoritePath(value.toMap().value(QStringLiteral("path")).toString())
-            != normalizedPath) {
-            favorites.append(value);
-        }
-    }
-    setSidebarFavoritesJson(
-        QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(favorites))
-                              .toJson(QJsonDocument::Compact)));
 }
 
 void AppStateFacade::moveSidebarFavorite(const QString &path, int targetIndex)
 {
-    if (!beginSidebarFavoriteDrag(path)) {
-        return;
+    if (m_sidebarFavorites != nullptr) {
+        m_sidebarFavorites->move(path, targetIndex);
     }
-    if (!previewSidebarFavoriteMove(path, targetIndex)) {
-        cancelSidebarFavoriteDrag();
-        return;
-    }
-    commitSidebarFavoriteDrag();
 }
 
 bool AppStateFacade::beginSidebarFavoriteDrag(const QString &path)
 {
-    return m_sidebarFavoritesModel != nullptr && m_sidebarFavoritesModel->beginDrag(path);
+    return m_sidebarFavorites != nullptr && m_sidebarFavorites->beginDrag(path);
 }
 
 bool AppStateFacade::previewSidebarFavoriteMove(const QString &path, int finalIndex)
 {
-    return m_sidebarFavoritesModel != nullptr
-        && m_sidebarFavoritesModel->moveFavorite(path, finalIndex);
+    return m_sidebarFavorites != nullptr
+        && m_sidebarFavorites->previewMove(path, finalIndex);
 }
 
 bool AppStateFacade::commitSidebarFavoriteDrag()
 {
-    if (m_sidebarFavoritesModel == nullptr || !m_sidebarFavoritesModel->dragActive()) {
-        return false;
-    }
-    const QVariantList originalItems = sidebarFavorites();
-    const QVariantList committedItems = m_sidebarFavoritesModel->commitDrag();
-    if (favoritePathOrder(originalItems) == favoritePathOrder(committedItems)) {
-        return false;
-    }
-    persistSidebarFavoriteItems(committedItems);
-    return true;
+    return m_sidebarFavorites != nullptr && m_sidebarFavorites->commitDrag();
 }
 
 void AppStateFacade::cancelSidebarFavoriteDrag()
 {
-    if (m_sidebarFavoritesModel != nullptr) {
-        m_sidebarFavoritesModel->cancelDrag();
+    if (m_sidebarFavorites != nullptr) {
+        m_sidebarFavorites->cancelDrag();
     }
 }
 
@@ -2174,32 +1845,6 @@ void AppStateFacade::handleModelChanged()
 {
     ++m_fileModelRevision;
     emit fileModelRevisionChanged();
-}
-
-void AppStateFacade::handleListingOptionsChanged()
-{
-    m_settings.showHidden = m_navigation->showHidden();
-    m_settings.sortField = m_navigation->sortField();
-    m_settings.sortAscending = m_navigation->sortAscending();
-    m_settings.foldersFirst = m_navigation->foldersFirst();
-    persistSettings();
-    emit sortFieldChanged();
-    emit sortAscChanged();
-    emit showHiddenChanged();
-    emit foldersFirstChanged();
-}
-
-void AppStateFacade::persistCurrentPath()
-{
-    m_settings.currentPath = m_navigation->currentPath();
-    persistSettings();
-}
-
-void AppStateFacade::persistSettings()
-{
-    if (m_settingsService != nullptr) {
-        m_settingsService->save(m_settings);
-    }
 }
 
 } // namespace Astrea::Explorer::Native::Backend

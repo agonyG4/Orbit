@@ -26,6 +26,7 @@ private slots:
     void currentPathChangesPersist();
     void runtimeAutoMountChangesPersist();
     void compatibilityJsonUpdatesRuntimeAndCanonicalizesInvalidInput();
+    void compatibilityJsonCanonicalizesWithoutDeviceController();
     void reloadingSettingsRestoresCanonicalAutoMountState();
 };
 
@@ -187,6 +188,19 @@ void ExplorerSettingsControllerTest::compatibilityJsonUpdatesRuntimeAndCanonical
     QVERIFY(!fixture.devices.isAutoMount(QStringLiteral("compat")));
     QCOMPARE(fixture.devices.autoMountDeviceIdsJson(), QStringLiteral("[]"));
     QCOMPARE(settings.load().autoMountDeviceIdsJson, QStringLiteral("[]"));
+}
+
+void ExplorerSettingsControllerTest::compatibilityJsonCanonicalizesWithoutDeviceController()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    SettingsService settings = settingsAt(directory);
+    ExplorerSettingsController controller(&settings);
+
+    controller.setAutoMountDeviceIdsJson(QStringLiteral("[\"usb-2\", 7, \"usb-1\", \"usb-2\", \"\"]"));
+
+    QCOMPARE(controller.autoMountDeviceIdsJson(), QStringLiteral("[\"usb-1\",\"usb-2\"]"));
+    QCOMPARE(settings.load().autoMountDeviceIdsJson, QStringLiteral("[\"usb-1\",\"usb-2\"]"));
 }
 
 void ExplorerSettingsControllerTest::reloadingSettingsRestoresCanonicalAutoMountState()

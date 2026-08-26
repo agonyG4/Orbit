@@ -77,10 +77,10 @@ QtObject {
     property string archiveExtractionRemainingText: bridge ? bridge.archiveExtractionRemainingText : ""
     property bool archivePasswordPromptVisible: bridge ? bridge.archivePasswordPromptVisible : false
     property string archivePassword: ""
-    property string archivePasswordError: ""
-    property bool archiveConflictVisible: false
-    property string archiveConflictDestination: ""
-    property string archiveConflictName: ""
+    property string archivePasswordError: bridge ? bridge.archivePasswordError : ""
+    property bool archiveConflictVisible: bridge ? bridge.archiveConflictVisible : false
+    property string archiveConflictDestination: bridge ? bridge.archiveConflictDestination : ""
+    property string archiveConflictName: bridge ? bridge.archiveConflictName : ""
     property bool fileOperationRunning: bridge ? bridge.fileOperationRunning : false
     property real fileOperationProgress: bridge ? bridge.fileOperationProgress : 0
     property int fileOperationPercent: bridge ? bridge.fileOperationPercent : 0
@@ -93,8 +93,8 @@ QtObject {
     property string fileOperationMode: bridge ? bridge.fileOperationMode : ""
     property string fileOperationState: bridge ? bridge.fileOperationState : ""
     property var fileOperationItems: bridge ? bridge.fileOperationItems : []
-    property bool appImageInstallRunning: false
-    property bool wallpaperApplyRunning: false
+    property bool appImageInstallRunning: bridge ? bridge.appImageInstallRunning : false
+    property bool wallpaperApplyRunning: bridge ? bridge.wallpaperApplyRunning : false
 
     function joinPath(directory, name) { return bridge ? bridge.joinPath(directory, name) : directory + "/" + name }
     function fileUrlForPath(path) { return bridge ? bridge.fileUrlForPath(path) : path }

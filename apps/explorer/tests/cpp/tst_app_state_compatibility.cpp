@@ -9,7 +9,6 @@
 #include <QtTest>
 
 #include "backend/fake_backend_client.h"
-#include "controllers/app_state_facade.h"
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
 #include "controllers/selection_controller.h"
@@ -17,6 +16,11 @@
 #include "services/directory_watch_service.h"
 #include "services/file_operation_service.h"
 #include "services/filesystem_service.h"
+
+#define private public
+#include "controllers/archive_controller.h"
+#include "controllers/app_state_facade.h"
+#undef private
 
 using namespace Astrea::Explorer::Native::Backend;
 
@@ -492,7 +496,12 @@ void AppStateCompatibilityTest::nativeAdapterPublishesAggregateOperationSnapshot
     DirectoryWatchService watcher;
     NavigationController navigation(&client, &model, &watcher);
     SelectionController selection(&model);
-    AppStateFacade facade(&navigation, &selection, &model, nullptr, nullptr, &operations);
+    AppStateFacadeDependencies dependencies;
+    dependencies.navigation = &navigation;
+    dependencies.selection = &selection;
+    dependencies.model = &model;
+    dependencies.fileOperations = &operations;
+    AppStateFacade facade(dependencies);
 
     qmlRegisterSingletonInstance<AppStateFacade>(
         "Astrea.Explorer.Native",
@@ -554,17 +563,14 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     NavigationController navigation(&client, &model, &watcher);
     SelectionController selection(&model);
     Astrea::Explorer::Native::Services::FilesystemService filesystem(&client);
-    AppStateFacade facade(
-        &navigation,
-        &selection,
-        &model,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        {},
-        nullptr,
-        &filesystem);
+    ArchiveController archive(&filesystem, &navigation);
+    AppStateFacadeDependencies dependencies;
+    dependencies.navigation = &navigation;
+    dependencies.selection = &selection;
+    dependencies.model = &model;
+    dependencies.archive = &archive;
+    dependencies.filesystem = &filesystem;
+    AppStateFacade facade(dependencies);
 
     qmlRegisterSingletonInstance<AppStateFacade>(
         "Astrea.Explorer.Native",
@@ -672,8 +678,56 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
         pipelineState->property("bridge").value<QObject *>() != nullptr,
         1000);
 
+    QCOMPARE(
+        pipelineState->property("archivePasswordError").toString(),
+        adapter->property("archivePasswordError").toString());
+    QCOMPARE(
+        pipelineState->property("archiveConflictVisible").toBool(),
+        adapter->property("archiveConflictVisible").toBool());
+    QCOMPARE(
+        pipelineState->property("archiveConflictDestination").toString(),
+        adapter->property("archiveConflictDestination").toString());
+    QCOMPARE(
+        pipelineState->property("archiveConflictName").toString(),
+        adapter->property("archiveConflictName").toString());
+    QCOMPARE(
+        pipelineState->property("appImageInstallRunning").toBool(),
+        adapter->property("appImageInstallRunning").toBool());
+    QCOMPARE(
+        pipelineState->property("wallpaperApplyRunning").toBool(),
+        adapter->property("wallpaperApplyRunning").toBool());
+
+    archive.m_passwordError = QStringLiteral("incorrect password");
+    archive.m_conflict = true;
+    archive.m_conflictDestination = QStringLiteral("/tmp/existing");
+    archive.m_conflictName = QStringLiteral("existing");
+    facade.m_appImageInstallRunning = true;
+    facade.m_wallpaperApplyRunning = true;
+    QSignalSpy facadeArchiveSpy(&facade, &AppStateFacade::archiveStateChanged);
+    QCOMPARE(facade.archivePasswordError(), QStringLiteral("incorrect password"));
+    QCOMPARE(facade.archiveConflictVisible(), true);
+    archive.publishState();
+    QTRY_COMPARE(facadeArchiveSpy.count(), 1);
+    QTRY_COMPARE(
+        adapter->property("archivePasswordError").toString(),
+        QStringLiteral("incorrect password"));
+    QTRY_COMPARE(
+        pipelineState->property("archivePasswordError").toString(),
+        QStringLiteral("incorrect password"));
+    QTRY_VERIFY(pipelineState->property("archiveConflictVisible").toBool());
+    QTRY_COMPARE(
+        pipelineState->property("archiveConflictDestination").toString(),
+        QStringLiteral("/tmp/existing"));
+    QTRY_COMPARE(
+        pipelineState->property("archiveConflictName").toString(),
+        QStringLiteral("existing"));
+    emit facade.wallpaperStateChanged();
+    QTRY_VERIFY(pipelineState->property("appImageInstallRunning").toBool());
+    QTRY_VERIFY(pipelineState->property("wallpaperApplyRunning").toBool());
+
+    archive.m_conflict = false;
     facade.startFolderCompression(QStringLiteral("/tmp/folder"), QStringLiteral("zip"));
-    QTRY_COMPARE(archiveSpy.count(), 3);
+    QTRY_COMPARE(archiveSpy.count(), 4);
     QTRY_COMPARE(pipelinePresenter->property("activeKind").toString(), QStringLiteral("archive"));
     QCOMPARE(pipelinePresenter->property("phase").toString(), QStringLiteral("running"));
     QCOMPARE(pipelinePresenter->property("indeterminate").toBool(), true);
@@ -684,22 +738,22 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     compressionSuccess.ok = true;
     compressionSuccess.data.insert(QStringLiteral("destination"), QStringLiteral("/tmp/folder.zip"));
     client.completeUtility(compressionRequestId, compressionSuccess);
-    QTRY_COMPARE(archiveSpy.count(), 4);
+    QTRY_COMPARE(archiveSpy.count(), 5);
     QTRY_VERIFY(!facade.archiveExtractionRunning());
     QTRY_COMPARE(pipelinePresenter->property("phase").toString(), QStringLiteral("terminal"));
     QCOMPARE(pipelinePresenter->property("title").toString(), QStringLiteral("Completed"));
     QCOMPARE(pipelinePresenter->property("percent").toInt(), 100);
 
     facade.startArchiveExtraction(QStringLiteral("/tmp/failing.zip"), QStringLiteral("failed"));
-    QTRY_COMPARE(archiveSpy.count(), 5);
+    QTRY_COMPARE(archiveSpy.count(), 6);
     const BackendRequestId failedRequestId = static_cast<BackendRequestId>(
         client.listRequests().size() + client.utilityRequests().size());
     client.failRequest(
         failedRequestId,
         QStringLiteral("permission_denied"),
         QStringLiteral("archive destination is not writable"));
-    QTRY_COMPARE(archiveSpy.count(), 6);
-    const QVariantMap failed = archiveSpy.at(5).at(0).toMap();
+    QTRY_COMPARE(archiveSpy.count(), 7);
+    const QVariantMap failed = archiveSpy.at(6).at(0).toMap();
     QCOMPARE(failed.value(QStringLiteral("running")).toBool(), false);
     QCOMPARE(failed.value(QStringLiteral("progress")).toDouble(), 0.0);
     QCOMPARE(failed.value(QStringLiteral("percent")).toInt(), 0);
