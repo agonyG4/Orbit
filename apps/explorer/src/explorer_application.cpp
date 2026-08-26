@@ -22,13 +22,16 @@
 #include "backend/persistent_worker_transport.h"
 #include "backend/rust_backend_client.h"
 #include "controllers/app_state_facade.h"
+#include "controllers/archive_controller.h"
 #include "controllers/device_controller.h"
+#include "controllers/explorer_settings_controller.h"
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
 #include "controllers/open_with_controller.h"
 #include "controllers/portal_controller.h"
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
+#include "controllers/sidebar_favorites_controller.h"
 #include "models/directory_model.h"
 #include "runtime/astrea_icon_image_provider.h"
 #include "runtime/explorer_runtime_paths.h"
@@ -37,7 +40,9 @@
 #include "services/desktop_application_catalog.h"
 #include "services/file_operation_service.h"
 #include "services/filesystem_service.h"
+#include "services/icon_theme_service.h"
 #include "services/launch_service.h"
+#include "services/wallpaper_service.h"
 #include "services/settings_service.h"
 
 namespace {
@@ -188,7 +193,7 @@ int ExplorerApplication::run(int argc, char **argv)
     DirectoryWatchService directoryWatcher(&application);
     SettingsService settings(
         QDir(QDir::homePath()).filePath(QStringLiteral(".config/explorer.conf")));
-    const ExplorerSettings initialSettings = settings.load();
+    ExplorerSettingsController explorerSettingsController(&settings, &application);
     ClipboardService clipboard(QGuiApplication::clipboard());
     LaunchService launchService(
         runtimePaths.launcherProgram,
@@ -205,7 +210,7 @@ int ExplorerApplication::run(int argc, char **argv)
     DeviceController devices(
         &backendClient,
         &application,
-        initialSettings.autoMountDeviceIdsJson);
+        explorerSettingsController.autoMountDeviceIdsJson());
     OpenWithController openWith(&launchService, &application);
     openWith.setCatalog(&applicationCatalog);
     openWith.setMimeAppsService(&mimeApps);
@@ -216,6 +221,10 @@ int ExplorerApplication::run(int argc, char **argv)
         &directoryModel,
         &directoryWatcher,
         &application);
+    explorerSettingsController.bindNavigation(&navigation);
+    explorerSettingsController.bindDeviceController(&devices);
+    SidebarFavoritesController sidebarFavorites(&explorerSettingsController, &application);
+    ArchiveController archive(&filesystemService, &navigation, &application);
     RecentSourcePaths recentSources;
     recentSources.finderPath = QDir(QDir::homePath()).filePath(
         QStringLiteral(".local/state/Astrea/finder-recents.json"));
@@ -229,22 +238,24 @@ int ExplorerApplication::run(int argc, char **argv)
     RecentController recentController(&recentStore, &application);
     navigation.setRecentController(&recentController, recentSources);
     SelectionController selection(&directoryModel, &application);
-    AppStateFacade appState(
-        &navigation,
-        &selection,
-        &directoryModel,
-        &application,
-        &settings,
-        &fileOperations,
-        &devices,
-        runtimePaths,
-        &recentController,
-        &filesystemService,
-        &openWith,
-        &launchService,
-        &wallpaper,
-        &mimeApps,
-        &iconThemeService);
+    AppStateFacadeDependencies appStateDependencies;
+    appStateDependencies.navigation = &navigation;
+    appStateDependencies.selection = &selection;
+    appStateDependencies.model = &directoryModel;
+    appStateDependencies.settings = &explorerSettingsController;
+    appStateDependencies.sidebarFavorites = &sidebarFavorites;
+    appStateDependencies.archive = &archive;
+    appStateDependencies.fileOperations = &fileOperations;
+    appStateDependencies.devices = &devices;
+    appStateDependencies.recent = &recentController;
+    appStateDependencies.filesystem = &filesystemService;
+    appStateDependencies.openWith = &openWith;
+    appStateDependencies.launch = &launchService;
+    appStateDependencies.wallpaper = &wallpaper;
+    appStateDependencies.mimeApps = &mimeApps;
+    appStateDependencies.iconTheme = &iconThemeService;
+    appStateDependencies.runtimePaths = runtimePaths;
+    AppStateFacade appState(appStateDependencies, &application);
     qmlRegisterSingletonInstance<AppStateFacade>(
         kBootstrapModuleUri,
         1,
@@ -309,9 +320,9 @@ int ExplorerApplication::run(int argc, char **argv)
         navigation.navigateTo(
             !requestedStartPath.isEmpty()
                 ? requestedStartPath
-                : (initialSettings.currentPath.isEmpty()
+                : (explorerSettingsController.currentPath().isEmpty()
                        ? QDir::homePath()
-                       : initialSettings.currentPath));
+                       : explorerSettingsController.currentPath()));
     }
 
     if (useSelfTest) {

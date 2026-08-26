@@ -1,9 +1,10 @@
 # Explorer operation progress contract
 
 Astrea Explorer publishes file and archive operation updates as aggregate
-state snapshots. The native `AppStateFacade` remains the source of truth and
-emits `fileOperationStateChanged()` or `archiveStateChanged()` after the
-corresponding aggregate state has been updated.
+state snapshots. `FileOperationsController` and `ArchiveController` own their
+respective native state; `AppStateFacade` remains the stable QML projection
+and forwards `fileOperationStateChanged()` or `archiveStateChanged()` after
+the corresponding aggregate state has been updated.
 
 `NativeAppStateAdapter.qml` listens to those native aggregate signals and
 captures a snapshot directly from the facade in the signal handler. It emits
@@ -14,10 +15,11 @@ snapshot functions for initial presenter synchronisation.
 
 ## Archive ownership
 
-The native `AppStateFacade` owns one archive slot. `startArchiveExtraction()`
+The native `ArchiveController` owns one archive slot. `startArchiveExtraction()`
 and `startFolderCompression()` are top-level archive submissions and are
-single-flight: while that slot is running, either new submission is rejected
-without changing the active request, its metadata, or its published snapshot.
+single-flight: while that workflow is occupied by a running operation, a
+password continuation, or a conflict continuation, either new submission is
+rejected without changing the active request, its metadata, or its published snapshot.
 File copy and move work is owned by `FileOperationsController` and may run at
 the same time as the one archive operation.
 
@@ -54,7 +56,7 @@ native completion immediate and truthful.
 
 The presenter is not a scheduler and does not own admission, cancellation, or
 queueing. Its terminal-card lifetime is independent from the native archive
-slot lifetime.
+workflow occupancy lifetime.
 
 Archive progress remains intentionally indeterminate because the archive
 backend publishes terminal lifecycle events rather than a streaming progress

@@ -8,9 +8,11 @@ image.
 
 - QML owns presentation, layout, delegates, animation, and transient visual
   state.
-- C++/Qt owns application lifecycle, the QML engine, state, navigation,
-  selection, settings, controllers, filesystem orchestration, recent state,
-  and portal integration.
+- C++/Qt owns application lifecycle, the QML engine, native services, state,
+  navigation, selection, settings, controllers, filesystem orchestration,
+  recent state, and portal integration. `AppStateFacade` is a stable QML
+  projection; `ExplorerSettingsController`, `SidebarFavoritesController`,
+  `ArchiveController`, and the other controllers own their domains.
 - `apps/explorer/backend` owns the Rust filesystem backend and its existing
   worker and JSON contracts.
 - `services/launch` owns `astrea-launch`.
@@ -40,10 +42,12 @@ copied into the development runtime staging area and installed as real files.
 ## Source and installed layouts
 
 Development output is staged below the CMake build tree at
-`build/<configuration>/apps/explorer/runtime/Astrea`. Canonical QML modules
-are available under `Astrea/`; compatibility runtime paths remain available
-under `Core/components`, `Features/Files`, and `System/i18n` so existing
-installed consumers keep their contract.
+`build/<configuration>/apps/explorer/runtime/Astrea`. Canonical source QML
+modules are available under `shared/qml/Astrea/` and the Explorer source tree;
+the staged runtime may retain compatibility paths under `Core/components`,
+`Features/Files`, and `System/i18n` so existing installed consumers keep their
+contract. No validator or production source depends on those compatibility
+paths.
 
 Installed output is rooted at `${prefix}/share/Astrea` and contains the same
 runtime layout. The Explorer binary resolves roots in this order:

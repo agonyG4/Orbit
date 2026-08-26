@@ -1,11 +1,45 @@
 #include "controllers/explorer_settings_controller.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonValue>
 #include <QtGlobal>
+
+#include <algorithm>
 
 #include "controllers/device_controller.h"
 #include "controllers/navigation_controller.h"
 
 namespace Astrea::Explorer::Native::Backend {
+
+namespace {
+
+QString canonicalAutoMountDeviceIdsJson(const QString &json)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
+    if (!document.isArray()) {
+        return QStringLiteral("[]");
+    }
+
+    QStringList ids;
+    for (const QJsonValue &value : document.array()) {
+        if (value.isString() && !value.toString().isEmpty()) {
+            ids.append(value.toString());
+        }
+    }
+    std::sort(ids.begin(), ids.end(), [](const QString &left, const QString &right) {
+        return left < right;
+    });
+    ids.removeDuplicates();
+
+    QJsonArray values;
+    for (const QString &id : ids) {
+        values.append(id);
+    }
+    return QString::fromUtf8(QJsonDocument(values).toJson(QJsonDocument::Compact));
+}
+
+} // namespace
 
 ExplorerSettingsController::ExplorerSettingsController(
     Services::SettingsService *settingsService,
@@ -15,6 +49,12 @@ ExplorerSettingsController::ExplorerSettingsController(
 {
     if (m_settingsService != nullptr) {
         m_settings = m_settingsService->load();
+        const QString canonical = canonicalAutoMountDeviceIdsJson(
+            m_settings.autoMountDeviceIdsJson);
+        if (m_settings.autoMountDeviceIdsJson != canonical) {
+            m_settings.autoMountDeviceIdsJson = canonical;
+            m_settingsService->save(m_settings);
+        }
     }
 }
 
@@ -239,10 +279,11 @@ void ExplorerSettingsController::setAutoMountDeviceIdsJson(const QString &json)
         handleAutoMountChanged();
         return;
     }
-    if (m_settings.autoMountDeviceIdsJson == json) {
+    const QString canonical = canonicalAutoMountDeviceIdsJson(json);
+    if (m_settings.autoMountDeviceIdsJson == canonical) {
         return;
     }
-    m_settings.autoMountDeviceIdsJson = json;
+    m_settings.autoMountDeviceIdsJson = canonical;
     persist();
     emit autoMountDeviceIdsJsonChanged();
 }
