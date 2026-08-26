@@ -1,12 +1,12 @@
 import QtQuick 2.15
 
-// Preview metadata and thumbnail scheduling are native. This compatibility
-// object keeps formatting and icon lookup helpers close to presentation code.
+// Preview metadata and thumbnail scheduling are native. This object keeps
+// formatting and icon lookup helpers close to presentation code.
 QtObject {
     id: preview
 
     property QtObject app
-    readonly property var bridge: app && app.nativeAppState ? app.nativeAppState : null
+    readonly property var bridge: app ? app.nativeAppState : null
     property bool showPreview: bridge ? bridge.showPreview : false
     property string viewMode: bridge ? bridge.viewMode : "list"
     property bool previewsEnabled: bridge ? bridge.previewsEnabled : false

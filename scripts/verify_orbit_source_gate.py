@@ -61,6 +61,23 @@ FORBIDDEN_MARKERS = (
     "target/release/explorer_backend",
     "Bench/",
     "source/AstreaOS",
+    "NativeAppStateAdapter",
+    "LegacyAppStateAdapter",
+    "SelectionState.qml",
+    "NavigationState.qml",
+    "RecentState.qml",
+    "astreaNativeAppStateAvailable",
+    "nativeCapabilityAvailable",
+    "nativeAdapterReady",
+    "nativeNavigationActive",
+    "legacyProcessExecutionEnabled",
+)
+FORBIDDEN_PRODUCTION_PATHS = (
+    "apps/explorer/qml/compatibility/NativeAppStateAdapter.qml",
+    "apps/explorer/qml/compatibility/LegacyAppStateAdapter.qml",
+    "apps/explorer/qml/state/SelectionState.qml",
+    "apps/explorer/qml/state/NavigationState.qml",
+    "apps/explorer/qml/state/RecentState.qml",
 )
 
 
@@ -93,6 +110,11 @@ def main() -> int:
         violations.append("legacy source directory is missing: old/")
     if (ROOT / "apps/explorer/native").exists():
         violations.append("Explorer native nesting must be absent: apps/explorer/native/")
+    if (ROOT / "source/AstreaOS").exists():
+        violations.append("legacy source tree must be absent: source/AstreaOS/")
+    for relative in FORBIDDEN_PRODUCTION_PATHS:
+        if (ROOT / relative).exists():
+            violations.append(f"retired production artifact must be absent: {relative}")
 
     for relative in REQUIRED_PATHS:
         if not (ROOT / relative).exists():

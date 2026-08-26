@@ -6,12 +6,12 @@ respective native state; `AppStateFacade` remains the stable QML projection
 and forwards `fileOperationStateChanged()` or `archiveStateChanged()` after
 the corresponding aggregate state has been updated.
 
-`NativeAppStateAdapter.qml` listens to those native aggregate signals and
-captures a snapshot directly from the facade in the signal handler. It emits
-the public `fileOperationChanged(snapshot)` and
-`archiveOperationChanged(snapshot)` events. `FileOperationsState.qml` is the
-public Explorer boundary: it forwards those events and exposes current
-snapshot functions for initial presenter synchronisation.
+`FileOperationsState.qml` is the public Explorer boundary. It listens directly
+to the native facade's `fileOperationStateChanged()` and
+`archiveStateChanged()` signals, synthesizes the aggregate snapshots, and
+emits `fileOperationChanged(snapshot)` and
+`archiveOperationChanged(snapshot)` for presentation. Its current snapshot
+functions provide initial presenter synchronisation.
 
 ## Archive ownership
 

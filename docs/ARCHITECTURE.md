@@ -13,6 +13,10 @@ image.
   recent state, and portal integration. `AppStateFacade` is a stable QML
   projection; `ExplorerSettingsController`, `SidebarFavoritesController`,
   `ArchiveController`, and the other controllers own their domains.
+- Explorer has one supported native state boundary:
+  `NativeAppState -> AppState.qml -> presentation`. `AppState.qml` imports
+  `Astrea.Explorer.Native 1.0` directly and retains only the active
+  presentation state objects for file operations, preview, and devices.
 - `apps/explorer/backend` owns the Rust filesystem backend and its existing
   worker and JSON contracts.
 - `services/launch` owns `astrea-launch`.
@@ -38,6 +42,8 @@ depend on QML or C++ implementation details.
 
 There are no production source-tree compatibility symlinks. All shared QML is
 copied into the development runtime staging area and installed as real files.
+The retired AppState adapters and dead navigation/selection/recent shims are
+not part of the runtime manifest.
 
 ## Source and installed layouts
 

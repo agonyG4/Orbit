@@ -6,15 +6,15 @@ QtObject {
     id: deviceNet
 
     property QtObject app
-    property var deviceModel: app && app.nativeAppState ? app.nativeAppState.deviceModel : []
+    property var deviceModel: app ? app.nativeAppState.deviceModel : []
     property var autoMountDeviceIds: []
-    property string autoMountDeviceIdsJson: app && app.nativeAppState ? app.nativeAppState.autoMountDeviceIdsJson : "[]"
-    property string deviceOperationPath: app && app.nativeAppState ? app.nativeAppState.deviceOperationPath : ""
-    property string deviceOperationType: app && app.nativeAppState ? app.nativeAppState.deviceOperationType : ""
-    property string deviceOperationTargetMountPath: app && app.nativeAppState ? app.nativeAppState.deviceOperationTargetMountPath : ""
-    property bool deviceOperationOpenAfterMount: app && app.nativeAppState ? app.nativeAppState.deviceOperationOpenAfterMount : false
-    property string lastUnmountedMountPath: app && app.nativeAppState ? app.nativeAppState.lastUnmountedMountPath : ""
-    property string deviceError: app && app.nativeAppState ? app.nativeAppState.deviceError : ""
+    property string autoMountDeviceIdsJson: app ? app.nativeAppState.autoMountDeviceIdsJson : "[]"
+    property string deviceOperationPath: app ? app.nativeAppState.deviceOperationPath : ""
+    property string deviceOperationType: app ? app.nativeAppState.deviceOperationType : ""
+    property string deviceOperationTargetMountPath: app ? app.nativeAppState.deviceOperationTargetMountPath : ""
+    property bool deviceOperationOpenAfterMount: app ? app.nativeAppState.deviceOperationOpenAfterMount : false
+    property string lastUnmountedMountPath: app ? app.nativeAppState.lastUnmountedMountPath : ""
+    property string deviceError: app ? app.nativeAppState.deviceError : ""
     property bool networkConnectVisible: false
     property string networkAddress: ""
     property string networkError: ""

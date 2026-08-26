@@ -45,37 +45,48 @@ class ExplorerQmlShortcutWiringTests(unittest.TestCase):
 class ExplorerRecentPersistenceTests(unittest.TestCase):
     def test_native_runtime_owns_recent_load_and_recording(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
-        adapter = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(encoding="utf-8")
-        recent_qml = (APP_ROOT / "state" / "RecentState.qml").read_text(encoding="utf-8")
 
+        self.assertIn("import Astrea.Explorer.Native 1.0", app_state)
+        self.assertIn("readonly property QtObject nativeAppState: NativeAppState", app_state)
         self.assertIn("nativeAppState.loadRecent()", app_state)
         self.assertIn("nativeAppState.recordRecentAccess", app_state)
-        self.assertIn("function loadRecent()", adapter)
-        self.assertIn("function recordRecentAccess", adapter)
-        self.assertIn("readonly property bool nativeOwned", recent_qml)
-        self.assertNotIn("Quickshell", recent_qml)
-        self.assertNotIn("Process", recent_qml)
+        for retired in [
+            "nativeCapabilityAvailable",
+            "nativeAdapterReady",
+            "nativeNavigationActive",
+            "LegacyAppStateAdapter",
+            "NativeAppStateAdapter",
+            "nativeAppStateLoader",
+        ]:
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, app_state)
 
-    def test_recent_state_is_a_native_compatibility_shim(self):
-        recent_qml = (APP_ROOT / "state" / "RecentState.qml").read_text(encoding="utf-8")
-
-        self.assertIn("persistenceGeneration", recent_qml)
-        self.assertIn("saveGeneration", recent_qml)
-        self.assertIn("nativeAppState.loadRecent()", recent_qml)
-        self.assertIn("nativeAppState.recordRecentAccess", recent_qml)
-        self.assertIn("property QtObject app", recent_qml)
-
-    def test_native_capability_does_not_use_inherited_environment_marker(self):
+    def test_recent_state_compatibility_object_is_retired(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
-        native_source = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in (EXPLORER_ROOT / "src").rglob("*.cpp")
+
+        self.assertFalse((APP_ROOT / "state" / "RecentState.qml").exists())
+        self.assertNotIn("StateModules.RecentState", app_state)
+        self.assertNotIn("recentModelItems", app_state)
+
+    def test_native_boundary_has_no_runtime_selection_marker(self):
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        native_source = (EXPLORER_ROOT / "src" / "explorer_application.cpp").read_text(
+            encoding="utf-8"
         )
 
-        old_marker = "ASTREA_EXPLORER_" + "NATIVE_RUNTIME"
-        self.assertNotIn(old_marker, app_state)
-        self.assertNotIn(old_marker, native_source)
-        self.assertIn("astreaNativeAppStateAvailable", app_state)
+        for retired in [
+            "astreaNativeAppStateAvailable",
+            "nativeCapabilityAvailable",
+            "nativeAdapterReady",
+            "nativeNavigationActive",
+            "legacyProcessExecutionEnabled",
+            "ASTREA_EXPLORER_NATIVE_RUNTIME",
+            "ASTREA_NATIVE_AVAILABLE",
+            "ASTREA_USE_NATIVE",
+        ]:
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, app_state)
+                self.assertNotIn(retired, native_source)
 
     def test_focus_file_surface_targets_content_item(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")
@@ -140,20 +151,22 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
 
     def test_dormant_archive_continuation_dialogs_follow_native_state(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")
-        adapter_qml = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        file_ops_qml = (APP_ROOT / "state" / "FileOperationsState.qml").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("visible: AppState.archivePasswordPromptVisible", main_qml)
         self.assertIn("visible: AppState.archiveConflictVisible", main_qml)
         self.assertIn(
-            "property bool archivePasswordPromptVisible: facade.archivePasswordPromptVisible",
-            adapter_qml,
+            "readonly property QtObject nativeAppState: NativeAppState",
+            app_state,
         )
         self.assertIn(
-            "property bool archiveConflictVisible: facade.archiveConflictVisible",
-            adapter_qml,
+            "function onArchiveStateChanged()",
+            file_ops_qml,
         )
+        self.assertIn("currentArchiveOperationSnapshot()", file_ops_qml)
 
 
 class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
@@ -207,15 +220,11 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
 
     def test_remote_directories_disable_watchers_and_thumbnail_warmup(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
-        navigation = (APP_ROOT / "state" / "NavigationState.qml").read_text(encoding="utf-8")
         preview = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
 
-        self.assertIn("property alias remoteDirectoryActive", app_state)
-        self.assertIn("property bool remoteDirectoryActive", navigation)
-        self.assertIn("readonly property bool nativeOwned", navigation)
-        self.assertIn("function stopTransitionalProcesses()", navigation)
-        self.assertNotIn("Process {", navigation)
-        self.assertIn("remoteDirectoryActive", navigation)
+        self.assertIn("property bool remoteDirectoryActive: nativeAppState.remoteDirectoryActive", app_state)
+        self.assertFalse((APP_ROOT / "state" / "NavigationState.qml").exists())
+        self.assertNotIn("nativeNavigationActive", app_state)
         self.assertIn("app.remoteDirectoryActive", preview)
 
 
@@ -280,12 +289,11 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
     def test_native_icon_service_replaces_qml_theme_and_extension_selection(self):
         preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
-        adapter = (APP_ROOT / "compatibility" / "NativeAppStateAdapter.qml").read_text(encoding="utf-8")
         icon_service = (EXPLORER_ROOT / "src" / "services" / "icon_theme_service.cpp").read_text(encoding="utf-8")
 
         self.assertIn("bridge.fileIconSource", preview_state)
         self.assertIn("iconThemeRevision", app_state)
-        self.assertIn("iconThemeRevision", adapter)
+        self.assertIn("nativeAppState.iconThemeRevision", app_state)
         self.assertIn("QMimeDatabase::MatchExtension", icon_service)
         self.assertIn("image://astrea-icons/theme/", icon_service)
         self.assertIn('QStringLiteral("desktop_icon_theme")', icon_service)
@@ -311,13 +319,11 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
     def test_sidebar_uses_symbolic_pipeline_and_semantic_roles(self):
         sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
         preview_state = (APP_ROOT / "state/PreviewState.qml").read_text(encoding="utf-8")
-        adapter = (APP_ROOT / "compatibility/NativeAppStateAdapter.qml").read_text(encoding="utf-8")
         facade = (EXPLORER_ROOT / "src/controllers/app_state_facade.cpp").read_text(encoding="utf-8")
 
         self.assertIn('icon: "user-home"', sidebar)
         self.assertIn('icon: "computer"', sidebar)
         self.assertIn("bridge.sidebarIconSource", preview_state)
-        self.assertIn("function sidebarIconSource", adapter)
         self.assertIn("iconSourceForNames({iconName}", facade)
         self.assertIn("symbolicIconSourceForNames({iconName}", facade)
 
@@ -363,7 +369,6 @@ class ExplorerSidebarClosureTests(unittest.TestCase):
     def test_favorites_use_native_model_transactions_and_proxy_dragging(self):
         sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
-        adapter = (APP_ROOT / "compatibility/NativeAppStateAdapter.qml").read_text(encoding="utf-8")
 
         self.assertIn("ListView", sidebar)
         self.assertIn("model: nativeFavoritesModel ? AppState.sidebarFavoritesModel : AppState.sidebarFavorites", sidebar)
@@ -378,7 +383,7 @@ class ExplorerSidebarClosureTests(unittest.TestCase):
         self.assertNotIn("application/x-astrea-sidebar-favorite", sidebar)
         self.assertNotIn("if (drop.accepted)", sidebar)
         self.assertIn("sidebarFavoritesModel", app_state)
-        self.assertIn("beginSidebarFavoriteDrag", adapter)
+        self.assertIn("nativeAppState.beginSidebarFavoriteDrag", app_state)
 
     def test_favorite_drag_proxy_reuses_sidebar_item_visuals(self):
         sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")

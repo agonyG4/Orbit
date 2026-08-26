@@ -1,6 +1,7 @@
 pragma Singleton
 import QtQuick 2.15
 import QtQml 2.15
+import Astrea.Explorer.Native 1.0
 import "state" as StateModules
 
 QtObject {
@@ -8,20 +9,7 @@ QtObject {
 
     signal openWithReady(string path, var applications)
 
-    // This is process-local and is set only after the native executable has
-    // registered the NativeAppState singleton. Inherited environment state is
-    // deliberately not part of the capability boundary.
-    readonly property bool nativeCapabilityAvailable: Boolean(
-        typeof astreaNativeAppStateAvailable !== "undefined"
-        && astreaNativeAppStateAvailable === true)
-    readonly property bool nativeAdapterReady: state.nativeCapabilityAvailable
-        && state.nativeAppStateLoader.status === Loader.Ready
-        && state.nativeAppStateLoader.item
-        && state.nativeAppStateLoader.item.nativeFacade === true
-    readonly property QtObject nativeAppState: state.nativeAdapterReady
-        ? state.nativeAppStateLoader.item
-        : state.legacyAppStateAdapter
-    readonly property bool nativeNavigationActive: state.nativeAdapterReady
+    readonly property QtObject nativeAppState: NativeAppState
     readonly property bool isPortalDialog: nativeAppState.isPortalDialog
     readonly property string homePath: nativeAppState.homePath
     readonly property string runtimeRoot: nativeAppState.runtimeRoot
@@ -65,21 +53,16 @@ QtObject {
     property int historyIdx: nativeAppState.historyIdx
     property var tabs: nativeAppState.tabs
     property int activeTabIndex: nativeAppState.activeTabIndex
-    property alias nextTabId: navigationObj.nextTabId
     property var breadcrumbParts: nativeAppState.breadcrumbParts
     property bool loadingDir: nativeAppState.loadingDir
     property string loadError: nativeAppState.loadError
     property bool dialogActive: nativeAppState.dialogActive
     property string dialogMode: nativeAppState.dialogMode
     property var dialogFilePatterns: nativeAppState.dialogFilePatterns
-    property alias activeDirectoryRequestPath: navigationObj.activeDirectoryRequestPath
-    // Keep the legacy alias as the presentation-facing mirror while native navigation owns the value.
-    property alias remoteDirectoryActive: navigationObj.remoteDirectoryActive
-    property alias remoteDirectoryReason: navigationObj.remoteDirectoryReason
+    property bool remoteDirectoryActive: nativeAppState.remoteDirectoryActive
     property bool searchActive: nativeAppState.searchActive
     property bool searchVisible: nativeAppState.searchVisible
     property string searchQuery: nativeAppState.searchQuery
-    property alias searchRootPath: navigationObj.searchRootPath
     property var fileModel: nativeAppState.fileModel
     property int fileModelRevision: nativeAppState.fileModelRevision
     property bool fileModelFilling: nativeAppState.fileModelFilling
@@ -151,16 +134,6 @@ QtObject {
     property alias networkError: deviceNetObj.networkError
     property alias networkConnecting: deviceNetObj.networkConnecting
 
-    property QtObject selection: StateModules.SelectionState {
-        id: selectionObj
-        app: state
-    }
-
-    property QtObject navigation: StateModules.NavigationState {
-        id: navigationObj
-        app: state
-    }
-
     property QtObject fileOps: StateModules.FileOperationsState {
         id: fileOpsObj
         app: state
@@ -176,21 +149,6 @@ QtObject {
         app: state
     }
 
-    property QtObject recent: StateModules.RecentState {
-        id: recentObj
-        app: state
-    }
-
-    property QtObject legacyAppStateAdapter: LegacyAppStateAdapter {
-        app: state
-    }
-
-    property Loader nativeAppStateLoader: Loader {
-        id: nativeAppStateLoader
-        active: state.nativeCapabilityAvailable
-        source: "compatibility/NativeAppStateAdapter.qml"
-    }
-
     property Connections nativeStateConnections: Connections {
         target: state.nativeAppState
 
@@ -200,9 +158,6 @@ QtObject {
         function onActiveTabIndexChanged() { state.activeTabIndex = state.nativeAppState.activeTabIndex }
         function onLoadingDirChanged() { state.loadingDir = state.nativeAppState.loadingDir }
         function onLoadErrorChanged() { state.loadError = state.nativeAppState.loadError }
-        function onRemoteDirectoryActiveChanged() {
-            navigationObj.remoteDirectoryActive = state.nativeAppState.remoteDirectoryActive
-        }
         function onSearchStateChanged() {
             state.searchActive = state.nativeAppState.searchActive
             state.searchVisible = state.nativeAppState.searchVisible
@@ -326,8 +281,6 @@ QtObject {
     }
 
     Component.onCompleted: {
-        if (!state.nativeNavigationActive)
-            navigation.initialize()
         deferredStartupTimer.restart()
     }
 
@@ -335,10 +288,7 @@ QtObject {
         interval: 650
         repeat: false
         onTriggered: {
-            if (state.nativeNavigationActive)
-                nativeAppState.loadRecent()
-            else
-                recent.load()
+            nativeAppState.loadRecent()
             deviceNet.loadSavedAutoMounts()
             deviceNet.scheduleStartupDeviceRefresh()
             preview.enableStartupWork()
@@ -477,10 +427,7 @@ QtObject {
     function openShellScript(path) { preview.openShellScript(path) }
     function openItem(path, isDir, fileUrl) { preview.openItem(path, isDir, fileUrl) }
     function recordRecentItem(path, isDir, fileUrl) {
-        if (nativeNavigationActive)
-            nativeAppState.recordRecentAccess(path, isDir, fileUrl || "")
-        else
-            recent.recordAccess(path, isDir, fileUrl)
+        nativeAppState.recordRecentAccess(path, isDir, fileUrl || "")
     }
     signal filesystemActionFinished(int requestId, string operation, bool ok, var data, string error)
 
@@ -501,10 +448,6 @@ QtObject {
         return nativeAppState.setDefaultOpenWith(path, desktopFile)
     }
     function writePortalResult(json) { return nativeAppState.writePortalResult(json) }
-    function recentModelItems() {
-        return nativeNavigationActive ? [] : recent.recentModelItems()
-    }
-
     signal contextMenuOpening(string owner)
 
     function announceContextMenuOpening(owner) {

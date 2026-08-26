@@ -26,6 +26,19 @@ class I18nValidatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"i18n validation passed \(\d+ referenced keys\)")
 
+    def test_validator_uses_only_canonical_orbit_source_roots(self) -> None:
+        source = VALIDATOR.read_text(encoding="utf-8")
+        retired_roots = (
+            "System" + "/i18n",
+            "source" + "/AstreaOS",
+            "Bench" + "/",
+        )
+        for retired_root in retired_roots:
+            with self.subTest(retired_root=retired_root):
+                self.assertNotIn(retired_root, source)
+        self.assertIn('ORBIT_ROOT / "shared" / "qml" / "Astrea" / "I18N"'.lower(), source.lower())
+        self.assertIn('ORBIT_ROOT / "apps" / "explorer" / "qml"'.lower(), source.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

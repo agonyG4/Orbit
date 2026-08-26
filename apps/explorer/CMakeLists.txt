@@ -67,6 +67,12 @@ add_custom_command(
         "${ASTREA_EXPLORER_RUNTIME_ROOT}/System"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "${ASTREA_EXPLORER_RUNTIME_ROOT}/Astrea"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+        "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer/compatibility"
+    COMMAND "${CMAKE_COMMAND}" -E remove
+        "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer/state/SelectionState.qml"
+        "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer/state/NavigationState.qml"
+        "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer/state/RecentState.qml"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/qml"
         "${ASTREA_EXPLORER_RUNTIME_ROOT}/Apps/Explorer"

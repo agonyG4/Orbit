@@ -1,58 +1,56 @@
 import QtQuick 2.15
 
-// File operation workflow state is projected by FileOperationsController.
-// QML retains only the compatibility shape used by existing presentation.
+// File operation workflow state is projected by the native AppStateFacade.
+// QML retains the aggregate snapshot shape consumed by presentation.
 QtObject {
     id: ops
 
     property QtObject app
-    readonly property var bridge: app && app.nativeAppState ? app.nativeAppState : null
+    readonly property var bridge: app ? app.nativeAppState : null
     signal fileOperationChanged(var snapshot)
     signal archiveOperationChanged(var snapshot)
 
     function currentFileOperationSnapshot() {
-        return bridge && bridge.currentFileOperationSnapshot
-            ? bridge.currentFileOperationSnapshot()
-            : {
-                  running: fileOperationRunning,
-                  progress: fileOperationProgress,
-                  percent: fileOperationPercent,
-                  fileName: fileOperationFileName,
-                  status: fileOperationStatus,
-                  error: fileOperationError,
-                  destination: fileOperationDestination,
-                  doneCount: fileOperationDoneCount,
-                  totalCount: fileOperationTotalCount,
-                  mode: fileOperationMode,
-                  state: fileOperationState,
-                  items: fileOperationItems
-              }
+        var source = bridge || ops
+        return {
+            running: source.fileOperationRunning,
+            progress: source.fileOperationProgress,
+            percent: source.fileOperationPercent,
+            fileName: source.fileOperationFileName,
+            status: source.fileOperationStatus,
+            error: source.fileOperationError,
+            destination: source.fileOperationDestination,
+            doneCount: source.fileOperationDoneCount,
+            totalCount: source.fileOperationTotalCount,
+            mode: source.fileOperationMode,
+            state: source.fileOperationState,
+            items: source.fileOperationItems
+        }
     }
 
     function currentArchiveOperationSnapshot() {
-        return bridge && bridge.currentArchiveOperationSnapshot
-            ? bridge.currentArchiveOperationSnapshot()
-            : {
-                  running: archiveExtractionRunning,
-                  progress: archiveExtractionProgress,
-                  percent: archiveExtractionPercent,
-                  fileName: archiveExtractionFileName,
-                  status: archiveExtractionStatus,
-                  error: archiveExtractionError,
-                  destination: archiveExtractionDestination,
-                  doneCount: archiveExtractionDoneCount,
-                  totalCount: archiveExtractionTotalCount,
-                  remainingText: archiveExtractionRemainingText
-              }
+        var source = bridge || ops
+        return {
+            running: source.archiveExtractionRunning,
+            progress: source.archiveExtractionProgress,
+            percent: source.archiveExtractionPercent,
+            fileName: source.archiveExtractionFileName,
+            status: source.archiveExtractionStatus,
+            error: source.archiveExtractionError,
+            destination: source.archiveExtractionDestination,
+            doneCount: source.archiveExtractionDoneCount,
+            totalCount: source.archiveExtractionTotalCount,
+            remainingText: source.archiveExtractionRemainingText
+        }
     }
 
     property Connections bridgeConnections: Connections {
         target: ops.bridge
-        function onFileOperationChanged(snapshot) {
-            ops.fileOperationChanged(snapshot)
+        function onFileOperationStateChanged() {
+            ops.fileOperationChanged(ops.currentFileOperationSnapshot())
         }
-        function onArchiveOperationChanged(snapshot) {
-            ops.archiveOperationChanged(snapshot)
+        function onArchiveStateChanged() {
+            ops.archiveOperationChanged(ops.currentArchiveOperationSnapshot())
         }
     }
     property var pendingDeleteTargets: []

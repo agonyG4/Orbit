@@ -2,7 +2,6 @@ module Finder
 
 singleton Theme    1.0 Theme.qml
 singleton AppState 1.0 AppState.qml
-LegacyAppStateAdapter 1.0 compatibility/LegacyAppStateAdapter.qml
 FileDialog     1.0 FileDialog.qml
 
 NavButton      1.0 components/common/NavButton.qml

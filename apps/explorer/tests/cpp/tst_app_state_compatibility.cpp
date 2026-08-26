@@ -1,12 +1,12 @@
 #include <QFile>
-#include <QDir>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QSignalSpy>
-#include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
+
+#include <memory>
 
 #include "backend/fake_backend_client.h"
 #include "controllers/file_operations_controller.h"
@@ -35,84 +35,6 @@ QString readFile(const QString &path)
     return QString::fromUtf8(file.readAll());
 }
 
-bool writeFile(const QString &path, const QByteArray &contents)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) {
-        return false;
-    }
-    return file.write(contents) == contents.size();
-}
-
-bool createQmlDependencyStubs(const QString &root, bool inheritedMarker = false)
-{
-    const QDir directory(root);
-    if (!directory.mkpath(QStringLiteral("Quickshell/Io"))) {
-        return false;
-    }
-
-    const QByteArray marker = inheritedMarker ? QByteArrayLiteral("1") : QByteArray();
-    const QByteArray quickshellQml = QByteArrayLiteral(
-        "pragma Singleton\n"
-        "import QtQml 2.15\n"
-        "QtObject { function env(name) { return name === \"ASTREA_EXPLORER_INHERITED_MARKER\" ? \"")
-        + marker
-        + QByteArrayLiteral("\" : \"\" } }\n");
-
-    return writeFile(
-               directory.filePath(QStringLiteral("Quickshell/qmldir")),
-               QByteArrayLiteral(
-                   "module Quickshell\n"
-                   "singleton Quickshell 1.0 Quickshell.qml\n"
-                   "FileView 1.0 FileView.qml\n"))
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/Quickshell.qml")),
-               quickshellQml)
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/FileView.qml")),
-               QByteArrayLiteral(
-                   "import QtQml 2.15\n"
-                   "QtObject {\n"
-                   "    property string path: \"\"\n"
-                   "    property bool preload: false\n"
-                   "    property bool blockLoading: false\n"
-                   "    property bool watchChanges: false\n"
-                   "    property bool printErrors: false\n"
-                   "    signal fileChanged()\n"
-                   "}\n"))
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/Io/qmldir")),
-               QByteArrayLiteral(
-                   "module Quickshell.Io\n"
-                   "Process 1.0 Process.qml\n"
-                   "StdioCollector 1.0 StdioCollector.qml\n"
-                   "SplitParser 1.0 SplitParser.qml\n"))
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/Io/Process.qml")),
-               QByteArrayLiteral(
-                   "import QtQml 2.15\n"
-                   "QtObject {\n"
-                   "    property var command: []\n"
-                   "    property bool running: false\n"
-                   "    property bool stdinEnabled: false\n"
-                   "    property QtObject stdout: null\n"
-                   "    property QtObject stderr: null\n"
-                   "    function write(data) {}\n"
-                   "    signal started()\n"
-                   "    signal exited(int exitCode)\n"
-                   "}\n"))
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/Io/StdioCollector.qml")),
-               QByteArrayLiteral(
-                   "import QtQml 2.15\n"
-                   "QtObject { property string text: \"\"; signal streamFinished() }\n"))
-        && writeFile(
-               directory.filePath(QStringLiteral("Quickshell/Io/SplitParser.qml")),
-               QByteArrayLiteral(
-                   "import QtQml 2.15\n"
-                   "QtObject { signal read(string data) }\n"));
-}
-
 DirectoryEntry bridgeEntry(const QString &name, const QString &path)
 {
     DirectoryEntry entry;
@@ -122,6 +44,33 @@ DirectoryEntry bridgeEntry(const QString &name, const QString &path)
     return entry;
 }
 
+struct ArchiveFacadeFixture final
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation;
+    SelectionController selection;
+    Astrea::Explorer::Native::Services::FilesystemService filesystem;
+    ArchiveController archive;
+    AppStateFacadeDependencies dependencies;
+    std::unique_ptr<AppStateFacade> facade;
+
+    ArchiveFacadeFixture()
+        : navigation(&client, &model, &watcher)
+        , selection(&model)
+        , filesystem(&client)
+        , archive(&filesystem, &navigation)
+    {
+        dependencies.navigation = &navigation;
+        dependencies.selection = &selection;
+        dependencies.model = &model;
+        dependencies.archive = &archive;
+        dependencies.filesystem = &filesystem;
+        facade = std::make_unique<AppStateFacade>(dependencies);
+    }
+};
+
 } // namespace
 
 class AppStateCompatibilityTest final : public QObject
@@ -129,25 +78,35 @@ class AppStateCompatibilityTest final : public QObject
     Q_OBJECT
 
 private slots:
-    void publicQmlSingletonDelegatesToNativeIdentity();
-    void legacyRuntimeLoadsPublicAppStateWithoutNativeRegistration();
+    void directNativeBoundaryUsesRegisteredSingleton();
+    void publicAppStateRequiresRegisteredNativeRuntime();
     void portalAndFileDialogPathsResolveThroughPublicAppState();
     void qmlAndNativeStatePropagateThroughNativeIdentity();
     void reactiveSelectionMembershipUpdatesAfterReplacement();
     void publicAppStateExposesNativeStateAfterPostLoadEvent();
-    void nativeAdapterPublishesAggregateOperationSnapshots();
-    void nativeAdapterPublishesArchiveOperationSnapshots();
+    void appStatePublishesAggregateOperationSnapshots();
+    void appStatePublishesArchiveOperationSnapshots();
+    void archiveAdmissionRejectsExtractionDuringPasswordContinuation();
+    void archiveAdmissionRejectsCompressionDuringPasswordContinuation();
+    void archiveAdmissionRejectsExtractionDuringConflictContinuation();
+    void archiveAdmissionRejectsCompressionDuringConflictContinuation();
+    void archiveWorkflowOccupancyReportsAllStates();
 };
 
-void AppStateCompatibilityTest::publicQmlSingletonDelegatesToNativeIdentity()
+void AppStateCompatibilityTest::directNativeBoundaryUsesRegisteredSingleton()
 {
     const QString qmlPath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     const QString appStateQml = readFile(qmlPath);
     QVERIFY2(!appStateQml.isEmpty(), qPrintable(qmlPath));
-    QVERIFY(!appStateQml.contains(QStringLiteral("import Astrea.Explorer.Native 1.0")));
-    QVERIFY(appStateQml.contains(QStringLiteral("compatibility/NativeAppStateAdapter.qml")));
-    QVERIFY(appStateQml.contains(QStringLiteral("LegacyAppStateAdapter")));
+    QVERIFY(appStateQml.contains(QStringLiteral("import Astrea.Explorer.Native 1.0")));
+    QVERIFY(appStateQml.contains(QStringLiteral("readonly property QtObject nativeAppState: NativeAppState")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("Loader")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("NativeAppStateAdapter")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("LegacyAppStateAdapter")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("StateModules.SelectionState")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("StateModules.NavigationState")));
+    QVERIFY(!appStateQml.contains(QStringLiteral("StateModules.RecentState")));
 
     const QString applicationCpp = readFile(
         QStringLiteral(ASTREA_EXPLORER_NATIVE_SOURCE_ROOT)
@@ -159,57 +118,33 @@ void AppStateCompatibilityTest::publicQmlSingletonDelegatesToNativeIdentity()
     const QString oldMarker = QStringLiteral("ASTREA_EXPLORER_") + QStringLiteral("NATIVE_RUNTIME");
     QVERIFY(!appStateQml.contains(oldMarker));
     QVERIFY(!applicationCpp.contains(oldMarker));
+    QVERIFY(!applicationCpp.contains(QStringLiteral("astreaNativeAppStateAvailable")));
 }
 
-void AppStateCompatibilityTest::legacyRuntimeLoadsPublicAppStateWithoutNativeRegistration()
+void AppStateCompatibilityTest::publicAppStateRequiresRegisteredNativeRuntime()
 {
-    QTemporaryDir stubs;
-    QVERIFY(stubs.isValid());
-    QVERIFY(createQmlDependencyStubs(stubs.path()));
-
-    const bool hadMarker = qEnvironmentVariableIsSet("ASTREA_EXPLORER_INHERITED_MARKER");
-    const QByteArray previousMarker = qgetenv("ASTREA_EXPLORER_INHERITED_MARKER");
-    qputenv("ASTREA_EXPLORER_INHERITED_MARKER", QByteArrayLiteral("1"));
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
-    engine.addImportPath(stubs.path());
-    engine.rootContext()->setContextProperty(
-        QStringLiteral("astreaNativeAppStateAvailable"), false);
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
-    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject *root = component.create();
-    QVERIFY2(root != nullptr, qPrintable(component.errorString()));
-
-    QCOMPARE(root->property("nativeNavigationActive").toBool(), false);
-    QVERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
-    QObject *navigation = root->property("navigation").value<QObject *>();
-    QVERIFY(navigation != nullptr);
-    QCOMPARE(navigation->property("legacyProcessExecutionEnabled").toBool(), false);
-    QVERIFY(QMetaObject::invokeMethod(
-        root,
-        "navigateTo",
-        Q_ARG(QVariant, QVariant(QStringLiteral("/legacy-fixture")))));
-    QCOMPARE(root->property("currentPath").toString(), QString());
-    delete root;
-
-    if (hadMarker) {
-        qputenv("ASTREA_EXPLORER_INHERITED_MARKER", previousMarker);
-    } else {
-        qunsetenv("ASTREA_EXPLORER_INHERITED_MARKER");
-    }
+    QVERIFY(!component.isReady());
+    QVERIFY(component.errorString().contains(QStringLiteral("Astrea.Explorer.Native")));
 }
 
 void AppStateCompatibilityTest::portalAndFileDialogPathsResolveThroughPublicAppState()
 {
-    QTemporaryDir stubs;
-    QVERIFY(stubs.isValid());
-    QVERIFY(createQmlDependencyStubs(stubs.path()));
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+    SelectionController selection(&model);
+    AppStateFacade facade(&navigation, &selection, &model);
+    qmlRegisterSingletonInstance<AppStateFacade>(
+        "Astrea.Explorer.Native", 1, 0, "NativeAppState", &facade);
 
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
-    engine.addImportPath(stubs.path());
     const QString runtimeRoot = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/");
     QQmlComponent fileDialog(&engine, QUrl::fromLocalFile(runtimeRoot + QStringLiteral("FileDialog.qml")));
@@ -309,15 +244,8 @@ void AppStateCompatibilityTest::reactiveSelectionMembershipUpdatesAfterReplaceme
         "NativeAppState",
         &facade);
 
-    QTemporaryDir stubs;
-    QVERIFY(stubs.isValid());
-    QVERIFY(createQmlDependencyStubs(stubs.path()));
-
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
-    engine.addImportPath(stubs.path());
-    engine.rootContext()->setContextProperty(
-        QStringLiteral("astreaNativeAppStateAvailable"), true);
 
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
@@ -325,7 +253,7 @@ void AppStateCompatibilityTest::reactiveSelectionMembershipUpdatesAfterReplaceme
     QVERIFY2(appStateComponent.isReady(), qPrintable(appStateComponent.errorString()));
     QObject *appState = appStateComponent.create();
     QVERIFY2(appState != nullptr, qPrintable(appStateComponent.errorString()));
-    QTRY_VERIFY_WITH_TIMEOUT(appState->property("nativeAdapterReady").toBool(), 3000);
+    QCOMPARE(appState->property("nativeAppState").value<QObject *>(), static_cast<QObject *>(&facade));
 
     engine.rootContext()->setContextProperty(QStringLiteral("AppStateUnderTest"), appState);
     QQmlComponent fixture(&engine);
@@ -392,14 +320,8 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
         "NativeAppState",
         &facade);
 
-    QTemporaryDir stubs;
-    QVERIFY(stubs.isValid());
-    QVERIFY(createQmlDependencyStubs(stubs.path()));
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
-    engine.addImportPath(stubs.path());
-    engine.rootContext()->setContextProperty(
-        QStringLiteral("astreaNativeAppStateAvailable"), true);
     const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
         + QStringLiteral("/Apps/Explorer/AppState.qml");
     QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
@@ -411,14 +333,7 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     QObject *root = component.create();
     QVERIFY2(root != nullptr, qPrintable(component.errorString()));
 
-    QTRY_VERIFY(root->property("nativeAppState").value<QObject *>() != nullptr);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        root->property("nativeAppState").value<QObject *>()->property("nativeFacade").toBool(),
-        true,
-        3000);
-    QObject *nativeNavigation = root->property("navigation").value<QObject *>();
-    QVERIFY(nativeNavigation != nullptr);
-    QCOMPARE(nativeNavigation->property("legacyProcessExecutionEnabled").toBool(), false);
+    QCOMPARE(root->property("nativeAppState").value<QObject *>(), static_cast<QObject *>(&facade));
 
     QTimer::singleShot(0, root, [root]() {
         QMetaObject::invokeMethod(
@@ -487,7 +402,7 @@ void AppStateCompatibilityTest::publicAppStateExposesNativeStateAfterPostLoadEve
     delete root;
 }
 
-void AppStateCompatibilityTest::nativeAdapterPublishesAggregateOperationSnapshots()
+void AppStateCompatibilityTest::appStatePublishesAggregateOperationSnapshots()
 {
     FakeRustBackendClient client;
     Astrea::Explorer::Native::Services::FileOperationService service(&client);
@@ -511,15 +426,18 @@ void AppStateCompatibilityTest::nativeAdapterPublishesAggregateOperationSnapshot
         &facade);
 
     QQmlEngine engine;
-    const QString adapterPath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
-        + QStringLiteral("/Apps/Explorer/compatibility/NativeAppStateAdapter.qml");
-    QQmlComponent component(&engine, QUrl::fromLocalFile(adapterPath));
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
+    const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
+        + QStringLiteral("/Apps/Explorer/AppState.qml");
+    QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject *adapter = component.create();
-    QVERIFY2(adapter != nullptr, qPrintable(component.errorString()));
+    QObject *appState = component.create();
+    QVERIFY2(appState != nullptr, qPrintable(component.errorString()));
+    QObject *fileOps = appState->property("fileOps").value<QObject *>();
+    QVERIFY(fileOps != nullptr);
 
-    QSignalSpy fileSpy(adapter, SIGNAL(fileOperationChanged(QVariant)));
-    QSignalSpy archiveSpy(adapter, SIGNAL(archiveOperationChanged(QVariant)));
+    QSignalSpy fileSpy(fileOps, SIGNAL(fileOperationChanged(QVariant)));
+    QSignalSpy archiveSpy(fileOps, SIGNAL(archiveOperationChanged(QVariant)));
     const BackendRequestId requestId = operations.transferFiles(
         {QStringLiteral("/tmp/source.txt")},
         QStringLiteral("/tmp/destination"),
@@ -552,10 +470,10 @@ void AppStateCompatibilityTest::nativeAdapterPublishesAggregateOperationSnapshot
     QCOMPARE(fileSpy.at(2).at(0).toMap().value(QStringLiteral("state")).toString(), QStringLiteral("success"));
     QCOMPARE(archiveSpy.count(), 0);
 
-    delete adapter;
+    delete appState;
 }
 
-void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots()
+void AppStateCompatibilityTest::appStatePublishesArchiveOperationSnapshots()
 {
     FakeRustBackendClient client;
     DirectoryModel model;
@@ -580,14 +498,17 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
         &facade);
 
     QQmlEngine engine;
-    const QString adapterPath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
-        + QStringLiteral("/Apps/Explorer/compatibility/NativeAppStateAdapter.qml");
-    QQmlComponent component(&engine, QUrl::fromLocalFile(adapterPath));
+    engine.addImportPath(QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT));
+    const QString appStatePath = QStringLiteral(ASTREA_EXPLORER_RUNTIME_ROOT)
+        + QStringLiteral("/Apps/Explorer/AppState.qml");
+    QQmlComponent component(&engine, QUrl::fromLocalFile(appStatePath));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject *adapter = component.create();
-    QVERIFY2(adapter != nullptr, qPrintable(component.errorString()));
+    QObject *appState = component.create();
+    QVERIFY2(appState != nullptr, qPrintable(component.errorString()));
+    QObject *fileOps = appState->property("fileOps").value<QObject *>();
+    QVERIFY(fileOps != nullptr);
 
-    QSignalSpy archiveSpy(adapter, SIGNAL(archiveOperationChanged(QVariant)));
+    QSignalSpy archiveSpy(fileOps, SIGNAL(archiveOperationChanged(QVariant)));
     facade.startArchiveExtraction(QStringLiteral("/tmp/source.zip"), QStringLiteral("expanded"));
     QTRY_COMPARE(archiveSpy.count(), 1);
     const QVariantMap started = archiveSpy.at(0).at(0).toMap();
@@ -630,22 +551,14 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
             "import QtQuick 2.15\n"
             "import QtQml 2.15\n"
             "Item {\n"
-            "    QtObject {\n"
-            "        id: appShim\n"
-            "        property QtObject nativeAppState: adapterLoader.item\n"
-            "    }\n"
-            "    Loader {\n"
-            "        id: adapterLoader\n"
-            "        source: \"%1\"\n"
-            "    }\n"
             "    Loader {\n"
             "        id: stateLoader\n"
-            "        source: \"%2\"\n"
-            "        onLoaded: item.app = appShim\n"
+            "        source: \"%1\"\n"
+            "        onLoaded: item.app = AppStateUnderTest\n"
             "    }\n"
             "    Loader {\n"
             "        id: presenterLoader\n"
-            "        source: \"%3\"\n"
+            "        source: \"%2\"\n"
             "        onLoaded: {\n"
             "            item.operationState = stateLoader.item\n"
             "            item.minimumRunningDisplayMs = 0\n"
@@ -658,12 +571,12 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
             "    onPipelineStateChanged: if (pipelinePresenter) pipelinePresenter.operationState = pipelineState\n"
             "    onPipelinePresenterChanged: if (pipelinePresenter) pipelinePresenter.operationState = pipelineState\n"
             "}")
-            .arg(QUrl::fromLocalFile(adapterPath).toString())
             .arg(QUrl::fromLocalFile(fileOperationsStatePath).toString())
             .arg(QUrl::fromLocalFile(presenterPath).toString())
             .toUtf8(),
         QUrl(QStringLiteral("qrc:/archive-operation-pipeline.qml")));
     QVERIFY2(pipelineComponent.isReady(), qPrintable(pipelineComponent.errorString()));
+    engine.rootContext()->setContextProperty(QStringLiteral("AppStateUnderTest"), appState);
     QObject *pipeline = pipelineComponent.create();
     QVERIFY2(pipeline != nullptr, qPrintable(pipelineComponent.errorString()));
     QObject *pipelinePresenter = nullptr;
@@ -677,25 +590,26 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     QTRY_VERIFY_WITH_TIMEOUT(
         pipelineState->property("bridge").value<QObject *>() != nullptr,
         1000);
+    QSignalSpy pipelineArchiveSpy(pipelineState, SIGNAL(archiveOperationChanged(QVariant)));
 
     QCOMPARE(
         pipelineState->property("archivePasswordError").toString(),
-        adapter->property("archivePasswordError").toString());
+        appState->property("archivePasswordError").toString());
     QCOMPARE(
         pipelineState->property("archiveConflictVisible").toBool(),
-        adapter->property("archiveConflictVisible").toBool());
+        appState->property("archiveConflictVisible").toBool());
     QCOMPARE(
         pipelineState->property("archiveConflictDestination").toString(),
-        adapter->property("archiveConflictDestination").toString());
+        appState->property("archiveConflictDestination").toString());
     QCOMPARE(
         pipelineState->property("archiveConflictName").toString(),
-        adapter->property("archiveConflictName").toString());
+        appState->property("archiveConflictName").toString());
     QCOMPARE(
         pipelineState->property("appImageInstallRunning").toBool(),
-        adapter->property("appImageInstallRunning").toBool());
+        appState->property("appImageInstallRunning").toBool());
     QCOMPARE(
         pipelineState->property("wallpaperApplyRunning").toBool(),
-        adapter->property("wallpaperApplyRunning").toBool());
+        appState->property("wallpaperApplyRunning").toBool());
 
     archive.m_passwordError = QStringLiteral("incorrect password");
     archive.m_conflict = true;
@@ -709,7 +623,7 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     archive.publishState();
     QTRY_COMPARE(facadeArchiveSpy.count(), 1);
     QTRY_COMPARE(
-        adapter->property("archivePasswordError").toString(),
+        appState->property("archivePasswordError").toString(),
         QStringLiteral("incorrect password"));
     QTRY_COMPARE(
         pipelineState->property("archivePasswordError").toString(),
@@ -728,6 +642,7 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     archive.m_conflict = false;
     facade.startFolderCompression(QStringLiteral("/tmp/folder"), QStringLiteral("zip"));
     QTRY_COMPARE(archiveSpy.count(), 4);
+    QTRY_COMPARE(pipelineArchiveSpy.count(), 2);
     QTRY_COMPARE(pipelinePresenter->property("activeKind").toString(), QStringLiteral("archive"));
     QCOMPARE(pipelinePresenter->property("phase").toString(), QStringLiteral("running"));
     QCOMPARE(pipelinePresenter->property("indeterminate").toBool(), true);
@@ -761,7 +676,84 @@ void AppStateCompatibilityTest::nativeAdapterPublishesArchiveOperationSnapshots(
     QCOMPARE(failed.value(QStringLiteral("status")).toString(), QStringLiteral("Falha"));
 
     delete pipeline;
-    delete adapter;
+    delete appState;
+}
+
+void AppStateCompatibilityTest::archiveAdmissionRejectsExtractionDuringPasswordContinuation()
+{
+    ArchiveFacadeFixture fixture;
+    fixture.archive.m_path = QStringLiteral("/tmp/pending.zip");
+    fixture.archive.m_passwordPrompt = true;
+    const int revision = fixture.archive.stateRevision();
+    const int requestCount = fixture.client.utilityRequests().size();
+
+    fixture.facade->startArchiveExtraction(
+        QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
+
+    QCOMPARE(fixture.archive.stateRevision(), revision);
+    QCOMPARE(fixture.client.utilityRequests().size(), requestCount);
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+}
+
+void AppStateCompatibilityTest::archiveAdmissionRejectsCompressionDuringPasswordContinuation()
+{
+    ArchiveFacadeFixture fixture;
+    fixture.archive.m_path = QStringLiteral("/tmp/pending.zip");
+    fixture.archive.m_passwordPrompt = true;
+    const int revision = fixture.archive.stateRevision();
+    const int requestCount = fixture.client.utilityRequests().size();
+
+    fixture.facade->startFolderCompression(QStringLiteral("/tmp/replacement"), QStringLiteral("zip"));
+
+    QCOMPARE(fixture.archive.stateRevision(), revision);
+    QCOMPARE(fixture.client.utilityRequests().size(), requestCount);
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+}
+
+void AppStateCompatibilityTest::archiveAdmissionRejectsExtractionDuringConflictContinuation()
+{
+    ArchiveFacadeFixture fixture;
+    fixture.archive.m_path = QStringLiteral("/tmp/pending.zip");
+    fixture.archive.m_conflict = true;
+    const int revision = fixture.archive.stateRevision();
+    const int requestCount = fixture.client.utilityRequests().size();
+
+    fixture.facade->startArchiveExtraction(
+        QStringLiteral("/tmp/replacement.zip"), QStringLiteral("replacement"));
+
+    QCOMPARE(fixture.archive.stateRevision(), revision);
+    QCOMPARE(fixture.client.utilityRequests().size(), requestCount);
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+}
+
+void AppStateCompatibilityTest::archiveAdmissionRejectsCompressionDuringConflictContinuation()
+{
+    ArchiveFacadeFixture fixture;
+    fixture.archive.m_path = QStringLiteral("/tmp/pending.zip");
+    fixture.archive.m_conflict = true;
+    const int revision = fixture.archive.stateRevision();
+    const int requestCount = fixture.client.utilityRequests().size();
+
+    fixture.facade->startFolderCompression(QStringLiteral("/tmp/replacement"), QStringLiteral("zip"));
+
+    QCOMPARE(fixture.archive.stateRevision(), revision);
+    QCOMPARE(fixture.client.utilityRequests().size(), requestCount);
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+}
+
+void AppStateCompatibilityTest::archiveWorkflowOccupancyReportsAllStates()
+{
+    ArchiveFacadeFixture fixture;
+    QVERIFY(!fixture.facade->archiveWorkflowOccupied());
+
+    fixture.archive.m_running = true;
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+    fixture.archive.m_running = false;
+    fixture.archive.m_passwordPrompt = true;
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
+    fixture.archive.m_passwordPrompt = false;
+    fixture.archive.m_conflict = true;
+    QVERIFY(fixture.facade->archiveWorkflowOccupied());
 }
 
 QTEST_MAIN(AppStateCompatibilityTest)
