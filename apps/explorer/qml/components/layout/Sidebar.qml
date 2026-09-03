@@ -2,7 +2,6 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
 import QtQuick.Layouts
-import QtQuick.Effects
 import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as Common
@@ -177,19 +176,12 @@ Item {
 
                 Behavior on color { ColorAnimation { duration: UI.Theme.animationQuick } }
 
-                Image {
+                Common.SymbolicIcon {
                     source: AppState.sidebarIconSource("system-search", 16)
                     width: 14; height: 14
                     anchors.centerIn: parent
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    asynchronous: false
-                    sourceSize: Qt.size(14, 14)
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        colorization: 1.0
-                        colorizationColor: searchHover.containsMouse ? UI.Theme.textPrimary : UI.Theme.textSecondary
-                    }
+                    sourcePixelSize: 14
+                    tintColor: searchHover.containsMouse ? UI.Theme.textPrimary : UI.Theme.textSecondary
                 }
 
                 MouseArea {
@@ -844,22 +836,15 @@ Item {
                     : Qt.rgba(1, 1, 1, sbItem.active ? 0.20 : 0.08)
                 Behavior on color { ColorAnimation { duration: UI.Theme.animationFast; easing.type: Easing.OutCubic } }
 
-                Image {
+                Common.SymbolicIcon {
                     source: AppState.sidebarIconSource(sbItem.icon, 16)
                     width: 16; height: 16
                     anchors.centerIn: parent
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    asynchronous: false
-                    sourceSize: Qt.size(16, 16)
+                    sourcePixelSize: 16
                     opacity: sbItem.active ? 1.0 : 0.92
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        colorization: 1.0
-                        colorizationColor: sbItem.active ? root.sidebarIconActive
-                            : itemHover.hovered ? root.sidebarIconHover
-                            : root.sidebarIconIdle
-                    }
+                    tintColor: sbItem.active ? root.sidebarIconActive
+                        : itemHover.hovered ? root.sidebarIconHover
+                        : root.sidebarIconIdle
                 }
             }
 
@@ -1004,22 +989,15 @@ Item {
                 color: "transparent"
                 anchors.verticalCenter: parent.verticalCenter
 
-                Image {
+                Common.SymbolicIcon {
                     source: AppState.sidebarIconSource(deviceItem.icon, 16)
                     width: 16; height: 16
                     anchors.centerIn: parent
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    asynchronous: false
-                    sourceSize: Qt.size(16, 16)
+                    sourcePixelSize: 16
                     opacity: deviceItem.busy ? 0.40 : (deviceItem.active ? 1.0 : 0.88)
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        colorization: 1.0
-                        colorizationColor: deviceItem.active ? root.sidebarIconActive
-                            : devHover.containsMouse ? root.sidebarIconHover
-                            : root.sidebarIconIdle
-                    }
+                    tintColor: deviceItem.active ? root.sidebarIconActive
+                        : devHover.containsMouse ? root.sidebarIconHover
+                        : root.sidebarIconIdle
                     Behavior on opacity { NumberAnimation { duration: 160 } }
                 }
             }

@@ -248,6 +248,22 @@ class ExplorerDateFormattingRegressionTests(unittest.TestCase):
 
 
 class ExplorerIconRenderingRegressionTests(unittest.TestCase):
+    def test_sidebar_symbolic_icons_use_alpha_mask_tinting(self):
+        sidebar = (APP_ROOT / "components" / "layout" / "Sidebar.qml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(sidebar.count("Common.SymbolicIcon"), 3)
+        self.assertNotIn("layer.effect: MultiEffect", sidebar)
+
+        symbolic_icon = (APP_ROOT / "components" / "common" / "SymbolicIcon.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("import Qt5Compat.GraphicalEffects", symbolic_icon)
+        self.assertIn("OpacityMask", symbolic_icon)
+        self.assertIn("maskSource: iconImage", symbolic_icon)
+        self.assertIn("color: root.tintColor", symbolic_icon)
+
     def test_icon_grid_exposes_two_larger_zoom_presets(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
         preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
@@ -336,6 +352,10 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         ]:
             with self.subTest(relative=relative):
                 source = (APP_ROOT / relative).read_text(encoding="utf-8")
+                if relative == "components/layout/Sidebar.qml":
+                    source += (APP_ROOT / "components/common/SymbolicIcon.qml").read_text(
+                        encoding="utf-8"
+                    )
                 self.assertIn("asynchronous: false", source)
         icon_view = (APP_ROOT / "components/views/FileIconView.qml").read_text(encoding="utf-8")
         self.assertIn("source: tile.activePreviewUrl", icon_view)
