@@ -279,6 +279,7 @@ private slots:
     void exactThemeFormatsAgreeWithQtSupport();
     void themeAssetChangesInvalidateRenderedResults();
     void installingPreferredVariantInvalidatesTopology();
+    void installingCompatibilityVariantInvalidatesTopology();
     void unrelatedThemeDoesNotInvalidateTopology();
 };
 
@@ -1412,6 +1413,29 @@ void IconThemeServiceTest::installingPreferredVariantInvalidatesTopology()
     writeTheme(directory.path(), QStringLiteral("ThemeA-dark"), QColor(0x55, 0x55, 0xdd), false);
 
     QTRY_COMPARE_WITH_TIMEOUT(service.effectiveTheme(), QStringLiteral("ThemeA-dark"), 3000);
+    QVERIFY(service.revision() > previousRevision);
+}
+
+void IconThemeServiceTest::installingCompatibilityVariantInvalidatesTopology()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTheme(directory.path(), QStringLiteral("MacTahoe"), QColor(0xdd, 0x55, 0x55), false);
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setThemeName(QStringLiteral("MissingPlatformTheme"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("ui/theme.json"));
+    writeThemeConfigObject(configPath, QJsonObject {
+        {QStringLiteral("theme"), QStringLiteral("dark")},
+    });
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+    QCOMPARE(service.effectiveTheme(), QStringLiteral("MacTahoe"));
+    const quint64 previousRevision = service.revision();
+    writeTheme(directory.path(), QStringLiteral("MacTahoe-dark"), QColor(0x55, 0x55, 0xdd), false);
+
+    QTRY_COMPARE_WITH_TIMEOUT(service.effectiveTheme(), QStringLiteral("MacTahoe-dark"), 3000);
     QVERIFY(service.revision() > previousRevision);
 }
 

@@ -610,6 +610,11 @@ QStringList IconThemeService::themeWatchNames() const
                     ? QStringLiteral("-light")
                     : QStringLiteral("-dark")));
     }
+    names.append(
+        QStringLiteral("MacTahoe")
+        + (appearance() == AppearanceMode::Light
+                ? QStringLiteral("-light")
+                : QStringLiteral("-dark")));
     return names;
 }
 
