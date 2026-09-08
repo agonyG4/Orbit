@@ -98,16 +98,21 @@ checks are catalog reads and do not temporarily mutate global `QIcon` state.
 
 The catalog resolves each candidate list in family order: all candidates in
 the selected theme, then recursively declared inherited themes in declaration
-order, then the public Qt platform fallback theme, then `hicolor`. For a
-winning candidate it chooses the closest declared directory, preferring an
-exact scale and then the Freedesktop Fixed, Scalable, or Threshold distance
-rules. Only after that exact themed search fails does the service use Qt's
-ordinary global/platform fallback behavior. The exact file is loaded through
-public `QIcon(filePath)` APIs, so Qt remains responsible for decoding and
-rendering without performing a second theme hierarchy lookup. PNG is always
-considered; XPM and SVG are considered only when Qt's public image readers
-advertise support. SVGZ is intentionally not considered without a deterministic
-exact-file support proof.
+order, then the public Qt platform fallback theme, then `hicolor`. For each
+theme and candidate, lookup first scans declared subdirectories for an exact
+`DirectoryMatchesSize` result: scale must match, and Fixed, Scalable, and
+Threshold directories apply their respective size rules. Only when no exact
+asset exists does it scan available assets for the smallest
+`DirectorySizeDistance`, based on scaled physical size; scale has no special
+priority in this closest-match phase. Subdirectory declaration order comes
+before base-directory order, while base-directory order still wins when the
+same subdirectory exists in multiple roots. Only after that exact/closest
+themed search fails does the service use Qt's ordinary global/platform
+fallback behavior. The exact file is loaded through public `QIcon(filePath)`
+APIs, so Qt remains responsible for decoding and rendering without performing
+a second theme hierarchy lookup. PNG is always considered; XPM and SVG are
+considered only when Qt's public image readers advertise support. SVGZ is
+intentionally not considered without a deterministic exact-file support proof.
 
 The service watches the filesystem-backed search roots and active/relevant
 family directories. Debounced changes to `index.theme`, inherited content,

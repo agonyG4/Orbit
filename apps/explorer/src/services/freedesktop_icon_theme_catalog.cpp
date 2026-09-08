@@ -8,8 +8,6 @@
 #include <QSettings>
 
 #include <algorithm>
-#include <cmath>
-#include <tuple>
 
 namespace Astrea::Explorer::Native::Services {
 
@@ -18,15 +16,10 @@ namespace {
 constexpr auto kHicolorTheme = "hicolor";
 constexpr auto kIconThemeGroup = "Icon Theme";
 constexpr qsizetype kMaxPresenceEntries = 4096;
-constexpr int kScalePenalty = 1000000;
 
 struct IconMatch final {
     QString path;
-    int scalePenalty = 0;
-    int distance = 0;
-    int rootIndex = 0;
-    int directoryIndex = 0;
-    int extensionIndex = 0;
+    qint64 distance = 0;
 };
 
 const QStringList &iconExtensions()
@@ -39,54 +32,30 @@ const QStringList &iconExtensions()
     return extensions;
 }
 
-bool supportsExtension(const QString &extension)
+const QStringList &supportedIconExtensions()
 {
-    const QByteArray format = extension.mid(1).toLatin1();
-    const QList<QByteArray> supportedFormats = QImageReader::supportedImageFormats();
-    return std::any_of(
-        supportedFormats.cbegin(),
-        supportedFormats.cend(),
-        [&format](const QByteArray &supported) {
-            return supported.compare(format, Qt::CaseInsensitive) == 0;
-        });
-}
-
-int requestedPixelSize(const QSize &logicalSize, qreal devicePixelRatio)
-{
-    const int logical = qMax(1, qMin(logicalSize.width(), logicalSize.height()));
-    return qMax(1, qRound(logical * qMax<qreal>(1.0, devicePixelRatio)));
+    static const QStringList extensions = [] {
+        const QList<QByteArray> supportedFormats = QImageReader::supportedImageFormats();
+        QStringList supported;
+        for (const QString &extension : iconExtensions()) {
+            const QByteArray format = extension.mid(1).toLatin1();
+            if (std::any_of(
+                    supportedFormats.cbegin(),
+                    supportedFormats.cend(),
+                    [&format](const QByteArray &candidate) {
+                        return candidate.compare(format, Qt::CaseInsensitive) == 0;
+                    })) {
+                supported.append(extension);
+            }
+        }
+        return supported;
+    }();
+    return extensions;
 }
 
 int requestedScale(qreal devicePixelRatio)
 {
     return qMax(1, qCeil(qMax<qreal>(1.0, devicePixelRatio)));
-}
-
-int absoluteDistance(int requested, int lower, int upper)
-{
-    if (requested < lower) {
-        return lower - requested;
-    }
-    if (requested > upper) {
-        return requested - upper;
-    }
-    return 0;
-}
-
-bool isBetterMatch(const IconMatch &candidate, const IconMatch &current)
-{
-    return std::tie(
-               candidate.scalePenalty,
-               candidate.distance,
-               candidate.rootIndex,
-               candidate.directoryIndex,
-               candidate.extensionIndex)
-        < std::tie(
-            current.scalePenalty,
-            current.distance,
-            current.rootIndex,
-            current.directoryIndex,
-            current.extensionIndex);
 }
 
 } // namespace
@@ -221,6 +190,60 @@ bool FreedesktopIconThemeCatalog::isFilesystemPath(const QString &path)
 {
     return !path.startsWith(QStringLiteral(":/"))
         && !path.startsWith(QStringLiteral("qrc:/"));
+}
+
+bool FreedesktopIconThemeCatalog::directoryMatchesSize(
+    const DirectoryMetadata &directory,
+    int requestedSize,
+    int requestedScale)
+{
+    if (directory.scale != requestedScale) {
+        return false;
+    }
+
+    switch (directory.type) {
+    case DirectoryType::Fixed:
+        return directory.size == requestedSize;
+    case DirectoryType::Scalable:
+        return directory.minSize <= requestedSize && requestedSize <= directory.maxSize;
+    case DirectoryType::Threshold: {
+        const qint64 lower = qint64(directory.size) - directory.threshold;
+        const qint64 upper = qint64(directory.size) + directory.threshold;
+        return lower <= requestedSize && requestedSize <= upper;
+    }
+    }
+    return false;
+}
+
+qint64 FreedesktopIconThemeCatalog::directorySizeDistance(
+    const DirectoryMetadata &directory,
+    int requestedSize,
+    int requestedScale)
+{
+    const qint64 requestedPhysicalSize = qint64(requestedSize) * requestedScale;
+    qint64 lower = qint64(directory.size) * directory.scale;
+    qint64 upper = lower;
+    switch (directory.type) {
+    case DirectoryType::Fixed:
+        break;
+    case DirectoryType::Scalable:
+        lower = qint64(directory.minSize) * directory.scale;
+        upper = qint64(directory.maxSize) * directory.scale;
+        break;
+    case DirectoryType::Threshold:
+        lower = qMax<qint64>(1, qint64(directory.size) - directory.threshold)
+            * directory.scale;
+        upper = (qint64(directory.size) + directory.threshold) * directory.scale;
+        break;
+    }
+
+    if (requestedPhysicalSize < lower) {
+        return lower - requestedPhysicalSize;
+    }
+    if (requestedPhysicalSize > upper) {
+        return requestedPhysicalSize - upper;
+    }
+    return 0;
 }
 
 QStringList FreedesktopIconThemeCatalog::splitList(const QVariant &value)
@@ -389,48 +412,46 @@ QString FreedesktopIconThemeCatalog::findIconPath(
         return {};
     }
 
-    const int requestedPixels = requestedPixelSize(logicalSize, devicePixelRatio);
+    const int requestedSize = qMax(1, qMin(logicalSize.width(), logicalSize.height()));
     const int iconScale = requestedScale(devicePixelRatio);
+    const QStringList &extensions = supportedIconExtensions();
+
+    // LookupIcon first searches declared subdirectories for an exact size and
+    // scale match. Root and extension order only break ties within a directory.
+    for (int directoryIndex = 0; directoryIndex < metadata->directories.size(); ++directoryIndex) {
+        const DirectoryMetadata &directory = metadata->directories.at(directoryIndex);
+        if (!directoryMatchesSize(directory, requestedSize, iconScale)) {
+            continue;
+        }
+        for (int rootIndex = 0; rootIndex < metadata->roots.size(); ++rootIndex) {
+            const QString prefix = QDir(metadata->roots.at(rootIndex)).filePath(
+                directory.path + QLatin1Char('/') + candidate);
+            for (const QString &extension : extensions) {
+                const QString path = prefix + extension;
+                if (QFileInfo(path).isFile()) {
+                    return path;
+                }
+            }
+        }
+    }
+
+    // No exact asset exists. Find the closest available directory using
+    // scaled physical size; a matching scale has no special priority here.
     bool found = false;
     IconMatch best;
-    for (int rootIndex = 0; rootIndex < metadata->roots.size(); ++rootIndex) {
-        const QString &root = metadata->roots.at(rootIndex);
-        for (int directoryIndex = 0; directoryIndex < metadata->directories.size(); ++directoryIndex) {
-            const DirectoryMetadata &directory = metadata->directories.at(directoryIndex);
-            const QString prefix = QDir(root).filePath(directory.path + QLatin1Char('/') + candidate);
-            for (int extensionIndex = 0; extensionIndex < iconExtensions().size(); ++extensionIndex) {
-                const QString &extension = iconExtensions().at(extensionIndex);
-                if (!supportsExtension(extension)) {
-                    continue;
-                }
+    for (int directoryIndex = 0; directoryIndex < metadata->directories.size(); ++directoryIndex) {
+        const DirectoryMetadata &directory = metadata->directories.at(directoryIndex);
+        const qint64 distance = directorySizeDistance(directory, requestedSize, iconScale);
+        for (int rootIndex = 0; rootIndex < metadata->roots.size(); ++rootIndex) {
+            const QString prefix = QDir(metadata->roots.at(rootIndex)).filePath(
+                directory.path + QLatin1Char('/') + candidate);
+            for (const QString &extension : extensions) {
                 const QString path = prefix + extension;
                 if (!QFileInfo(path).isFile()) {
                     continue;
                 }
-                const int scaledSize = directory.size * directory.scale;
-                int lower = scaledSize;
-                int upper = scaledSize;
-                switch (directory.type) {
-                case DirectoryType::Fixed:
-                    break;
-                case DirectoryType::Scalable:
-                    lower = directory.minSize * directory.scale;
-                    upper = directory.maxSize * directory.scale;
-                    break;
-                case DirectoryType::Threshold:
-                    lower = qMax(1, directory.size - directory.threshold) * directory.scale;
-                    upper = (directory.size + directory.threshold) * directory.scale;
-                    break;
-                }
-                IconMatch match;
-                match.path = path;
-                match.scalePenalty = directory.scale == iconScale ? 0 : kScalePenalty;
-                match.distance = absoluteDistance(requestedPixels, lower, upper);
-                match.rootIndex = rootIndex;
-                match.directoryIndex = directoryIndex;
-                match.extensionIndex = extensionIndex;
-                if (!found || isBetterMatch(match, best)) {
-                    best = match;
+                if (!found || distance < best.distance) {
+                    best = {path, distance};
                     found = true;
                 }
             }

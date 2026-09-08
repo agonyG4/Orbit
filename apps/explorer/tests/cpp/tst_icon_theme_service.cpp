@@ -276,6 +276,8 @@ private slots:
     void splitThemeRootsUseFirstMetadataAndAllAssets();
     void scaledDirectoriesParticipateInPresence();
     void selectsDeclaredDirectoryBySizeAndScale();
+    void closestDirectoryDistanceIgnoresScalePriority();
+    void declaredDirectoryOrderPrecedesRootOrder();
     void exactThemeFormatsAgreeWithQtSupport();
     void themeAssetChangesInvalidateRenderedResults();
     void installingPreferredVariantInvalidatesTopology();
@@ -1290,6 +1292,132 @@ void IconThemeServiceTest::selectsDeclaredDirectoryBySizeAndScale()
         catalog.resolveIconAsset(QStringLiteral("Sized"), {QStringLiteral("default-icon")}, QSize(18, 18), 1.0)
             .filePath,
         QDir(directory.path()).filePath(QStringLiteral("Sized/defaulted/mimetypes/default-icon.png")));
+}
+
+void IconThemeServiceTest::closestDirectoryDistanceIgnoresScalePriority()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray index = QByteArrayLiteral(
+        "[Icon Theme]\n"
+        "Name=Distance Theme\n"
+        "Comment=Theme used by deterministic tests\n"
+        "Directories=huge-scale,small-scale,same-scale,near-scale\n"
+        "\n"
+        "[huge-scale]\nSize=512\nScale=2\nType=Fixed\n\n"
+        "[small-scale]\nSize=16\nScale=1\nType=Fixed\n\n"
+        "[same-scale]\nSize=48\nScale=2\nType=Fixed\n\n"
+        "[near-scale]\nSize=16\nScale=1\nType=Fixed\n");
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("Distance/index.theme")), index);
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Distance/huge-scale"),
+        QStringLiteral("distance-icon"),
+        QColor(0xaa, 0x44, 0x44));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Distance/small-scale"),
+        QStringLiteral("distance-icon"),
+        QColor(0x44, 0xaa, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Distance/same-scale"),
+        QStringLiteral("realistic-distance-icon"),
+        QColor(0xaa, 0x44, 0xaa));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Distance/near-scale"),
+        QStringLiteral("realistic-distance-icon"),
+        QColor(0x44, 0x66, 0xaa));
+    QIcon::setThemeSearchPaths({directory.path()});
+
+    FreedesktopIconThemeCatalog catalog;
+    QCOMPARE(
+        catalog.resolveIconAsset(
+            QStringLiteral("Distance"),
+            {QStringLiteral("distance-icon")},
+            QSize(16, 16),
+            2.0)
+            .filePath,
+        QDir(directory.path()).filePath(QStringLiteral("Distance/small-scale/distance-icon.png")));
+    QCOMPARE(
+        catalog.resolveIconAsset(
+            QStringLiteral("Distance"),
+            {QStringLiteral("realistic-distance-icon")},
+            QSize(16, 16),
+            2.0)
+            .filePath,
+        QDir(directory.path()).filePath(
+            QStringLiteral("Distance/near-scale/realistic-distance-icon.png")));
+}
+
+void IconThemeServiceTest::declaredDirectoryOrderPrecedesRootOrder()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir firstRoot;
+    QTemporaryDir secondRoot;
+    QVERIFY(firstRoot.isValid());
+    QVERIFY(secondRoot.isValid());
+    const QByteArray index = QByteArrayLiteral(
+        "[Icon Theme]\n"
+        "Name=Split Order Theme\n"
+        "Comment=Theme used by deterministic tests\n"
+        "Directories=preferred,secondary\n"
+        "\n"
+        "[preferred]\nSize=16\nType=Fixed\n\n"
+        "[secondary]\nSize=16\nType=Fixed\n");
+    writeFile(QDir(firstRoot.path()).filePath(QStringLiteral("SplitOrder/index.theme")), index);
+    writeIcon(
+        firstRoot.path(),
+        QStringLiteral("SplitOrder/secondary"),
+        QStringLiteral("split-icon"),
+        QColor(0xaa, 0x44, 0x44));
+    writeIcon(
+        secondRoot.path(),
+        QStringLiteral("SplitOrder/preferred"),
+        QStringLiteral("split-icon"),
+        QColor(0x44, 0xaa, 0x66));
+
+    const QByteArray sameDirectoryIndex = QByteArrayLiteral(
+        "[Icon Theme]\n"
+        "Name=Same Directory Theme\n"
+        "Comment=Theme used by deterministic tests\n"
+        "Directories=preferred\n"
+        "\n"
+        "[preferred]\nSize=16\nType=Fixed\n");
+    writeFile(
+        QDir(firstRoot.path()).filePath(QStringLiteral("SplitSame/index.theme")),
+        sameDirectoryIndex);
+    writeIcon(
+        firstRoot.path(),
+        QStringLiteral("SplitSame/preferred"),
+        QStringLiteral("split-icon"),
+        QColor(0x44, 0x66, 0xaa));
+    writeIcon(
+        secondRoot.path(),
+        QStringLiteral("SplitSame/preferred"),
+        QStringLiteral("split-icon"),
+        QColor(0xaa, 0xaa, 0x44));
+    QIcon::setThemeSearchPaths({firstRoot.path(), secondRoot.path()});
+
+    FreedesktopIconThemeCatalog catalog;
+    QCOMPARE(
+        catalog.resolveIconAsset(
+            QStringLiteral("SplitOrder"),
+            {QStringLiteral("split-icon")},
+            QSize(16, 16),
+            1.0)
+            .filePath,
+        QDir(secondRoot.path()).filePath(QStringLiteral("SplitOrder/preferred/split-icon.png")));
+    QCOMPARE(
+        catalog.resolveIconAsset(
+            QStringLiteral("SplitSame"),
+            {QStringLiteral("split-icon")},
+            QSize(16, 16),
+            1.0)
+            .filePath,
+        QDir(firstRoot.path()).filePath(QStringLiteral("SplitSame/preferred/split-icon.png")));
 }
 
 void IconThemeServiceTest::exactThemeFormatsAgreeWithQtSupport()
