@@ -33,6 +33,7 @@ target/
 /build/
 /build/debug/
 /build/release/
+.worktrees/
 
 # CMake, Qt, and other native build output
 build*/
