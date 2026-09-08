@@ -266,12 +266,13 @@ QStringList IconThemeService::symbolicCandidatesForNames(const QStringList &name
 QIcon IconThemeService::resolveIcon(const QStringList &candidates) const
 {
     if (!m_effectiveTheme.isEmpty()) {
-        const QString winningCandidate = m_catalog.resolveIconName(m_effectiveTheme, candidates);
-        if (!winningCandidate.isEmpty()) {
-            const QIcon icon = QIcon::fromTheme(winningCandidate);
-            if (!icon.isNull()) {
-                return icon;
-            }
+        const auto asset = m_catalog.resolveIconAsset(
+            m_effectiveTheme,
+            candidates,
+            QSize(32, 32),
+            1.0);
+        if (!asset.filePath.isEmpty()) {
+            return QIcon(asset.filePath);
         }
     }
 
@@ -308,12 +309,15 @@ QImage IconThemeService::renderIcon(
 
     QImage result(pixelSize, QImage::Format_ARGB32_Premultiplied);
     result.fill(Qt::transparent);
-    const QIcon icon = resolveIcon(normalizedCandidates);
+    const QSize logicalRenderSize(
+        std::max(1, qRound(pixelSize.width() / boundedDpr)),
+        std::max(1, qRound(pixelSize.height() / boundedDpr)));
+    const QIcon icon = resolveIconForRender(
+        normalizedCandidates,
+        logicalRenderSize,
+        boundedDpr);
     bool renderedThemeIcon = false;
     if (!icon.isNull()) {
-        const QSize logicalRenderSize(
-            std::max(1, qRound(pixelSize.width() / boundedDpr)),
-            std::max(1, qRound(pixelSize.height() / boundedDpr)));
         const QPixmap pixmap = icon.pixmap(
             logicalRenderSize,
             boundedDpr,
@@ -387,8 +391,13 @@ QString IconThemeService::fileIconSource(
 void IconThemeService::reloadConfig()
 {
     const bool themeAssetsChanged = m_themeAssetsChanged;
+    const bool themeTopologyEvent = m_themeTopologyChanged;
     const quint64 previousRevision = m_revision;
+    const QString previousTopology = themeTopologySignature();
     m_catalog.invalidate();
+    applyTheme(selectTheme());
+    const bool topologyChanged = themeTopologyEvent
+        && previousTopology != themeTopologySignature();
     if (themeAssetsChanged) {
         const QString currentTheme = QIcon::themeName();
         QIcon::setThemeName(QStringLiteral("__astrea_icon_theme_refresh__"));
@@ -398,13 +407,13 @@ void IconThemeService::reloadConfig()
         // cache before the next QIcon render.
         QPixmapCache::clear();
     }
-    applyTheme(selectTheme());
-    if (themeAssetsChanged && m_revision == previousRevision) {
+    if ((themeAssetsChanged || topologyChanged) && m_revision == previousRevision) {
         ++m_revision;
         clearRenderedCache();
         emit themeChanged();
     }
     m_themeAssetsChanged = false;
+    m_themeTopologyChanged = false;
     updateWatcher();
 }
 
@@ -416,6 +425,9 @@ void IconThemeService::scheduleReload(const QString &path)
         && normalizedPath != configParent
         && m_themeWatchPaths.contains(normalizedPath)) {
         m_themeAssetsChanged = true;
+    }
+    if (m_themeRootWatchPaths.contains(normalizedPath)) {
+        m_themeTopologyChanged = true;
     }
     if (!m_reloadTimer->isActive()) {
         m_reloadTimer->start();
@@ -554,15 +566,81 @@ void IconThemeService::updateWatcher()
         m_watcher->addPath(parentPath);
     }
 
-    m_themeWatchPaths = m_catalog.watchPaths({
-        m_effectiveTheme,
-        configuredBaseTheme(),
-        m_platformTheme,
-        QIcon::fallbackThemeName(),
-    });
+    m_themeRootWatchPaths = m_catalog.searchRootPaths();
+    for (const QString &path : m_themeRootWatchPaths) {
+        m_watcher->addPath(path);
+    }
+
+    m_themeWatchPaths = m_catalog.watchPaths(themeWatchNames());
     for (const QString &path : m_themeWatchPaths) {
         m_watcher->addPath(path);
     }
+}
+
+QString IconThemeService::themeTopologySignature() const
+{
+    QStringList signature;
+    const QStringList names = themeWatchNames();
+    for (const QString &name : names) {
+        if (!isValidThemeIdentifier(name)) {
+            continue;
+        }
+        signature.append(name);
+        signature.append(m_catalog.themeExists(name) ? QStringLiteral("present")
+                                                      : QStringLiteral("missing"));
+        signature.append(m_catalog.themeFamily(name).join(QLatin1Char(',')));
+    }
+    return signature.join(QLatin1Char('|'));
+}
+
+QStringList IconThemeService::themeWatchNames() const
+{
+    QStringList names {
+        m_effectiveTheme,
+        configuredBaseTheme(),
+        qEnvironmentVariable("ASTREA_ICON_THEME").trimmed(),
+        m_platformTheme,
+        QIcon::fallbackThemeName(),
+        QStringLiteral("MacTahoe"),
+    };
+    const QString configured = configuredBaseTheme();
+    if (isValidThemeIdentifier(configured)) {
+        names.append(
+            configured + (appearance() == AppearanceMode::Light
+                    ? QStringLiteral("-light")
+                    : QStringLiteral("-dark")));
+    }
+    return names;
+}
+
+QIcon IconThemeService::resolveIconForRender(
+    const QStringList &candidates,
+    const QSize &logicalSize,
+    qreal devicePixelRatio) const
+{
+    if (!m_effectiveTheme.isEmpty()) {
+        const auto asset = m_catalog.resolveIconAsset(
+            m_effectiveTheme,
+            candidates,
+            logicalSize,
+            devicePixelRatio);
+        if (!asset.filePath.isEmpty()) {
+            // The catalog has already selected the exact Freedesktop asset.
+            // Loading this path avoids a second Qt theme hierarchy lookup.
+            return QIcon(asset.filePath);
+        }
+    }
+
+    for (const QString &candidate : candidates) {
+        if (candidate.isEmpty()) {
+            continue;
+        }
+        const QIcon icon = QIcon::fromTheme(candidate);
+        if (!icon.isNull()) {
+            return icon;
+        }
+    }
+    return {};
 }
 
 void IconThemeService::clearRenderedCache() const

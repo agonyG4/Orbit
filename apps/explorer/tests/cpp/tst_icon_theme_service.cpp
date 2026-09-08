@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMimeDatabase>
@@ -60,6 +61,27 @@ void writeIcon(const QString &root, const QString &directory, const QString &nam
     QImage image(32, 32, QImage::Format_ARGB32_Premultiplied);
     image.fill(color);
     QVERIFY2(image.save(path, "PNG"), qPrintable(path));
+}
+
+void writeXpmIcon(const QString &root, const QString &directory, const QString &name, const QColor &color)
+{
+    const QString path = QDir(root).filePath(directory + QLatin1Char('/') + name + QStringLiteral(".xpm"));
+    const QByteArray contents = QByteArrayLiteral("/* XPM */\nstatic const char *icon[] = {\n")
+        + QByteArrayLiteral("\"2 2 1 1\",\n\"  c ")
+        + color.name(QColor::HexRgb).toLatin1()
+        + QByteArrayLiteral("\",\n\"  \",\n\"  \"\n};\n");
+    writeFile(path, contents);
+}
+
+void writeSvgIcon(const QString &root, const QString &directory, const QString &name, const QColor &color)
+{
+    const QString path = QDir(root).filePath(directory + QLatin1Char('/') + name + QStringLiteral(".svg"));
+    const QByteArray contents = QStringLiteral(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\">"
+        "<rect width=\"32\" height=\"32\" fill=\"%1\"/></svg>")
+        .arg(color.name(QColor::HexRgb))
+        .toUtf8();
+    writeFile(path, contents);
 }
 
 void replaceIconAtomically(
@@ -244,13 +266,20 @@ private slots:
     void themeExistsUsesIndexNotProbeIcons();
     void listResolutionPrefersSelectedThemeCandidate();
     void listResolutionPrefersSpecificSelectedCandidate();
+    void resolvesExactInheritedParentAsset();
+    void rendersInheritedParentBeforeFallbackThroughService();
+    void rendersSelectedGenericBeforeFallbackSpecificThroughService();
     void inheritedThemePrecedesPlatformFallback();
     void inheritedThemesFollowRecursiveDeclarationOrder();
     void hicolorIsAlwaysLastThemedFallback();
     void inheritanceCyclesTerminate();
     void splitThemeRootsUseFirstMetadataAndAllAssets();
     void scaledDirectoriesParticipateInPresence();
+    void selectsDeclaredDirectoryBySizeAndScale();
+    void exactThemeFormatsAgreeWithQtSupport();
     void themeAssetChangesInvalidateRenderedResults();
+    void installingPreferredVariantInvalidatesTopology();
+    void unrelatedThemeDoesNotInvalidateTopology();
 };
 
 void IconThemeServiceTest::rejectsUnsafeThemeIdentifiers()
@@ -896,6 +925,114 @@ void IconThemeServiceTest::listResolutionPrefersSpecificSelectedCandidate()
         QStringLiteral("text-x-python"));
 }
 
+void IconThemeServiceTest::resolvesExactInheritedParentAsset()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeSimpleTheme(
+        directory.path(),
+        QStringLiteral("Selected"),
+        {QStringLiteral("16x16/mimetypes")},
+        {QStringLiteral("ParentA"), QStringLiteral("ParentB")});
+    writeSimpleTheme(directory.path(), QStringLiteral("ParentA"));
+    writeSimpleTheme(directory.path(), QStringLiteral("ParentB"));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("ParentB/16x16/mimetypes"),
+        QStringLiteral("shared-icon"),
+        QColor(0x44, 0xaa, 0x66));
+    QIcon::setThemeSearchPaths({directory.path()});
+
+    FreedesktopIconThemeCatalog catalog;
+    const auto asset = catalog.resolveIconAsset(
+        QStringLiteral("Selected"),
+        {QStringLiteral("shared-icon")},
+        QSize(16, 16),
+        1.0);
+    QCOMPARE(asset.themeName, QStringLiteral("ParentB"));
+    QCOMPARE(asset.iconName, QStringLiteral("shared-icon"));
+    QCOMPARE(
+        asset.filePath,
+        QDir(directory.path()).filePath(
+            QStringLiteral("ParentB/16x16/mimetypes/shared-icon.png")));
+}
+
+void IconThemeServiceTest::rendersInheritedParentBeforeFallbackThroughService()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeSimpleTheme(
+        directory.path(),
+        QStringLiteral("Selected"),
+        {QStringLiteral("16x16/mimetypes")},
+        {QStringLiteral("ParentA"), QStringLiteral("ParentB")});
+    writeSimpleTheme(directory.path(), QStringLiteral("ParentA"));
+    writeSimpleTheme(directory.path(), QStringLiteral("ParentB"));
+    writeSimpleTheme(directory.path(), QStringLiteral("PlatformFallback"));
+    writeSimpleTheme(directory.path(), QStringLiteral("hicolor"));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("ParentA/16x16/mimetypes"),
+        QStringLiteral("shared-icon"),
+        QColor(0x44, 0xaa, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("ParentB/16x16/mimetypes"),
+        QStringLiteral("shared-icon"),
+        QColor(0x44, 0x66, 0xaa));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("PlatformFallback/16x16/mimetypes"),
+        QStringLiteral("shared-icon"),
+        QColor(0xaa, 0x44, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("hicolor/16x16/mimetypes"),
+        QStringLiteral("shared-icon"),
+        QColor(0xaa, 0xaa, 0x44));
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setFallbackThemeName(QStringLiteral("PlatformFallback"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("Selected"));
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+    const QImage image = service.renderIcon({QStringLiteral("shared-icon")}, QSize(16, 16));
+    QCOMPARE(image.pixelColor(8, 8), QColor(0x44, 0xaa, 0x66));
+}
+
+void IconThemeServiceTest::rendersSelectedGenericBeforeFallbackSpecificThroughService()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeSimpleTheme(directory.path(), QStringLiteral("Selected"));
+    writeSimpleTheme(directory.path(), QStringLiteral("PlatformFallback"));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Selected/16x16/mimetypes"),
+        QStringLiteral("text-x-generic"),
+        QColor(0x44, 0xaa, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("PlatformFallback/16x16/mimetypes"),
+        QStringLiteral("text-x-python"),
+        QColor(0xaa, 0x44, 0x66));
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setFallbackThemeName(QStringLiteral("PlatformFallback"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("Selected"));
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+    const QImage image = service.renderIcon(
+        {QStringLiteral("text-x-python"), QStringLiteral("text-x-generic")},
+        QSize(16, 16));
+    QCOMPARE(image.pixelColor(8, 8), QColor(0x44, 0xaa, 0x66));
+}
+
 void IconThemeServiceTest::inheritedThemePrecedesPlatformFallback()
 {
     ThemeSearchPathGuard guard;
@@ -1041,6 +1178,10 @@ void IconThemeServiceTest::splitThemeRootsUseFirstMetadataAndAllAssets()
     QVERIFY(firstRoot.isValid());
     QVERIFY(secondRoot.isValid());
     writeSimpleTheme(firstRoot.path(), QStringLiteral("Layered"));
+    writeSimpleTheme(
+        secondRoot.path(),
+        QStringLiteral("Layered"),
+        {QStringLiteral("32x32/mimetypes")});
     writeIcon(
         secondRoot.path(),
         QStringLiteral("Layered/16x16/mimetypes"),
@@ -1087,6 +1228,131 @@ void IconThemeServiceTest::scaledDirectoriesParticipateInPresence()
         QStringLiteral("scaled-only"));
 }
 
+void IconThemeServiceTest::selectsDeclaredDirectoryBySizeAndScale()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray index = QByteArrayLiteral(
+        "[Icon Theme]\n"
+        "Name=Size Theme\n"
+        "Comment=Theme used by deterministic tests\n"
+        "Directories=16x16/mimetypes,32x32/mimetypes,scalable/mimetypes,16x16@2/mimetypes,defaulted/mimetypes\n"
+        "\n"
+        "[16x16/mimetypes]\nSize=16\nType=Fixed\n\n"
+        "[32x32/mimetypes]\nSize=32\nType=Fixed\n\n"
+        "[scalable/mimetypes]\nSize=24\nMinSize=16\nMaxSize=64\nType=Scalable\n\n"
+        "[16x16@2/mimetypes]\nSize=16\nScale=2\nType=Fixed\n\n"
+        "[defaulted/mimetypes]\nSize=16\n");
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("Sized/index.theme")), index);
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Sized/16x16/mimetypes"),
+        QStringLiteral("size-icon"),
+        QColor(0x44, 0xaa, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Sized/32x32/mimetypes"),
+        QStringLiteral("size-icon"),
+        QColor(0xaa, 0x44, 0x66));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Sized/scalable/mimetypes"),
+        QStringLiteral("size-icon"),
+        QColor(0x44, 0x66, 0xaa));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Sized/16x16@2/mimetypes"),
+        QStringLiteral("size-icon"),
+        QColor(0xaa, 0xaa, 0x44));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Sized/defaulted/mimetypes"),
+        QStringLiteral("default-icon"),
+        QColor(0xaa, 0x44, 0xaa));
+    QIcon::setThemeSearchPaths({directory.path()});
+
+    FreedesktopIconThemeCatalog catalog;
+    QCOMPARE(
+        catalog.resolveIconAsset(QStringLiteral("Sized"), {QStringLiteral("size-icon")}, QSize(16, 16), 1.0)
+            .filePath,
+        QDir(directory.path()).filePath(QStringLiteral("Sized/16x16/mimetypes/size-icon.png")));
+    QCOMPARE(
+        catalog.resolveIconAsset(QStringLiteral("Sized"), {QStringLiteral("size-icon")}, QSize(24, 24), 1.0)
+            .filePath,
+        QDir(directory.path()).filePath(QStringLiteral("Sized/scalable/mimetypes/size-icon.png")));
+    QCOMPARE(
+        catalog.resolveIconAsset(QStringLiteral("Sized"), {QStringLiteral("size-icon")}, QSize(16, 16), 2.0)
+            .filePath,
+        QDir(directory.path()).filePath(QStringLiteral("Sized/16x16@2/mimetypes/size-icon.png")));
+    QCOMPARE(
+        catalog.resolveIconAsset(QStringLiteral("Sized"), {QStringLiteral("default-icon")}, QSize(18, 18), 1.0)
+            .filePath,
+        QDir(directory.path()).filePath(QStringLiteral("Sized/defaulted/mimetypes/default-icon.png")));
+}
+
+void IconThemeServiceTest::exactThemeFormatsAgreeWithQtSupport()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeSimpleTheme(directory.path(), QStringLiteral("Formats"));
+    writeIcon(
+        directory.path(),
+        QStringLiteral("Formats/16x16/mimetypes"),
+        QStringLiteral("png-icon"),
+        QColor(0x44, 0xaa, 0x66));
+    writeXpmIcon(
+        directory.path(),
+        QStringLiteral("Formats/16x16/mimetypes"),
+        QStringLiteral("xpm-icon"),
+        QColor(0xaa, 0x44, 0x66));
+    writeSvgIcon(
+        directory.path(),
+        QStringLiteral("Formats/16x16/mimetypes"),
+        QStringLiteral("svg-icon"),
+        QColor(0x44, 0x66, 0xaa));
+    writeFile(
+        QDir(directory.path()).filePath(QStringLiteral("Formats/16x16/mimetypes/svgz-icon.svgz")),
+        QByteArrayLiteral("not a supported deterministic svgz asset"));
+    QIcon::setThemeSearchPaths({directory.path()});
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("Formats"));
+    qunsetenv("ASTREA_ICON_THEME");
+    IconThemeService service(configPath);
+
+    const auto supports = [](const QByteArray &format) {
+        const QList<QByteArray> formats = QImageReader::supportedImageFormats();
+        return std::any_of(
+            formats.cbegin(),
+            formats.cend(),
+            [&format](const QByteArray &supported) {
+                return supported.compare(format, Qt::CaseInsensitive) == 0;
+            });
+    };
+
+    const auto pngAsset = service.renderIcon({QStringLiteral("png-icon")}, QSize(16, 16));
+    QCOMPARE(pngAsset.pixelColor(8, 8), QColor(0x44, 0xaa, 0x66));
+
+    if (supports(QByteArrayLiteral("xpm"))) {
+        const auto xpmAsset = service.renderIcon({QStringLiteral("xpm-icon")}, QSize(16, 16));
+        QCOMPARE(xpmAsset.pixelColor(8, 8), QColor(0xaa, 0x44, 0x66));
+    }
+    if (supports(QByteArrayLiteral("svg"))) {
+        const auto svgAsset = service.renderIcon({QStringLiteral("svg-icon")}, QSize(16, 16));
+        QCOMPARE(svgAsset.pixelColor(8, 8), QColor(0x44, 0x66, 0xaa));
+    }
+
+    FreedesktopIconThemeCatalog catalog;
+    QVERIFY(catalog.resolveIconAsset(
+                 QStringLiteral("Formats"),
+                 {QStringLiteral("svgz-icon")},
+                 QSize(16, 16),
+                 1.0)
+                .filePath
+                .isEmpty());
+}
+
 void IconThemeServiceTest::themeAssetChangesInvalidateRenderedResults()
 {
     ThemeSearchPathGuard guard;
@@ -1123,6 +1389,53 @@ void IconThemeServiceTest::themeAssetChangesInvalidateRenderedResults()
         QSize(16, 16));
     QCOMPARE(updatedImage.pixelColor(8, 8), QColor(0x55, 0x66, 0xdd));
     QVERIFY(service.iconSourceForNames({QStringLiteral("asset-icon")}, 16) != previousSource);
+}
+
+void IconThemeServiceTest::installingPreferredVariantInvalidatesTopology()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTheme(directory.path(), QStringLiteral("ThemeA"), QColor(0xdd, 0x55, 0x55), false);
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setThemeName(QStringLiteral("MissingPlatformTheme"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("ui/theme.json"));
+    writeThemeConfigObject(configPath, QJsonObject {
+        {QStringLiteral("desktop_icon_theme"), QStringLiteral("ThemeA")},
+        {QStringLiteral("theme"), QStringLiteral("dark")},
+    });
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+    QCOMPARE(service.effectiveTheme(), QStringLiteral("ThemeA"));
+    const quint64 previousRevision = service.revision();
+    writeTheme(directory.path(), QStringLiteral("ThemeA-dark"), QColor(0x55, 0x55, 0xdd), false);
+
+    QTRY_COMPARE_WITH_TIMEOUT(service.effectiveTheme(), QStringLiteral("ThemeA-dark"), 3000);
+    QVERIFY(service.revision() > previousRevision);
+}
+
+void IconThemeServiceTest::unrelatedThemeDoesNotInvalidateTopology()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTheme(directory.path(), QStringLiteral("ThemeA"), QColor(0xdd, 0x55, 0x55), false);
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setThemeName(QStringLiteral("MissingPlatformTheme"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("ui/theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("ThemeA"));
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+    const quint64 previousRevision = service.revision();
+    QSignalSpy themeChanges(&service, &IconThemeService::themeChanged);
+    writeTheme(directory.path(), QStringLiteral("UnrelatedTheme"), QColor(0x55, 0x55, 0xdd), false);
+
+    QTest::qWait(500);
+    QCOMPARE(service.effectiveTheme(), QStringLiteral("ThemeA"));
+    QCOMPARE(service.revision(), previousRevision);
+    QCOMPARE(themeChanges.count(), 0);
 }
 
 int main(int argc, char **argv)

@@ -19,15 +19,17 @@ and thumbnail presentation.
 
 `Services::FreedesktopIconThemeCatalog` owns the Freedesktop-specific lookup
 topology behind that policy. It proves installation from valid `index.theme`
-metadata found through `QIcon::themeSearchPaths()`, keeps the first valid
-metadata file while collecting matching asset roots from all search paths,
-and reads declared `Inherits`, `Directories`, and `ScaledDirectories`.
-It resolves inherited themes recursively with cycle protection, keeps the
-platform fallback after the declared family, and always places `hicolor` at
-the end of the themed family. Candidate lists are tested theme-by-theme, so
-an available generic icon in the selected theme cannot be displaced by a
-more-specific icon from a fallback theme. The catalog only selects the
-winning icon name; it is not a renderer.
+metadata found through `QIcon::themeSearchPaths()`, uses the first index file
+in search-path order as the theme description while collecting matching asset
+roots from all search paths, and reads declared `Inherits`, `Directories`,
+`ScaledDirectories`, `Size`, `Scale`, `Type`, `MinSize`, `MaxSize`, and
+`Threshold` values. It resolves inherited themes recursively with cycle
+protection, keeps the platform fallback after the declared family, and always
+places `hicolor` at the end of the themed family. Candidate lists are tested
+theme-by-theme, so an available generic icon in the selected theme cannot be
+displaced by a more-specific icon from a fallback theme. The catalog returns
+an exact `{themeName, iconName, filePath}` descriptor selected by the
+Freedesktop size/scale rules; the service loads that file directly.
 
 `Runtime::AstreaIconImageProvider` exposes rendered results through
 `image://astrea-icons/...`. URLs contain candidate identities, never theme
@@ -96,17 +98,32 @@ checks are catalog reads and do not temporarily mutate global `QIcon` state.
 
 The catalog resolves each candidate list in family order: all candidates in
 the selected theme, then recursively declared inherited themes in declaration
-order, then the public Qt platform fallback theme, then `hicolor`. Only after
-that themed search fails does the service use Qt's ordinary global/platform
-fallback behavior. Qt remains responsible for loading, sizing, scaling, and
-format support for the winning icon.
+order, then the public Qt platform fallback theme, then `hicolor`. For a
+winning candidate it chooses the closest declared directory, preferring an
+exact scale and then the Freedesktop Fixed, Scalable, or Threshold distance
+rules. Only after that exact themed search fails does the service use Qt's
+ordinary global/platform fallback behavior. The exact file is loaded through
+public `QIcon(filePath)` APIs, so Qt remains responsible for decoding and
+rendering without performing a second theme hierarchy lookup. PNG is always
+considered; XPM and SVG are considered only when Qt's public image readers
+advertise support. SVGZ is intentionally not considered without a deterministic
+exact-file support proof.
 
-The service watches the filesystem-backed search roots and active family
-directories. Debounced changes to `index.theme`, inherited content, icon
-assets, or an appearance sibling invalidate catalog/presence data, re-evaluate
-theme selection, clear rendered results, and advance the provider URL
-revision when visible output may have changed. Rewriting `theme.json` without
-changing the effective theme does not trigger a sidebar refresh.
+The service watches the filesystem-backed search roots and active/relevant
+family directories. Debounced changes to `index.theme`, inherited content,
+icon assets, or an appearance sibling invalidate catalog data, re-evaluate
+theme selection, clear rendered results, and advance the provider URL revision
+when visible output may have changed. Root-directory events are filtered
+against a topology signature, so installing a missing preferred sibling is
+noticed while an unrelated theme does not trigger a revision. Rewriting
+`theme.json` without changing the effective theme does not trigger a sidebar
+refresh.
+
+The service API accepts an explicit device-pixel ratio and selects scaled
+directories accordingly. The QML image provider currently passes `1.0`, so
+user-visible provider requests do not yet claim end-to-end HiDPI propagation;
+that limitation is intentional and documented until the provider receives a
+real device-scale input.
 
 ## Full-color and symbolic pipelines
 

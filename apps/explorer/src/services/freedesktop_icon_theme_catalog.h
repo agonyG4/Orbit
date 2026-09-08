@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHash>
+#include <QList>
+#include <QSize>
 #include <QSet>
 #include <QStringList>
 #include <QVariant>
@@ -10,18 +12,46 @@ namespace Astrea::Explorer::Native::Services {
 class FreedesktopIconThemeCatalog final
 {
 public:
+    struct ResolvedIconAsset final {
+        QString themeName;
+        QString iconName;
+        QString filePath;
+    };
+
     bool themeExists(const QString &themeName) const;
     QStringList themeFamily(const QString &themeName) const;
+    ResolvedIconAsset resolveIconAsset(
+        const QString &themeName,
+        const QStringList &candidates,
+        const QSize &logicalSize,
+        qreal devicePixelRatio) const;
     QString resolveIconName(
         const QString &themeName,
         const QStringList &candidates) const;
+    QStringList searchRootPaths() const;
     QStringList watchPaths(const QStringList &themeNames) const;
     void invalidate() const;
 
 private:
+    enum class DirectoryType {
+        Fixed,
+        Scalable,
+        Threshold,
+    };
+
+    struct DirectoryMetadata final {
+        QString path;
+        int size = 0;
+        int scale = 1;
+        int minSize = 0;
+        int maxSize = 0;
+        int threshold = 2;
+        DirectoryType type = DirectoryType::Threshold;
+    };
+
     struct ThemeMetadata final {
         QStringList inherits;
-        QStringList directories;
+        QList<DirectoryMetadata> directories;
         QStringList roots;
     };
 
@@ -33,6 +63,11 @@ private:
 
     void refreshSearchSnapshot() const;
     const ThemeMetadata *metadataFor(const QString &themeName) const;
+    QString findIconPath(
+        const QString &themeName,
+        const QString &candidate,
+        const QSize &logicalSize,
+        qreal devicePixelRatio) const;
     bool hasIcon(const QString &themeName, const QString &candidate) const;
     void appendTheme(
         const QString &themeName,

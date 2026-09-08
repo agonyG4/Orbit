@@ -43,6 +43,8 @@ QImage AstreaIconImageProvider::requestImage(
         ? QStringList{}
         : decoded.split(QLatin1Char('|'), Qt::SkipEmptyParts);
     const QSize logicalSize = requestedSize.isValid() ? requestedSize : QSize(32, 32);
+    // The provider does not currently receive the window/device scale, so
+    // explicit DPR-aware service callers remain the only HiDPI path.
     const QImage image = m_service->renderIcon(candidates, logicalSize, 1.0);
     if (size) {
         *size = image.size();

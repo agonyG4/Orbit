@@ -85,6 +85,12 @@ private:
     ThemeSelection selectTheme() const;
     void applyTheme(const ThemeSelection &selection);
     void updateWatcher();
+    QString themeTopologySignature() const;
+    QStringList themeWatchNames() const;
+    QIcon resolveIconForRender(
+        const QStringList &candidates,
+        const QSize &logicalSize,
+        qreal devicePixelRatio) const;
     void clearRenderedCache() const;
     QImage builtInFallback(
         const QSize &pixelSize,
@@ -104,7 +110,9 @@ private:
     quint64 m_revision = 0;
     FreedesktopIconThemeCatalog m_catalog;
     QStringList m_themeWatchPaths;
+    QStringList m_themeRootWatchPaths;
     bool m_themeAssetsChanged = false;
+    bool m_themeTopologyChanged = false;
     bool m_hasAppliedAppearance = false;
     AppearanceMode m_appliedAppearance = AppearanceMode::Dark;
     mutable QHash<QString, QImage> m_renderedCache;
