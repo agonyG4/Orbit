@@ -7,6 +7,8 @@
 #include <QSize>
 #include <QStringList>
 
+#include "freedesktop_icon_theme_catalog.h"
+
 class QFileSystemWatcher;
 class QTimer;
 
@@ -100,6 +102,11 @@ private:
     QString m_effectiveTheme;
     QString m_themeSource;
     quint64 m_revision = 0;
+    FreedesktopIconThemeCatalog m_catalog;
+    QStringList m_themeWatchPaths;
+    bool m_themeAssetsChanged = false;
+    bool m_hasAppliedAppearance = false;
+    AppearanceMode m_appliedAppearance = AppearanceMode::Dark;
     mutable QHash<QString, QImage> m_renderedCache;
     mutable QStringList m_cacheOrder;
 };

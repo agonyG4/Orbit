@@ -9,13 +9,25 @@ and thumbnail presentation.
 `Services::IconThemeService` owns:
 
 - canonical desktop icon-theme selection and identifier validation;
-- `QIcon` lookup and theme search paths;
 - MIME-derived candidates from `QMimeDatabase::MatchExtension`;
 - special-directory identity from actual paths and `QStandardPaths`;
 - symbolic aliases for semantic sidebar and device roles;
 - a bounded rendered-image cache keyed by theme revision, candidate identity,
   requested size, and device-pixel ratio;
-- canonical configuration watching and revision invalidation.
+- canonical configuration and active-theme asset watching;
+- revision invalidation for visible theme changes.
+
+`Services::FreedesktopIconThemeCatalog` owns the Freedesktop-specific lookup
+topology behind that policy. It proves installation from valid `index.theme`
+metadata found through `QIcon::themeSearchPaths()`, keeps the first valid
+metadata file while collecting matching asset roots from all search paths,
+and reads declared `Inherits`, `Directories`, and `ScaledDirectories`.
+It resolves inherited themes recursively with cycle protection, keeps the
+platform fallback after the declared family, and always places `hicolor` at
+the end of the themed family. Candidate lists are tested theme-by-theme, so
+an available generic icon in the selected theme cannot be displaced by a
+more-specific icon from a fallback theme. The catalog only selects the
+winning icon name; it is not a renderer.
 
 `Runtime::AstreaIconImageProvider` exposes rendered results through
 `image://astrea-icons/...`. URLs contain candidate identities, never theme
@@ -57,7 +69,7 @@ The effective desktop theme is selected in this order:
 2. valid and installed `desktop_icon_theme` in
    `~/.config/AstreaOS/ui/theme.json`, preferring the matching `-dark` or
    `-light` sibling when the configured value is a base theme;
-3. the usable platform `QIcon::themeName()`;
+3. the installed platform `QIcon::themeName()`;
 4. the installed `MacTahoe` compatibility default, using the same appearance
    sibling rule when available;
 5. Qt/Freedesktop fallback lookup, followed by a built-in Astrea fallback
@@ -67,6 +79,11 @@ The effective desktop theme is selected in this order:
 is not interpreted as the desktop icon-theme key. This prevents a value such
 as `dark` from shadowing the actual installed desktop theme.
 
+Theme installation is proven from actual Freedesktop metadata, not from
+`QIcon::fromTheme()` or `QIcon::hasThemeIcon()` probe results. Qt can answer
+those probes through fallback themes and platform-native providers, which
+would incorrectly make an absent appearance sibling look installed.
+
 Theme identifiers are strict identifiers. Empty values, separators,
 traversal, and arbitrary path-like values are rejected. A configured explicit
 `-dark` or `-light` variant is respected as-is and is never double-suffixed.
@@ -74,15 +91,22 @@ The environment override is also exact: `ASTREA_ICON_THEME=DebugTheme` does
 not become `DebugTheme-dark`.
 
 The appearance rule is the same one used by Borealis: `theme == "light"` or
-`theme_mode == 1` means Light; every other value means Dark. During theme
-probes, the service restores the previous global `QIcon` theme so discovery
-does not leak temporary state into the running application.
+`theme_mode == 1` means Light; every other value means Dark. Theme existence
+checks are catalog reads and do not temporarily mutate global `QIcon` state.
 
-Only an effective runtime theme change increments the revision, clears
-rendered results, emits `themeChanged`, and changes the provider URL revision.
-Rewriting `theme.json` without changing the effective theme does not trigger a
-sidebar refresh. A Light/Dark transition that selects a different installed
-variant updates the visible icons without restarting Explorer.
+The catalog resolves each candidate list in family order: all candidates in
+the selected theme, then recursively declared inherited themes in declaration
+order, then the public Qt platform fallback theme, then `hicolor`. Only after
+that themed search fails does the service use Qt's ordinary global/platform
+fallback behavior. Qt remains responsible for loading, sizing, scaling, and
+format support for the winning icon.
+
+The service watches the filesystem-backed search roots and active family
+directories. Debounced changes to `index.theme`, inherited content, icon
+assets, or an appearance sibling invalidate catalog/presence data, re-evaluate
+theme selection, clear rendered results, and advance the provider URL
+revision when visible output may have changed. Rewriting `theme.json` without
+changing the effective theme does not trigger a sidebar refresh.
 
 ## Full-color and symbolic pipelines
 

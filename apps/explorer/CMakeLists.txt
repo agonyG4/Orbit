@@ -123,6 +123,8 @@ add_custom_target(astrea_explorer_runtime_stage
     DEPENDS "${ASTREA_EXPLORER_RUNTIME_STAMP}")
 
 add_library(astrea_explorer_native_icons STATIC
+    src/services/freedesktop_icon_theme_catalog.h
+    src/services/freedesktop_icon_theme_catalog.cpp
     src/services/icon_theme_service.h
     src/services/icon_theme_service.cpp
 )

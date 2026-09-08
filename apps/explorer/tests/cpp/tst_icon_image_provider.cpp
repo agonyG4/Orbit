@@ -21,17 +21,23 @@ struct ThemeSearchPathGuard final
     ThemeSearchPathGuard()
         : paths(QIcon::themeSearchPaths())
         , themeName(QIcon::themeName())
+        , fallbackThemeName(QIcon::fallbackThemeName())
+        , fallbackSearchPaths(QIcon::fallbackSearchPaths())
     {
     }
 
     ~ThemeSearchPathGuard()
     {
-        QIcon::setThemeSearchPaths(paths);
         QIcon::setThemeName(themeName);
+        QIcon::setThemeSearchPaths(paths);
+        QIcon::setFallbackThemeName(fallbackThemeName);
+        QIcon::setFallbackSearchPaths(fallbackSearchPaths);
     }
 
     QStringList paths;
     QString themeName;
+    QString fallbackThemeName;
+    QStringList fallbackSearchPaths;
 };
 
 void writeFile(const QString &path, const QByteArray &contents)
@@ -48,7 +54,8 @@ void writeProviderTheme(const QString &root)
     writeFile(
         QDir(theme).filePath(QStringLiteral("index.theme")),
         QByteArrayLiteral(
-            "[Icon Theme]\nName=Provider Theme\nDirectories=16x16/mimetypes,mimetypes/symbolic\n\n"
+            "[Icon Theme]\nName=Provider Theme\nComment=Theme used by provider tests\n"
+            "Directories=16x16/mimetypes,mimetypes/symbolic\n\n"
             "[16x16/mimetypes]\nSize=16\nContext=MimeTypes\nType=Fixed\n\n"
             "[mimetypes/symbolic]\nSize=16\nMinSize=16\nMaxSize=512\nContext=MimeTypes\nType=Scalable\n"));
     const QString iconPath = QDir(theme).filePath(QStringLiteral("16x16/mimetypes/test-mime.png"));

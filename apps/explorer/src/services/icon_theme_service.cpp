@@ -10,6 +10,7 @@
 #include <QMimeType>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmapCache>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
@@ -264,6 +265,16 @@ QStringList IconThemeService::symbolicCandidatesForNames(const QStringList &name
 
 QIcon IconThemeService::resolveIcon(const QStringList &candidates) const
 {
+    if (!m_effectiveTheme.isEmpty()) {
+        const QString winningCandidate = m_catalog.resolveIconName(m_effectiveTheme, candidates);
+        if (!winningCandidate.isEmpty()) {
+            const QIcon icon = QIcon::fromTheme(winningCandidate);
+            if (!icon.isNull()) {
+                return icon;
+            }
+        }
+    }
+
     for (const QString &candidate : candidates) {
         if (candidate.isEmpty()) {
             continue;
@@ -300,13 +311,18 @@ QImage IconThemeService::renderIcon(
     const QIcon icon = resolveIcon(normalizedCandidates);
     bool renderedThemeIcon = false;
     if (!icon.isNull()) {
-        const QPixmap pixmap = icon.pixmap(pixelSize);
+        const QSize logicalRenderSize(
+            std::max(1, qRound(pixelSize.width() / boundedDpr)),
+            std::max(1, qRound(pixelSize.height() / boundedDpr)));
+        const QPixmap pixmap = icon.pixmap(
+            logicalRenderSize,
+            boundedDpr,
+            QIcon::Normal,
+            QIcon::Off);
         if (!pixmap.isNull()) {
             renderedThemeIcon = true;
-            QImage rendered = pixmap.toImage().scaled(
-                pixelSize,
-                Qt::KeepAspectRatio,
-                Qt::SmoothTransformation);
+            QImage rendered = pixmap.toImage();
+            rendered.setDevicePixelRatio(1.0);
             QPainter painter(&result);
             painter.drawImage(
                 (pixelSize.width() - rendered.width()) / 2,
@@ -370,13 +386,37 @@ QString IconThemeService::fileIconSource(
 
 void IconThemeService::reloadConfig()
 {
+    const bool themeAssetsChanged = m_themeAssetsChanged;
+    const quint64 previousRevision = m_revision;
+    m_catalog.invalidate();
+    if (themeAssetsChanged) {
+        const QString currentTheme = QIcon::themeName();
+        QIcon::setThemeName(QStringLiteral("__astrea_icon_theme_refresh__"));
+        QIcon::setThemeName(currentTheme);
+        // Qt's public theme-key invalidation does not evict pixmaps for a
+        // replaced file path; asset changes are rare, so clear that shared
+        // cache before the next QIcon render.
+        QPixmapCache::clear();
+    }
     applyTheme(selectTheme());
+    if (themeAssetsChanged && m_revision == previousRevision) {
+        ++m_revision;
+        clearRenderedCache();
+        emit themeChanged();
+    }
+    m_themeAssetsChanged = false;
     updateWatcher();
 }
 
 void IconThemeService::scheduleReload(const QString &path)
 {
-    Q_UNUSED(path);
+    const QString normalizedPath = QFileInfo(path).absoluteFilePath();
+    const QString configParent = QFileInfo(m_configPath).absolutePath();
+    if (normalizedPath != QFileInfo(m_configPath).absoluteFilePath()
+        && normalizedPath != configParent
+        && m_themeWatchPaths.contains(normalizedPath)) {
+        m_themeAssetsChanged = true;
+    }
     if (!m_reloadTimer->isActive()) {
         m_reloadTimer->start();
     }
@@ -407,31 +447,7 @@ QStringList IconThemeService::fallbackCandidates()
 
 bool IconThemeService::themeIsUsable(const QString &themeName) const
 {
-    if (!isValidThemeIdentifier(themeName)) {
-        return false;
-    }
-
-    // QIcon is the authority for whether a theme can actually resolve icons;
-    // do not reconstruct an icon-theme filesystem path just to probe it.
-    const QString previousTheme = QIcon::themeName();
-    QIcon::setThemeName(themeName);
-    const QStringList probes {
-        QStringLiteral("folder"),
-        QStringLiteral("inode-directory"),
-        QStringLiteral("application-x-generic"),
-        QStringLiteral("text-x-generic"),
-        QStringLiteral("user-home"),
-        QStringLiteral("application-pdf"),
-    };
-    bool usable = false;
-    for (const QString &probe : probes) {
-        if (QIcon::hasThemeIcon(probe) || !QIcon::fromTheme(probe).isNull()) {
-            usable = true;
-            break;
-        }
-    }
-    QIcon::setThemeName(previousTheme);
-    return usable;
+    return m_catalog.themeExists(themeName);
 }
 
 QString IconThemeService::resolveAppearanceVariant(
@@ -487,7 +503,13 @@ IconThemeService::ThemeSelection IconThemeService::selectTheme() const
 
 void IconThemeService::applyTheme(const ThemeSelection &selection)
 {
-    if (selection.name == m_effectiveTheme) {
+    const AppearanceMode currentAppearance = appearance();
+    const bool changed = selection.name != m_effectiveTheme
+        || !m_hasAppliedAppearance
+        || currentAppearance != m_appliedAppearance;
+    m_appliedAppearance = currentAppearance;
+    m_hasAppliedAppearance = true;
+    if (!changed) {
         m_themeSource = selection.source;
         return;
     }
@@ -530,6 +552,16 @@ void IconThemeService::updateWatcher()
     }
     if (QFileInfo(parentPath).isDir()) {
         m_watcher->addPath(parentPath);
+    }
+
+    m_themeWatchPaths = m_catalog.watchPaths({
+        m_effectiveTheme,
+        configuredBaseTheme(),
+        m_platformTheme,
+        QIcon::fallbackThemeName(),
+    });
+    for (const QString &path : m_themeWatchPaths) {
+        m_watcher->addPath(path);
     }
 }
 
