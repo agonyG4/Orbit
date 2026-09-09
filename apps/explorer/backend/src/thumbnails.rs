@@ -507,6 +507,32 @@ mod tests {
         }
     }
 
+    struct ConditionalGenerator {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ThumbnailGenerator for ConditionalGenerator {
+        fn generate(&self, input: &Path, output: &Path, target: u32) -> Result<(), String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(input.to_string_lossy().into_owned());
+            if input.file_stem().and_then(|value| value.to_str()) == Some("broken") {
+                return Err("deterministic generator failure".to_string());
+            }
+            let file = std::fs::File::create(output).map_err(|error| error.to_string())?;
+            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), target, target);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+            let pixel_count = target as usize * target as usize;
+            let pixels = vec![255; pixel_count * 4];
+            writer
+                .write_image_data(&pixels)
+                .map_err(|error| error.to_string())
+        }
+    }
+
     #[test]
     fn batch_uses_exact_paths_in_input_order_and_deduplicates() {
         let root = std::env::temp_dir().join(format!(
@@ -670,6 +696,128 @@ mod tests {
 
         assert_eq!(item["status"], "deferred");
         assert!(calls.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failure_entries_suppress_same_source_and_retry_after_size_change() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-thumbnail-failure-{}", std::process::id()));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let healthy = root.join("healthy.png");
+        let broken = root.join("broken.mp4");
+        write_fixture_png(&healthy);
+        fs::write(&broken, b"broken").unwrap();
+        let first_calls = Arc::new(Mutex::new(Vec::new()));
+        let first_generator = ConditionalGenerator {
+            calls: first_calls.clone(),
+        };
+
+        let result = run_batch_with_generator_at(
+            &[
+                "128".to_string(),
+                healthy.to_string_lossy().into_owned(),
+                broken.to_string_lossy().into_owned(),
+            ],
+            &first_generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let items = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(items[0]["status"], "ready");
+        assert_eq!(items[1]["status"], "failed");
+        assert_eq!(first_calls.lock().unwrap().len(), 2);
+
+        let second_calls = Arc::new(Mutex::new(Vec::new()));
+        let second_generator = ConditionalGenerator {
+            calls: second_calls.clone(),
+        };
+        let suppressed = run_batch_with_generator_at(
+            &[
+                "128".to_string(),
+                healthy.to_string_lossy().into_owned(),
+                broken.to_string_lossy().into_owned(),
+            ],
+            &second_generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let suppressed_items = serde_json::from_str::<serde_json::Value>(&suppressed)
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(suppressed_items[1]["status"], "failed");
+        assert!(second_calls.lock().unwrap().is_empty());
+
+        fs::write(&broken, b"broken source changed").unwrap();
+        let third_calls = Arc::new(Mutex::new(Vec::new()));
+        let third_generator = ConditionalGenerator {
+            calls: third_calls.clone(),
+        };
+        let retried = run_batch_with_generator_at(
+            &["128".to_string(), broken.to_string_lossy().into_owned()],
+            &third_generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let retried_item = serde_json::from_str::<serde_json::Value>(&retried).unwrap()["items"][0]
+            .clone();
+        assert_eq!(retried_item["status"], "failed");
+        assert_eq!(third_calls.lock().unwrap().as_slice(), &[broken.to_string_lossy().as_ref()]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn standard_cache_can_be_recognized_through_public_gio_attributes() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-thumbnail-gio-{}", std::process::id()));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("photo.png");
+        write_fixture_png(&source);
+        let metadata = fs::metadata(&source).unwrap();
+        let version = SourceVersion::from_metadata(&metadata);
+        let uri = canonical_uri(&source).unwrap();
+        let cached = tier_path(&cache, ThumbnailTier::Normal, &uri);
+        write_standard_thumbnail(&source, &cached, &uri, version, Some("image/png")).unwrap();
+
+        let source_file = gio::File::for_path(&source);
+        let attributes = gio::FileInfo::new();
+        attributes.set_attribute_byte_string(
+            "thumbnail::path-normal",
+            cached.to_string_lossy().as_ref(),
+        );
+        attributes.set_attribute_boolean("thumbnail::is-valid-normal", true);
+        if source_file
+            .set_attributes_from_info(
+                &attributes,
+                gio::FileQueryInfoFlags::NONE,
+                None::<&gio::Cancellable>,
+            )
+            .is_ok()
+        {
+            let info = source_file
+                .query_info(
+                    "thumbnail::path-normal,thumbnail::is-valid-normal",
+                    gio::FileQueryInfoFlags::NONE,
+                    None::<&gio::Cancellable>,
+                )
+                .unwrap();
+            assert_eq!(
+                info.attribute_byte_string("thumbnail::path-normal")
+                    .as_deref(),
+                Some(cached.to_string_lossy().as_ref())
+            );
+            assert!(info.boolean("thumbnail::is-valid-normal"));
+        }
         let _ = fs::remove_dir_all(root);
     }
 

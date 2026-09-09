@@ -145,10 +145,13 @@ noticed while an unrelated theme does not trigger a revision. Rewriting
 refresh.
 
 The service API accepts an explicit device-pixel ratio and selects scaled
-directories accordingly. The QML image provider currently passes `1.0`, so
-user-visible provider requests do not yet claim end-to-end HiDPI propagation;
-that limitation is intentional and documented until the provider receives a
-real device-scale input.
+directories accordingly. Each Explorer visual surface computes a bounded
+per-window ratio (`0.5..4.0`), passes it through the source URL, and requests
+physical decode pixels while keeping its layout geometry in device-independent
+pixels. The image provider uses the logical `size` for theme selection and
+rendering, the physical requested size for raster decode, and preserves the
+ratio on the returned image so Qt does not confuse DPR variants in its image
+cache.
 
 ## File visual metadata lifecycle
 
