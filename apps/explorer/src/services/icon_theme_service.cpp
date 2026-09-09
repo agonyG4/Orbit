@@ -349,31 +349,46 @@ QImage IconThemeService::renderIcon(
     return result;
 }
 
-QString IconThemeService::iconSourceForNames(const QStringList &names, int size) const
+QString IconThemeService::iconSourceForNames(
+    const QStringList &names,
+    int size,
+    qreal devicePixelRatio) const
 {
     const QStringList candidates = iconCandidatesForNames(names);
     const QByteArray encoded = QUrl::toPercentEncoding(candidates.join(QLatin1Char('|')));
+    const qreal boundedDpr = std::clamp(devicePixelRatio, 0.5, 4.0);
     return QStringLiteral("image://astrea-icons/theme/")
         + QString::fromLatin1(encoded)
         + QStringLiteral("?revision=")
         + QString::number(m_revision)
         + QStringLiteral("&size=")
-        + QString::number(std::clamp(size, 1, kMaxIconSize));
+        + QString::number(std::clamp(size, 1, kMaxIconSize))
+        + QStringLiteral("&dpr=")
+        + QString::number(boundedDpr, 'g', 3);
 }
 
-QString IconThemeService::symbolicIconSourceForNames(const QStringList &names, int size) const
+QString IconThemeService::symbolicIconSourceForNames(
+    const QStringList &names,
+    int size,
+    qreal devicePixelRatio) const
 {
     const QByteArray encoded = QUrl::toPercentEncoding(
         symbolicCandidatesForNames(names).join(QLatin1Char('|')));
+    const qreal boundedDpr = std::clamp(devicePixelRatio, 0.5, 4.0);
     return QStringLiteral("image://astrea-icons/theme/")
         + QString::fromLatin1(encoded)
         + QStringLiteral("?revision=")
         + QString::number(m_revision)
         + QStringLiteral("&size=")
-        + QString::number(std::clamp(size, 1, kMaxIconSize));
+        + QString::number(std::clamp(size, 1, kMaxIconSize))
+        + QStringLiteral("&dpr=")
+        + QString::number(boundedDpr, 'g', 3);
 }
 
-QString IconThemeService::emblemIconSource(const QString &name, int size) const
+QString IconThemeService::emblemIconSource(
+    const QString &name,
+    int size,
+    qreal devicePixelRatio) const
 {
     const QString normalizedName = name.trimmed();
     if (normalizedName.isEmpty()) {
@@ -401,12 +416,15 @@ QString IconThemeService::emblemIconSource(const QString &name, int size) const
     }
 
     const QByteArray encoded = QUrl::toPercentEncoding(candidates.join(QLatin1Char('|')));
+    const qreal boundedDpr = std::clamp(devicePixelRatio, 0.5, 4.0);
     return QStringLiteral("image://astrea-icons/theme/")
         + QString::fromLatin1(encoded)
         + QStringLiteral("?revision=")
         + QString::number(m_revision)
         + QStringLiteral("&size=")
-        + QString::number(std::clamp(size, 1, kMaxIconSize));
+        + QString::number(std::clamp(size, 1, kMaxIconSize))
+        + QStringLiteral("&dpr=")
+        + QString::number(boundedDpr, 'g', 3);
 }
 
 QString IconThemeService::fileIconSource(
@@ -414,7 +432,8 @@ QString IconThemeService::fileIconSource(
     bool isDirectory,
     bool isExecutable,
     int size,
-    const QString &semanticIconName) const
+    const QString &semanticIconName,
+    qreal devicePixelRatio) const
 {
     return richFileIconSource(
         path,
@@ -424,7 +443,8 @@ QString IconThemeService::fileIconSource(
         semanticIconName,
         {},
         {},
-        {});
+        {},
+        devicePixelRatio);
 }
 
 QString IconThemeService::richFileIconSource(
@@ -435,7 +455,8 @@ QString IconThemeService::richFileIconSource(
     const QString &semanticIconName,
     const QStringList &iconNames,
     const QUrl &iconFileUrl,
-    const QString &iconFileVersion) const
+    const QString &iconFileVersion,
+    qreal devicePixelRatio) const
 {
     QStringList names;
     if (!semanticIconName.trimmed().isEmpty()) {
@@ -465,11 +486,13 @@ QString IconThemeService::richFileIconSource(
                 + QStringLiteral("&fallback=")
                 + QString::fromLatin1(encodedFallback)
                 + QStringLiteral("&size=")
-                + QString::number(std::clamp(size, 1, kMaxIconSize));
+                + QString::number(std::clamp(size, 1, kMaxIconSize))
+                + QStringLiteral("&dpr=")
+                + QString::number(std::clamp(devicePixelRatio, 0.5, 4.0), 'g', 3);
         }
     }
 
-    return iconSourceForNames(names, size);
+    return iconSourceForNames(names, size, devicePixelRatio);
 }
 
 void IconThemeService::reloadConfig()

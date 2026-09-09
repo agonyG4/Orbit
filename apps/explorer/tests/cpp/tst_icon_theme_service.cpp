@@ -291,6 +291,7 @@ private slots:
     void variantFallbacksWhenSiblingUnavailable();
     void themeProbeRestoresGlobalTheme();
     void rendersRequestedSizeAndBuiltInFallback();
+    void renderIconUsesPhysicalPixelsForDpr();
     void symbolicSourceUsesActualSymbolicCandidates();
     void rendersActualSymbolicArtworkWithoutRecoloring();
     void generatesCanonicalSymbolicAliases();
@@ -645,6 +646,16 @@ void IconThemeServiceTest::rendersRequestedSizeAndBuiltInFallback()
         1.0);
     QVERIFY(!fallback.isNull());
     QCOMPARE(fallback.size(), QSize(24, 24));
+}
+
+void IconThemeServiceTest::renderIconUsesPhysicalPixelsForDpr()
+{
+    IconThemeService service;
+    const QString normal = service.iconSourceForNames({QStringLiteral("test-action")}, 16, 1.0);
+    const QString hidpi = service.iconSourceForNames({QStringLiteral("test-action")}, 16, 2.0);
+    QVERIFY(normal != hidpi);
+    QVERIFY(normal.contains(QStringLiteral("dpr=1")));
+    QVERIFY(hidpi.contains(QStringLiteral("dpr=2")));
 }
 
 void IconThemeServiceTest::symbolicSourceUsesActualSymbolicCandidates()

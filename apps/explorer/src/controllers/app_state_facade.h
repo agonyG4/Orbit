@@ -381,8 +381,15 @@ public:
         const QString &filePath,
         int physicalTarget);
     Q_INVOKABLE void requestFileVisualMetadata(int firstIndex, int lastIndex);
-    Q_INVOKABLE QString themedIconSource(const QString &iconName, int size, const QString &themeName);
-    Q_INVOKABLE QString sidebarIconSource(const QString &iconName, int size);
+    Q_INVOKABLE QString themedIconSource(
+        const QString &iconName,
+        int size,
+        const QString &themeName,
+        double devicePixelRatio = 1.0);
+    Q_INVOKABLE QString sidebarIconSource(
+        const QString &iconName,
+        int size,
+        double devicePixelRatio = 1.0);
     Q_INVOKABLE QString fileIconName(
         const QString &path,
         bool isDirectory,
@@ -392,7 +399,8 @@ public:
         bool isDirectory,
         bool isExecutable,
         int size,
-        const QString &semanticIconName = QString()) const;
+        const QString &semanticIconName = QString(),
+        double devicePixelRatio = 1.0) const;
     Q_INVOKABLE QString richFileIconSource(
         const QString &path,
         bool isDirectory,
@@ -401,8 +409,12 @@ public:
         const QString &semanticIconName,
         const QStringList &iconNames,
         const QUrl &iconFileUrl,
-        const QString &iconFileVersion) const;
-    Q_INVOKABLE QString emblemIconSource(const QString &name, int size) const;
+        const QString &iconFileVersion,
+        double devicePixelRatio = 1.0) const;
+    Q_INVOKABLE QString emblemIconSource(
+        const QString &name,
+        int size,
+        double devicePixelRatio = 1.0) const;
     Q_INVOKABLE bool writePortalResult(const QString &json);
     Q_INVOKABLE BackendRequestId requestMountDevice(
         const QString &devicePath,

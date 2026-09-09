@@ -40,10 +40,25 @@ QImage AstreaIconImageProvider::requestImage(
         payload.truncate(queryIndex);
     }
     const QUrlQuery query(queryText);
-    const QSize logicalSize = requestedSize.isValid()
+    bool dprOk = false;
+    qreal devicePixelRatio = query.queryItemValue(QStringLiteral("dpr")).toDouble(&dprOk);
+    if (!dprOk || devicePixelRatio <= 0.0) {
+        devicePixelRatio = 1.0;
+    }
+    devicePixelRatio = qBound<qreal>(0.5, devicePixelRatio, 4.0);
+    const int querySize = query.queryItemValue(QStringLiteral("size")).toInt();
+    const QSize logicalSize = querySize > 0
+        ? QSize(querySize, querySize)
+        : requestedSize.isValid()
+        ? QSize(
+            qMax(1, qRound(requestedSize.width() / devicePixelRatio)),
+            qMax(1, qRound(requestedSize.height() / devicePixelRatio)))
+        : QSize(32, 32);
+    const QSize physicalSize = requestedSize.isValid()
         ? requestedSize
-        : QSize(query.queryItemValue(QStringLiteral("size")).toInt(),
-                query.queryItemValue(QStringLiteral("size")).toInt());
+        : QSize(
+            qMax(1, qRound(logicalSize.width() * devicePixelRatio)),
+            qMax(1, qRound(logicalSize.height() * devicePixelRatio)));
 
     if (payload.startsWith(QStringLiteral("file/"))) {
         payload.remove(0, 5);
@@ -54,11 +69,12 @@ QImage AstreaIconImageProvider::requestImage(
                 QImageReader reader(iconFile.absoluteFilePath());
                 reader.setAutoTransform(true);
                 const QSize sourceSize = reader.size();
-                if (sourceSize.isValid() && logicalSize.isValid()) {
-                    reader.setScaledSize(sourceSize.scaled(logicalSize, Qt::KeepAspectRatio));
+                if (sourceSize.isValid() && physicalSize.isValid()) {
+                    reader.setScaledSize(sourceSize.scaled(physicalSize, Qt::KeepAspectRatio));
                 }
-                const QImage image = reader.read();
+                QImage image = reader.read();
                 if (!image.isNull()) {
+                    image.setDevicePixelRatio(devicePixelRatio);
                     if (size) {
                         *size = image.size();
                     }
@@ -71,7 +87,7 @@ QImage AstreaIconImageProvider::requestImage(
         const QStringList candidates = fallback.isEmpty()
             ? QStringList{}
             : fallback.split(QLatin1Char('|'), Qt::SkipEmptyParts);
-        const QImage image = m_service->renderIcon(candidates, logicalSize, 1.0);
+        const QImage image = m_service->renderIcon(candidates, logicalSize, devicePixelRatio);
         if (size) {
             *size = image.size();
         }
@@ -85,10 +101,8 @@ QImage AstreaIconImageProvider::requestImage(
     const QStringList candidates = decoded.isEmpty()
         ? QStringList{}
         : decoded.split(QLatin1Char('|'), Qt::SkipEmptyParts);
-    const QSize effectiveSize = logicalSize.isValid() ? logicalSize : QSize(32, 32);
-    // The provider does not currently receive the window/device scale, so
-    // explicit DPR-aware service callers remain the only HiDPI path.
-    const QImage image = m_service->renderIcon(candidates, effectiveSize, 1.0);
+   const QSize effectiveSize = logicalSize.isValid() ? logicalSize : QSize(32, 32);
+    const QImage image = m_service->renderIcon(candidates, effectiveSize, devicePixelRatio);
     if (size) {
         *size = image.size();
     }

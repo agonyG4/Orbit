@@ -97,6 +97,8 @@ private slots:
     void rendersEncodedCandidateSynchronously();
     void rendersSymbolicCandidateFromUrl();
     void rendersLocalFileIconRoute();
+    void rendersThemeIconAtRequestedDpr();
+    void rendersLocalFileIconAtRequestedDpr();
     void fallsBackToRichThemedIdentityWhenCustomFileDisappears();
     void alwaysReturnsBuiltInFallbackForMissingCandidates();
 };
@@ -174,6 +176,60 @@ void IconImageProviderTest::rendersLocalFileIconRoute()
     QVERIFY(!image.isNull());
     QCOMPARE(requested, QSize(16, 8));
     QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0xee, 0x77, 0x22));
+}
+
+void IconImageProviderTest::rendersThemeIconAtRequestedDpr()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath);
+    IconThemeService service(configPath);
+    AstreaIconImageProvider provider(&service);
+
+    const QString source = service.iconSourceForNames({QStringLiteral("missing-dpr-icon")}, 16, 2.0);
+    const QString id = source.mid(QStringLiteral("image://astrea-icons/").size());
+    QSize requested;
+    const QImage image = provider.requestImage(id, &requested, QSize());
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), QSize(32, 32));
+    QCOMPARE(image.devicePixelRatio(), 2.0);
+    QCOMPARE(requested, QSize(32, 32));
+}
+
+void IconImageProviderTest::rendersLocalFileIconAtRequestedDpr()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath);
+    const QString iconPath = QDir(directory.path()).filePath(QStringLiteral("custom-dpr.png"));
+    QImage custom(24, 12, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(QColor(0xee, 0x77, 0x22));
+    QVERIFY(custom.save(iconPath, "PNG"));
+
+    IconThemeService service(configPath);
+    AstreaIconImageProvider provider(&service);
+    const QString source = service.richFileIconSource(
+        QStringLiteral("/tmp/example.txt"),
+        false,
+        false,
+        16,
+        QString(),
+        {},
+        QUrl::fromLocalFile(iconPath),
+        QStringLiteral("1"),
+        2.0);
+    const QString id = source.mid(QStringLiteral("image://astrea-icons/").size());
+    QSize requested;
+    const QImage image = provider.requestImage(id, &requested, QSize());
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), QSize(32, 16));
+    QCOMPARE(image.devicePixelRatio(), 2.0);
+    QCOMPARE(requested, QSize(32, 16));
+    QCOMPARE(
+        image.pixelColor(image.width() / 2, image.height() / 2),
+        QColor(0xee, 0x77, 0x22));
 }
 
 void IconImageProviderTest::fallsBackToRichThemedIdentityWhenCustomFileDisappears()

@@ -1426,21 +1426,25 @@ void AppStateFacade::requestFileVisualMetadata(int firstIndex, int lastIndex)
 QString AppStateFacade::themedIconSource(
     const QString &iconName,
     int size,
-    const QString &themeName)
+    const QString &themeName,
+    double devicePixelRatio)
 {
     Q_UNUSED(themeName);
     if (m_iconThemeService == nullptr) {
         return {};
     }
-    return m_iconThemeService->iconSourceForNames({iconName}, size);
+    return m_iconThemeService->iconSourceForNames({iconName}, size, devicePixelRatio);
 }
 
-QString AppStateFacade::sidebarIconSource(const QString &iconName, int size)
+QString AppStateFacade::sidebarIconSource(
+    const QString &iconName,
+    int size,
+    double devicePixelRatio)
 {
     if (m_iconThemeService == nullptr) {
         return {};
     }
-    return m_iconThemeService->symbolicIconSourceForNames({iconName}, size);
+    return m_iconThemeService->symbolicIconSourceForNames({iconName}, size, devicePixelRatio);
 }
 
 QString AppStateFacade::effectiveIconTheme() const
@@ -1469,7 +1473,8 @@ QString AppStateFacade::fileIconSource(
     bool isDirectory,
     bool isExecutable,
     int size,
-    const QString &semanticIconName) const
+    const QString &semanticIconName,
+    double devicePixelRatio) const
 {
     if (m_iconThemeService == nullptr) {
         return {};
@@ -1479,7 +1484,8 @@ QString AppStateFacade::fileIconSource(
         isDirectory,
         isExecutable,
         size,
-        semanticIconName);
+        semanticIconName,
+        devicePixelRatio);
 }
 
 QString AppStateFacade::richFileIconSource(
@@ -1490,7 +1496,8 @@ QString AppStateFacade::richFileIconSource(
     const QString &semanticIconName,
     const QStringList &iconNames,
     const QUrl &iconFileUrl,
-    const QString &iconFileVersion) const
+    const QString &iconFileVersion,
+    double devicePixelRatio) const
 {
     if (m_iconThemeService == nullptr) {
         return {};
@@ -1503,15 +1510,19 @@ QString AppStateFacade::richFileIconSource(
         semanticIconName,
         iconNames,
         iconFileUrl,
-        iconFileVersion);
+        iconFileVersion,
+        devicePixelRatio);
 }
 
-QString AppStateFacade::emblemIconSource(const QString &name, int size) const
+QString AppStateFacade::emblemIconSource(
+    const QString &name,
+    int size,
+    double devicePixelRatio) const
 {
     if (m_iconThemeService == nullptr) {
         return {};
     }
-    return m_iconThemeService->emblemIconSource(name, size);
+    return m_iconThemeService->emblemIconSource(name, size, devicePixelRatio);
 }
 
 bool AppStateFacade::writePortalResult(const QString &json)

@@ -56,15 +56,25 @@ public:
         const QSize &logicalSize,
         qreal devicePixelRatio = 1.0) const;
 
-    QString iconSourceForNames(const QStringList &names, int size) const;
-    QString symbolicIconSourceForNames(const QStringList &names, int size) const;
-    QString emblemIconSource(const QString &name, int size) const;
+    QString iconSourceForNames(
+        const QStringList &names,
+        int size,
+        qreal devicePixelRatio = 1.0) const;
+    QString symbolicIconSourceForNames(
+        const QStringList &names,
+        int size,
+        qreal devicePixelRatio = 1.0) const;
+    QString emblemIconSource(
+        const QString &name,
+        int size,
+        qreal devicePixelRatio = 1.0) const;
     QString fileIconSource(
         const QString &path,
         bool isDirectory,
         bool isExecutable,
         int size,
-        const QString &semanticIconName = QString()) const;
+        const QString &semanticIconName = QString(),
+        qreal devicePixelRatio = 1.0) const;
     QString richFileIconSource(
         const QString &path,
         bool isDirectory,
@@ -73,7 +83,8 @@ public:
         const QString &semanticIconName,
         const QStringList &iconNames,
         const QUrl &iconFileUrl,
-        const QString &iconFileVersion) const;
+        const QString &iconFileVersion,
+        qreal devicePixelRatio = 1.0) const;
 
 signals:
     void themeChanged();
