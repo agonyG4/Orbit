@@ -7,6 +7,7 @@ use std::time::UNIX_EPOCH;
 
 const FAILURE_CACHE_APPLICATION: &str = "orbit-explorer";
 const FAILURE_CACHE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_VALID_THUMBNAIL_DIMENSION: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ThumbnailTier {
@@ -84,10 +85,19 @@ pub(crate) fn cache_root(xdg_cache_home: Option<&Path>, home: &Path) -> Result<P
 
 pub(crate) fn thumbnail_root() -> Result<PathBuf, String> {
     let xdg = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME not set".to_string())?;
-    cache_root(xdg.as_deref(), &home)
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    thumbnail_root_from_environment(xdg.as_deref(), home.as_deref())
+}
+
+fn thumbnail_root_from_environment(
+    xdg_cache_home: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = xdg_cache_home.filter(|path| path.is_absolute()) {
+        return cache_root(Some(path), Path::new("/"));
+    }
+    let home = home.ok_or_else(|| "HOME not set".to_string())?;
+    cache_root(xdg_cache_home, home)
 }
 
 pub(crate) fn canonical_uri(path: &Path) -> Result<String, String> {
@@ -164,23 +174,40 @@ pub(crate) fn cache_candidates(
 fn png_text(path: &Path) -> Result<HashMap<String, String>, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let decoder = png::Decoder::new(BufReader::new(file));
-    let reader = decoder
+    let mut reader = decoder
         .read_info()
         .map_err(|error| format!("read PNG {}: {error}", path.display()))?;
+    if reader.info().width > MAX_VALID_THUMBNAIL_DIMENSION
+        || reader.info().height > MAX_VALID_THUMBNAIL_DIMENSION
+    {
+        return Err(format!(
+            "PNG {} exceeds thumbnail dimensions",
+            path.display()
+        ));
+    }
     let mut values = HashMap::new();
-    for chunk in &reader.info().uncompressed_latin1_text {
-        values.insert(chunk.keyword.clone(), chunk.text.clone());
-    }
-    for chunk in &reader.info().compressed_latin1_text {
-        if let Ok(text) = chunk.get_text() {
-            values.insert(chunk.keyword.clone(), text);
+    {
+        for chunk in &reader.info().uncompressed_latin1_text {
+            values.insert(chunk.keyword.clone(), chunk.text.clone());
+        }
+        for chunk in &reader.info().compressed_latin1_text {
+            if let Ok(text) = chunk.get_text() {
+                values.insert(chunk.keyword.clone(), text);
+            }
+        }
+        for chunk in &reader.info().utf8_text {
+            if let Ok(text) = chunk.get_text() {
+                values.insert(chunk.keyword.clone(), text);
+            }
         }
     }
-    for chunk in &reader.info().utf8_text {
-        if let Ok(text) = chunk.get_text() {
-            values.insert(chunk.keyword.clone(), text);
-        }
-    }
+    let output_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| format!("PNG {} has no bounded output", path.display()))?;
+    let mut buffer = vec![0; output_size];
+    reader
+        .next_frame(&mut buffer)
+        .map_err(|error| format!("decode PNG {}: {error}", path.display()))?;
     Ok(values)
 }
 
@@ -272,7 +299,9 @@ fn encode_png_with_metadata(
     let input_file =
         File::open(input).map_err(|error| format!("open {}: {error}", input.display()))?;
     let mut decoder = png::Decoder::new(BufReader::new(input_file));
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    decoder.set_transformations(
+        png::Transformations::EXPAND | png::Transformations::ALPHA | png::Transformations::STRIP_16,
+    );
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("read PNG {}: {error}", input.display()))?;
@@ -283,17 +312,19 @@ fn encode_png_with_metadata(
     let frame = reader
         .next_frame(&mut buffer)
         .map_err(|error| format!("decode PNG {}: {error}", input.display()))?;
-    let image_data = buffer[..frame.buffer_size()].to_vec();
+    let image_data = rgba8_image_data(
+        frame.color_type,
+        frame.bit_depth,
+        &buffer[..frame.buffer_size()],
+    )?;
     let width = frame.width;
     let height = frame.height;
-    let color_type = frame.color_type;
-    let bit_depth = frame.bit_depth;
     drop(reader);
 
     let output_file = create_private_staging_file(output)?;
     let mut encoder = png::Encoder::new(BufWriter::new(output_file), width, height);
-    encoder.set_color(color_type);
-    encoder.set_depth(bit_depth);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
     encoder
         .add_text_chunk("Thumb::URI".to_string(), uri.to_string())
         .map_err(|error| format!("PNG URI metadata: {error}"))?;
@@ -321,6 +352,32 @@ fn encode_png_with_metadata(
         .write_image_data(&image_data)
         .map_err(|error| format!("PNG image data: {error}"))?;
     Ok(())
+}
+
+fn rgba8_image_data(
+    color_type: png::ColorType,
+    bit_depth: png::BitDepth,
+    data: &[u8],
+) -> Result<Vec<u8>, String> {
+    if bit_depth != png::BitDepth::Eight {
+        return Err("PNG decoder did not produce 8-bit samples".to_string());
+    }
+    match color_type {
+        png::ColorType::Rgba => Ok(data.to_vec()),
+        png::ColorType::Rgb => Ok(data
+            .chunks_exact(3)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+            .collect()),
+        png::ColorType::Grayscale => Ok(data
+            .iter()
+            .flat_map(|gray| [*gray, *gray, *gray, 255])
+            .collect()),
+        png::ColorType::GrayscaleAlpha => Ok(data
+            .chunks_exact(2)
+            .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
+            .collect()),
+        png::ColorType::Indexed => Err("PNG decoder left an indexed image".to_string()),
+    }
 }
 
 pub(crate) fn write_standard_thumbnail(
@@ -445,6 +502,28 @@ mod tests {
     }
 
     #[test]
+    fn absolute_xdg_cache_home_does_not_require_home() {
+        assert_eq!(
+            thumbnail_root_from_environment(Some(Path::new("/fixture/cache")), None,).unwrap(),
+            Path::new("/fixture/cache/thumbnails")
+        );
+    }
+
+    #[test]
+    fn unusable_xdg_cache_home_falls_back_to_home_or_errors() {
+        assert_eq!(
+            thumbnail_root_from_environment(
+                Some(Path::new("relative/cache")),
+                Some(Path::new("/fixture/home")),
+            )
+            .unwrap(),
+            Path::new("/fixture/home/.cache/thumbnails")
+        );
+        assert!(thumbnail_root_from_environment(Some(Path::new("relative/cache")), None).is_err());
+        assert!(thumbnail_root_from_environment(None, None).is_err());
+    }
+
+    #[test]
     fn standard_png_metadata_and_freshness_are_validated() {
         let root =
             std::env::temp_dir().join(format!("astrea-thumbnail-metadata-{}", std::process::id()));
@@ -536,6 +615,13 @@ mod tests {
                 None,
             ),
             (
+                "gray-alpha",
+                png::ColorType::GrayscaleAlpha,
+                png::BitDepth::Eight,
+                vec![0, 255, 85, 192, 170, 128, 255, 0],
+                None,
+            ),
+            (
                 "indexed",
                 png::ColorType::Indexed,
                 png::BitDepth::Eight,
@@ -566,8 +652,34 @@ mod tests {
             let frame = reader.next_frame(&mut buffer).unwrap();
             assert_eq!((frame.width, frame.height), (2, 2));
             assert_eq!(frame.buffer_size(), output_size);
+            assert_eq!(frame.color_type, png::ColorType::Rgba);
+            assert_eq!(frame.bit_depth, png::BitDepth::Eight);
         }
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn truncated_png_payload_is_not_a_valid_thumbnail() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-thumbnail-truncated-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.png");
+        let output = root.join("normal").join("thumb.png");
+        create_fixture_png(&input).unwrap();
+        let uri = "file:///fixture/input.png";
+        let version = SourceVersion {
+            modified_secs: 42,
+            size: 7,
+        };
+        write_standard_thumbnail(&input, &output, uri, version, None).unwrap();
+        let mut bytes = std::fs::read(&output).unwrap();
+        let idat = bytes.windows(4).position(|chunk| chunk == b"IDAT").unwrap();
+        let data_length = u32::from_be_bytes(bytes[idat - 4..idat].try_into().unwrap()) as usize;
+        bytes.truncate(idat + 4 + data_length / 2);
+        std::fs::write(&output, bytes).unwrap();
+
+        assert!(read_valid_thumbnail(&output, uri, version, None).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 

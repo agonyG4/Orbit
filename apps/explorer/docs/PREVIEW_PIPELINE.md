@@ -59,17 +59,23 @@ discarded. This avoids orphaning child processes while ensuring an obsolete
 directory cannot receive a preview.
 
 Each batch is bounded to 32 unique paths and the encoded argument payload is
-bounded to 256 KiB. The Rust worker captures the source mtime and size before
-generation. A result is applied immediately through
+bounded to 256 KiB. A path already in flight suppresses an equal or smaller
+target, while a larger latest viewport or selected target remains as one
+follow-up intent and is dispatched after the current batch finishes. The Rust
+worker captures the source mtime and size before generation. A result is applied immediately through
 DirectoryModel::updatePreview, so a newly generated video thumbnail appears
 without relisting the directory.
 
-ready, generated, and cached results are accepted when their local URL and
-source version still match. deferred results represent a file modified
-within the three-second cool-off window. failed results are retained in
-bounded source-version state and do not create a timer-driven retry loop. A
-changed mtime or size gives the source a new identity and makes it eligible
-again.
+ready, generated, cached, and direct results are accepted when their local URL
+and source version still match. A direct result is used for a source already
+inside the shared thumbnail tree and is never written back as another
+thumbnail. deferred results carry explicit retryable, retryAfterMs, and reason
+fields; recently modified files use the remaining cool-off duration and share
+one controller timer. Unreadable files return terminal unavailable state and
+are suppressed by source version without timer polling. failed results are
+retained in bounded source-version state and do not create a timer-driven retry
+loop. A changed mtime or size gives the source a new identity and makes it
+eligible again.
 
 ## Freedesktop thumbnail cache
 
@@ -96,8 +102,12 @@ characters retain standard URI escaping.
 The smallest tier satisfying the physical target is selected. A valid larger
 tier can satisfy a smaller request and is reused. Every accepted PNG must
 contain matching Thumb::URI and Thumb::MTime; Thumb::Size is checked when
-present. Thumb::Mimetype is descriptive and does not reject an otherwise
-valid thumbnail. Explorer-generated files also carry Software.
+present, and the complete PNG frame is decoded before reuse. Thumb::Mimetype
+is descriptive and does not reject an otherwise valid thumbnail.
+Explorer-generated files also carry Software and are stored as non-interlaced
+8-bit RGBA PNGs. Sources contained by the resolved global thumbnail root,
+including failure and temporary subtrees, are displayed directly without
+recursive generation or failure-cache writes.
 
 The cache root, every tier, and the versioned failure directory are mode 0700;
 staging and installed PNG files are mode 0600. Directories and staging files
@@ -117,9 +127,10 @@ locations and the public GIO thumbnail attributes:
 
 Private GVfs metadata is not parsed. The ordinary directory listing remains
 cheap and does not spawn a generator or perform per-row GIO thumbnail
-generation. The interoperability test runs a separate GIO process with an
-isolated XDG cache home and verifies that GIO discovers the standard PNG
-without injecting file attributes.
+generation. The interoperability test runs Orbit's real thumbnail-batch
+writer in a separate process, then runs a separate GIO probe with an isolated
+XDG cache home and verifies that GIO discovers that exact produced PNG without
+injecting file attributes.
 
 ## Generator and failure policy
 
@@ -136,15 +147,16 @@ Generation uses one process-wide Rayon pool with at most four workers. A
 single item failure is encoded in that item's result; it does not fail the
 whole batch.
 
-Recent or unreadable files return deferred before a generator starts; an
-unreadable source does not create a persistent failure entry. A failed
-generation records a standard fail entry under the versioned fail directory
-for the current source version. The controller's in-memory failure state and
-the shared failure entry both suppress repeated work until the source changes.
-Deferred work carries its source version and is retried only after one
-earliest deadline for the still-visible range. This is important for
-unsupported or temporarily broken media: scrolling over the same item does
-not create an unbounded retry loop.
+Recently modified files return retryable deferred before a generator starts;
+the result includes the actual remaining three-second cool-off. An unreadable
+source returns non-retryable unavailable, does not read or create cache state,
+and does not create a persistent failure entry. A failed generation records a
+standard fail entry under the versioned fail directory for the current source
+version. The controller's in-memory failure state and the shared failure entry
+both suppress repeated work until the source changes. Deferred work carries
+its source version and selected intent, and is retried through one earliest
+deadline timer. Broken symlinks remain visible as ordinary model/icon entries
+but are never admitted to thumbnail generation.
 
 ## Physical pixels and DPR
 
@@ -188,5 +200,7 @@ When a preview does not appear, inspect the following in order:
 
 The expected behavior for a rejected item is visible in its status:
 unsupported means the backend has no supported generator capability,
-deferred means the file is still changing, and failed means generation
-failed or a source-version-scoped failure entry was found.
+deferred means the file is still changing and is retryable,
+unavailable means the source cannot currently be read and is not polled,
+direct means the source is already a cache thumbnail, and failed means
+generation failed or a source-version-scoped failure entry was found.

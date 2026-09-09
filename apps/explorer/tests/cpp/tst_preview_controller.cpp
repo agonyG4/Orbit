@@ -24,15 +24,24 @@ private slots:
     void schedulesVisiblePathsInModelOrder();
     void replacesQueuedViewportWithLatestRange();
     void keepsOneBatchInFlight();
+    void retainsViewportUpgradeWhenLowerTargetIsInFlight();
+    void suppressesViewportDowngradeAgainstHigherTargetInFlight();
+    void collapsesRapidViewportTargetsToLatestRangeRequirement();
+    void discardsViewportUpgradeWhenPathLeavesLatestRange();
     void ignoresRemoteAndMetadataLimitedEntries();
+    void rejectsBrokenSymlinkFromThumbnailScheduling();
+    void followsValidSymlinkForThumbnailScheduling();
     void disabledPreviewsBlockScheduling();
     void hydratesGeneratedVideoImmediately();
     void rejectsSourceVersionChanges();
     void prioritizesSelectedPreviewWithoutDroppingViewport();
+    void retainsSelectedUpgradeAcrossViewportReplacement();
     void upgradesSelectedPreviewAfterLowerResolutionResult();
     void suppressesRepeatedUnsupportedBySourceVersion();
     void changedSourceVersionEscapesDeferredState();
     void retriesDeferredVisibleItemOnceAfterDeadline();
+    void doesNotPollUnavailableItem();
+    void retriesDeferredSelectedItemOutsideVisibleRange();
 };
 
 DirectoryEntry previewEntry(const QString &path)
@@ -211,6 +220,118 @@ void PreviewControllerTest::keepsOneBatchInFlight()
         QStringList {QStringLiteral("/fixture/two.png")});
 }
 
+void PreviewControllerTest::retainsViewportUpgradeWhenLowerTargetIsInFlight()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/upgrade.png"));
+    model.applyEntries({entry}, 141);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(141, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.requestVisibleRange(0, 0, 256);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(1, result);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    QCOMPARE(client.utilityRequests().at(1).arguments.at(0), QStringLiteral("256"));
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments.mid(1),
+        QStringList {entry.filePath});
+}
+
+void PreviewControllerTest::suppressesViewportDowngradeAgainstHigherTargetInFlight()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/downgrade.png"));
+    model.applyEntries({entry}, 142);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(142, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 256);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.requestVisibleRange(0, 0, 128);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(1, result);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 1);
+}
+
+void PreviewControllerTest::collapsesRapidViewportTargetsToLatestRangeRequirement()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/rapid.png"));
+    model.applyEntries({entry}, 143);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(143, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.requestVisibleRange(0, 0, 256);
+    controller.requestVisibleRange(0, 0, 640);
+    controller.requestVisibleRange(0, 0, 320);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(1, result);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    QCOMPARE(client.utilityRequests().at(1).arguments.at(0), QStringLiteral("320"));
+}
+
+void PreviewControllerTest::discardsViewportUpgradeWhenPathLeavesLatestRange()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry first = previewEntry(QStringLiteral("/fixture/first.png"));
+    const DirectoryEntry second = previewEntry(QStringLiteral("/fixture/second.png"));
+    model.applyEntries({first, second}, 144);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(144, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.requestVisibleRange(0, 0, 256);
+    controller.requestVisibleRange(1, 1, 256);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(1, result);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments.mid(1),
+        QStringList {second.filePath});
+}
+
 void PreviewControllerTest::ignoresRemoteAndMetadataLimitedEntries()
 {
     DirectoryModel model;
@@ -232,6 +353,43 @@ void PreviewControllerTest::ignoresRemoteAndMetadataLimitedEntries()
     QCOMPARE(
         client.utilityRequests().at(0).arguments.mid(1),
         QStringList {QStringLiteral("/fixture/local.png")});
+}
+
+void PreviewControllerTest::rejectsBrokenSymlinkFromThumbnailScheduling()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/broken.png"));
+    entry.fileIsSymlink = true;
+    entry.fileSymlinkBroken = true;
+    model.applyEntries({entry}, 145);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(145, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 0);
+    QVERIFY(controller.previewUrl(entry, false).isEmpty());
+}
+
+void PreviewControllerTest::followsValidSymlinkForThumbnailScheduling()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/link.png"));
+    entry.fileIsSymlink = true;
+    entry.fileSymlinkBroken = false;
+    model.applyEntries({entry}, 146);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(146, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    QCOMPARE(
+        client.utilityRequests().at(0).arguments.mid(1),
+        QStringList {entry.filePath});
 }
 
 void PreviewControllerTest::disabledPreviewsBlockScheduling()
@@ -357,6 +515,38 @@ void PreviewControllerTest::prioritizesSelectedPreviewWithoutDroppingViewport()
     QCOMPARE(client.utilityRequests().at(1).arguments.mid(1), expectedPaths);
 }
 
+void PreviewControllerTest::retainsSelectedUpgradeAcrossViewportReplacement()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry selected = previewEntry(QStringLiteral("/fixture/selected-upgrade.mp4"));
+    const DirectoryEntry unrelated = previewEntry(QStringLiteral("/fixture/unrelated.png"));
+    model.applyEntries({selected, unrelated}, 147);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(147, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.requestSelectedPreview(selected.filePath, 256);
+    controller.requestVisibleRange(1, 1, 128);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(1, result);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    QCOMPARE(client.utilityRequests().at(1).arguments.at(0), QStringLiteral("256"));
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments.mid(1),
+        QStringList {selected.filePath});
+}
+
 void PreviewControllerTest::upgradesSelectedPreviewAfterLowerResolutionResult()
 {
     DirectoryModel model;
@@ -463,6 +653,9 @@ void PreviewControllerTest::changedSourceVersionEscapesDeferredState()
             QJsonObject {
                 {QStringLiteral("filePath"), entry.filePath},
                 {QStringLiteral("status"), QStringLiteral("deferred")},
+                {QStringLiteral("retryable"), true},
+                {QStringLiteral("retryAfterMs"), 30},
+                {QStringLiteral("reason"), QStringLiteral("recently-modified")},
                 {QStringLiteral("sourceVersion"), QStringLiteral("0:10")},
             },
         });
@@ -496,19 +689,115 @@ void PreviewControllerTest::retriesDeferredVisibleItemOnceAfterDeadline()
     deferred.data.insert(
         QStringLiteral("items"),
         QJsonArray {
+        QJsonObject {
+            {QStringLiteral("filePath"), entry.filePath},
+            {QStringLiteral("status"), QStringLiteral("deferred")},
+            {QStringLiteral("retryable"), true},
+            {QStringLiteral("retryAfterMs"), 250},
+            {QStringLiteral("reason"), QStringLiteral("recently-modified")},
+            {QStringLiteral("sourceVersion"), QStringLiteral("0:12")},
+        },
+        });
+    client.completeUtility(1, deferred);
+    QTest::qWait(10);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 1000);
+    QTest::qWait(100);
+    QCOMPARE(client.utilityRequests().size(), 2);
+}
+
+void PreviewControllerTest::doesNotPollUnavailableItem()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/unreadable.png"));
+    entry.fileSize = 12;
+    model.applyEntries({entry}, 148);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(148, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult unavailable;
+    unavailable.requestId = 1;
+    unavailable.operation = QStringLiteral("thumbnail-batch");
+    unavailable.ok = true;
+    unavailable.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
             QJsonObject {
                 {QStringLiteral("filePath"), entry.filePath},
-                {QStringLiteral("status"), QStringLiteral("deferred")},
+                {QStringLiteral("status"), QStringLiteral("unavailable")},
+                {QStringLiteral("retryable"), false},
+                {QStringLiteral("reason"), QStringLiteral("unreadable")},
                 {QStringLiteral("sourceVersion"), QStringLiteral("0:12")},
             },
         });
-    client.completeUtility(1, deferred);
-    QTest::qWait(40);
+    client.completeUtility(1, unavailable);
+    QTest::qWait(120);
     QCOMPARE(client.utilityRequests().size(), 1);
 
-    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 3800);
-    QTest::qWait(100);
-    QCOMPARE(client.utilityRequests().size(), 2);
+    entry.fileSize = 13;
+    model.applyEntries({entry}, 148);
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+}
+
+void PreviewControllerTest::retriesDeferredSelectedItemOutsideVisibleRange()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry selected = previewEntry(QStringLiteral("/fixture/selected-recent.mp4"));
+    const DirectoryEntry visible = previewEntry(QStringLiteral("/fixture/visible.png"));
+    model.applyEntries({selected, visible}, 149);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(149, false);
+    controller.setEnabled(true);
+
+    controller.requestSelectedPreview(selected.filePath, 320);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult deferred;
+    deferred.requestId = 1;
+    deferred.operation = QStringLiteral("thumbnail-batch");
+    deferred.ok = true;
+    deferred.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), selected.filePath},
+                {QStringLiteral("status"), QStringLiteral("deferred")},
+                {QStringLiteral("retryable"), true},
+                {QStringLiteral("retryAfterMs"), 250},
+                {QStringLiteral("reason"), QStringLiteral("recently-modified")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(1, deferred);
+    controller.requestVisibleRange(1, 1, 128);
+
+    QTest::qWait(10);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 1000);
+    QCOMPARE(client.utilityRequests().at(1).arguments.at(0), QStringLiteral("128"));
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments.mid(1),
+        QStringList {visible.filePath});
+
+    UtilityResult visibleResult;
+    visibleResult.requestId = 2;
+    visibleResult.operation = QStringLiteral("thumbnail-batch");
+    visibleResult.ok = true;
+    visibleResult.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(2, visibleResult);
+
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 3, 1000);
+    QCOMPARE(client.utilityRequests().at(2).arguments.at(0), QStringLiteral("320"));
+    QCOMPARE(
+        client.utilityRequests().at(2).arguments.mid(1),
+        QStringList {selected.filePath});
 }
 
 QTEST_GUILESS_MAIN(PreviewControllerTest)

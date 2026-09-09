@@ -51,7 +51,10 @@ QUrl PreviewController::previewUrl(
     const DirectoryEntry &entry,
     bool remoteDirectoryActive) const
 {
-    if (remoteDirectoryActive || entry.fileRemote || entry.fileIsDir) {
+    if (remoteDirectoryActive
+        || entry.fileRemote
+        || entry.fileIsDir
+        || entry.fileSymlinkBroken) {
         return {};
     }
     if (!entry.filePreviewUrl.isEmpty()) {
@@ -77,6 +80,7 @@ void PreviewController::beginGeneration(
     m_appliedPreviews.clear();
     m_failedSources.clear();
     m_unsupportedSources.clear();
+    m_unavailableSources.clear();
     m_deferredPreviews.clear();
     m_hasVisibleRange = false;
 }
@@ -118,6 +122,15 @@ void PreviewController::requestSelectedPreview(
     if (!m_enabled || m_remoteDirectoryActive) {
         return;
     }
+    if (filePath.isEmpty()) {
+        m_selectedPath.clear();
+        m_hasSelectedPath = false;
+        m_selectedIntent = {};
+        m_hasSelectedIntent = false;
+        return;
+    }
+    m_selectedPath = filePath;
+    m_hasSelectedPath = true;
 
     DirectoryEntry entry;
     if (!m_model->entryForPath(filePath, &entry) || !isEligible(entry)) {
@@ -126,6 +139,10 @@ void PreviewController::requestSelectedPreview(
 
     const int target = qMax(1, physicalTarget);
     if (isSuppressed(entry, target)) {
+        return;
+    }
+    const auto inFlightTarget = inFlightTargetForPath(filePath);
+    if (inFlightTarget.has_value() && *inFlightTarget >= target) {
         return;
     }
 
@@ -161,6 +178,7 @@ bool PreviewController::isEligible(const DirectoryEntry &entry)
     return !entry.filePath.isEmpty()
         && !entry.fileRemote
         && !entry.fileIsDir
+        && !entry.fileSymlinkBroken
         && !entry.fileMetadataLimited;
 }
 
@@ -208,16 +226,19 @@ int PreviewController::tierPixels(const QString &tier, int fallback)
     return fallback;
 }
 
-bool PreviewController::isInFlight(const QString &path) const
+std::optional<int> PreviewController::inFlightTargetForPath(const QString &path) const
 {
+    std::optional<int> target;
     for (auto it = m_inFlight.cbegin(); it != m_inFlight.cend(); ++it) {
         for (const Intent &intent : it.value().intents) {
             if (intent.path == path) {
-                return true;
+                if (!target.has_value() || it.value().target > *target) {
+                    target = it.value().target;
+                }
             }
         }
     }
-    return false;
+    return target;
 }
 
 bool PreviewController::isSuppressed(
@@ -245,6 +266,14 @@ bool PreviewController::isSuppressed(
     if (unsupported != m_unsupportedSources.cend()) {
         if (unsupported.value() != version) {
             m_unsupportedSources.remove(entry.filePath);
+        } else {
+            return true;
+        }
+    }
+    auto unavailable = m_unavailableSources.constFind(entry.filePath);
+    if (unavailable != m_unavailableSources.cend()) {
+        if (unavailable.value() != version) {
+            m_unavailableSources.remove(entry.filePath);
         } else {
             return true;
         }
@@ -283,8 +312,11 @@ void PreviewController::replaceViewportQueue(
         DirectoryEntry entry;
         if (!m_model->entryForPath(paths.at(index), &entry)
             || !isEligible(entry)
-            || isSuppressed(entry, normalizedTarget)
-            || isInFlight(entry.filePath)) {
+            || isSuppressed(entry, normalizedTarget)) {
+            continue;
+        }
+        const auto inFlightTarget = inFlightTargetForPath(entry.filePath);
+        if (inFlightTarget.has_value() && *inFlightTarget >= normalizedTarget) {
             continue;
         }
         m_viewportQueue.append({entry.filePath, normalizedTarget});
@@ -307,7 +339,7 @@ void PreviewController::scheduleDispatch(int delayMs)
 
 void PreviewController::armDeferredRetryTimer()
 {
-    if (!m_enabled || m_remoteDirectoryActive || !m_hasVisibleRange) {
+    if (!m_enabled || m_remoteDirectoryActive) {
         m_deferredRetryTimer.stop();
         return;
     }
@@ -317,6 +349,9 @@ void PreviewController::armDeferredRetryTimer()
     for (auto it = m_deferredPreviews.cbegin();
          it != m_deferredPreviews.cend();
          ++it) {
+        if (!it.value().retryable) {
+            continue;
+        }
         if (it.value().retryAfter <= now) {
             continue;
         }
@@ -342,17 +377,62 @@ void PreviewController::clearQueuedWork()
     m_viewportPaths.clear();
     m_selectedIntent = {};
     m_hasSelectedIntent = false;
+    m_selectedPath.clear();
+    m_hasSelectedPath = false;
 }
 
 void PreviewController::handleDeferredRetry()
 {
-    if (!m_enabled || m_remoteDirectoryActive || !m_hasVisibleRange) {
+    if (!m_enabled || m_remoteDirectoryActive) {
         return;
     }
-    replaceViewportQueue(
-        m_lastVisibleFirst,
-        m_lastVisibleLast,
-        m_lastVisibleTarget);
+
+    if (m_hasVisibleRange) {
+        replaceViewportQueue(
+            m_lastVisibleFirst,
+            m_lastVisibleLast,
+            m_lastVisibleTarget);
+    }
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    for (auto it = m_deferredPreviews.cbegin();
+         it != m_deferredPreviews.cend();
+         ++it) {
+        const DeferredPreviewState &deferred = it.value();
+        if (!deferred.retryable
+            || !deferred.selectedPriority
+            || !m_hasSelectedPath
+            || deferred.intent.path != m_selectedPath
+            || deferred.retryAfter > now) {
+            continue;
+        }
+        DirectoryEntry entry;
+        if (!m_model->entryForPath(deferred.intent.path, &entry)
+            || !isEligible(entry)
+            || sourceVersion(entry) != deferred.sourceVersion
+            || isSuppressed(entry, deferred.intent.target)) {
+            continue;
+        }
+        const auto inFlightTarget = inFlightTargetForPath(deferred.intent.path);
+        if (inFlightTarget.has_value()
+            && *inFlightTarget >= deferred.intent.target) {
+            continue;
+        }
+        if (m_hasSelectedIntent
+            && m_selectedIntent.path != deferred.intent.path) {
+            m_selectedIntent = deferred.intent;
+        } else if (!m_hasSelectedIntent) {
+            m_selectedIntent = deferred.intent;
+        } else {
+            m_selectedIntent.target = qMax(
+                m_selectedIntent.target,
+                deferred.intent.target);
+        }
+        m_hasSelectedIntent = true;
+    }
+    if (!m_viewportQueue.isEmpty() || m_hasSelectedIntent) {
+        scheduleDispatch(0);
+    }
     armDeferredRetryTimer();
 }
 
@@ -372,18 +452,36 @@ void PreviewController::dispatchBatch()
 
     QVector<Intent> intents;
     int target = 128;
+    bool selectedPriority = false;
     if (m_hasSelectedIntent) {
-        if (!isInFlight(m_selectedIntent.path)) {
+        const auto inFlightTarget = inFlightTargetForPath(m_selectedIntent.path);
+        if (!inFlightTarget.has_value()
+            || *inFlightTarget < m_selectedIntent.target) {
             intents.append(m_selectedIntent);
             target = m_selectedIntent.target;
+            selectedPriority = true;
         }
         m_hasSelectedIntent = false;
         m_selectedIntent = {};
     } else {
-        while (!m_viewportQueue.isEmpty()
-               && isInFlight(m_viewportQueue.constFirst().path)) {
-            m_viewportPaths.remove(m_viewportQueue.constFirst().path);
-            m_viewportQueue.removeFirst();
+        while (!m_viewportQueue.isEmpty()) {
+            const Intent intent = m_viewportQueue.constFirst();
+            DirectoryEntry entry;
+            if (!m_model->entryForPath(intent.path, &entry)
+                || !isEligible(entry)
+                || isSuppressed(entry, intent.target)) {
+                m_viewportPaths.remove(intent.path);
+                m_viewportQueue.removeFirst();
+                continue;
+            }
+            const auto inFlightTarget = inFlightTargetForPath(intent.path);
+            if (inFlightTarget.has_value()
+                && *inFlightTarget >= intent.target) {
+                m_viewportPaths.remove(intent.path);
+                m_viewportQueue.removeFirst();
+                continue;
+            }
+            break;
         }
         if (m_viewportQueue.isEmpty()) {
             m_viewportPaths.clear();
@@ -424,7 +522,7 @@ void PreviewController::dispatchBatch()
     const BackendRequestId requestId = m_client->utility(utilityRequest);
     m_inFlight.insert(
         requestId,
-        InFlightBatch {m_generation, target, intents});
+        InFlightBatch {m_generation, target, intents, selectedPriority});
 }
 
 void PreviewController::finishRequest(BackendRequestId requestId)
@@ -508,14 +606,27 @@ void PreviewController::applyBatchItem(
                 break;
             }
         }
+        if (!item.value(QStringLiteral("retryable")).toBool(false)) {
+            m_deferredPreviews.remove(filePath);
+            m_unavailableSources.insert(filePath, currentVersion);
+            return;
+        }
         m_deferredPreviews.insert(
             filePath,
             DeferredPreviewState {
                 currentVersion,
-                QDateTime::currentDateTimeUtc().addSecs(3),
+                QDateTime::currentDateTimeUtc().addMSecs(
+                    qMax(1, item.value(QStringLiteral("retryAfterMs")).toInt())),
                 deferredIntent,
+                true,
+                request.selectedPriority
             });
         armDeferredRetryTimer();
+        return;
+    }
+    if (status == QStringLiteral("unavailable")) {
+        m_deferredPreviews.remove(filePath);
+        m_unavailableSources.insert(filePath, currentVersion);
         return;
     }
     if (status == QStringLiteral("unsupported")) {
@@ -532,7 +643,8 @@ void PreviewController::applyBatchItem(
     }
     if (status != QStringLiteral("ready")
         && status != QStringLiteral("generated")
-        && status != QStringLiteral("cached")) {
+        && status != QStringLiteral("cached")
+        && status != QStringLiteral("direct")) {
         return;
     }
 
@@ -547,6 +659,7 @@ void PreviewController::applyBatchItem(
     m_deferredPreviews.remove(filePath);
     m_unsupportedSources.remove(filePath);
     m_failedSources.remove(filePath);
+    m_unavailableSources.remove(filePath);
     m_appliedPreviews.insert(
         filePath,
         AppliedPreview {

@@ -100,6 +100,12 @@ struct ThumbnailItem {
     cache_tier: &'static str,
     #[serde(rename = "sourceVersion")]
     source_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retryable: Option<bool>,
+    #[serde(rename = "retryAfterMs", skip_serializing_if = "Option::is_none")]
+    retry_after_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
 }
 
 pub fn run_batch(args: &[String]) -> Result<(), String> {
@@ -174,7 +180,6 @@ fn run_batch_at(
         Some(path) => path.to_path_buf(),
         None => thumbnail_root()?,
     };
-    private_directory(&cache)?;
     let pool = THUMBNAIL_POOL
         .get_or_init(|| {
             rayon::ThreadPoolBuilder::new()
@@ -207,6 +212,9 @@ fn process_item(
         preview_url: String::new(),
         cache_tier: "fail",
         source_version,
+        retryable: None,
+        retry_after_ms: None,
+        reason: None,
     };
     if is_remote_path(path) {
         return unsupported(String::new());
@@ -229,6 +237,9 @@ fn process_item(
                 preview_url: String::new(),
                 cache_tier: "fail",
                 source_version,
+                retryable: None,
+                retry_after_ms: None,
+                reason: None,
             };
         }
     };
@@ -237,17 +248,36 @@ fn process_item(
     if !source_is_readable(path) {
         return ThumbnailItem {
             file_path,
-            status: "deferred",
+            status: "unavailable",
             preview_url: String::new(),
             cache_tier: requested_tier.directory_name(),
             source_version,
+            retryable: Some(false),
+            retry_after_ms: None,
+            reason: Some("unreadable"),
         };
     }
+    if is_inside_thumbnail_cache(path, cache) {
+        return ThumbnailItem {
+            file_path,
+            status: "direct",
+            preview_url: json::file_url(path),
+            cache_tier: "direct",
+            source_version,
+            retryable: None,
+            retry_after_ms: None,
+            reason: None,
+        };
+    }
+    let gio_snapshot = gio_thumbnail_snapshot(path);
     for (tier, candidate) in cache_candidates(cache, &uri, requested_tier) {
         if read_valid_thumbnail(&candidate, &uri, version, mime).is_ok() {
             return ready_item(&file_path, &candidate, tier, source_version);
         }
-        if let Some(gio_candidate) = gio_thumbnail_path(path, tier) {
+        if let Some(gio_candidate) = gio_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.path_for(tier))
+        {
             if read_valid_thumbnail(&gio_candidate, &uri, version, mime).is_ok() {
                 return ready_item(&file_path, &gio_candidate, tier, source_version);
             }
@@ -256,7 +286,9 @@ fn process_item(
 
     let failure_path = tier_path(cache, ThumbnailTier::Fail, &uri);
     if read_failure_entry(&failure_path, &uri, version).is_ok()
-        || gio_failure_is_valid(path, requested_tier)
+        || gio_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.failure_is_valid(requested_tier))
     {
         return ThumbnailItem {
             file_path,
@@ -264,15 +296,21 @@ fn process_item(
             preview_url: String::new(),
             cache_tier: "fail",
             source_version,
+            retryable: None,
+            retry_after_ms: None,
+            reason: None,
         };
     }
-    if is_recently_modified(&metadata, now) {
+    if let Some(retry_after_ms) = recent_retry_after_ms(&metadata, now) {
         return ThumbnailItem {
             file_path,
             status: "deferred",
             preview_url: String::new(),
             cache_tier: requested_tier.directory_name(),
             source_version,
+            retryable: Some(true),
+            retry_after_ms: Some(retry_after_ms),
+            reason: Some("recently-modified"),
         };
     }
 
@@ -323,6 +361,9 @@ fn ready_item(
         preview_url: preview_url_identity(thumbnail, &source_version, tier.directory_name()),
         cache_tier: tier.directory_name(),
         source_version,
+        retryable: None,
+        retry_after_ms: None,
+        reason: None,
     }
 }
 
@@ -333,6 +374,9 @@ fn failed_item(file_path: &str, source_version: String) -> ThumbnailItem {
         preview_url: String::new(),
         cache_tier: "fail",
         source_version,
+        retryable: None,
+        retry_after_ms: None,
+        reason: None,
     }
 }
 
@@ -363,60 +407,117 @@ fn preview_url_identity(path: &Path, source_version: &str, tier: &str) -> String
     )
 }
 
-fn gio_thumbnail_path(path: &Path, tier: ThumbnailTier) -> Option<PathBuf> {
-    let (path_attribute, valid_attribute) = gio_thumbnail_attributes(tier)?;
+const GIO_THUMBNAIL_TIERS: [(&str, &str, &str); 4] = [
+    (
+        "thumbnail::path-normal",
+        "thumbnail::is-valid-normal",
+        "thumbnail::failed-normal",
+    ),
+    (
+        "thumbnail::path-large",
+        "thumbnail::is-valid-large",
+        "thumbnail::failed-large",
+    ),
+    (
+        "thumbnail::path-xlarge",
+        "thumbnail::is-valid-xlarge",
+        "thumbnail::failed-xlarge",
+    ),
+    (
+        "thumbnail::path-xxlarge",
+        "thumbnail::is-valid-xxlarge",
+        "thumbnail::failed-xxlarge",
+    ),
+];
+
+struct GioThumbnailSnapshot {
+    paths: [Option<PathBuf>; 4],
+    valid: [bool; 4],
+    failed: [bool; 4],
+}
+
+impl GioThumbnailSnapshot {
+    fn path_for(&self, tier: ThumbnailTier) -> Option<PathBuf> {
+        let index = match tier {
+            ThumbnailTier::Normal => 0,
+            ThumbnailTier::Large => 1,
+            ThumbnailTier::XLarge => 2,
+            ThumbnailTier::XXLarge => 3,
+            ThumbnailTier::Fail => return None,
+        };
+        if self.valid[index] {
+            self.paths[index].clone()
+        } else {
+            None
+        }
+    }
+
+    fn failure_is_valid(&self, tier: ThumbnailTier) -> bool {
+        let index = match tier {
+            ThumbnailTier::Normal => 0,
+            ThumbnailTier::Large => 1,
+            ThumbnailTier::XLarge => 2,
+            ThumbnailTier::XXLarge => 3,
+            ThumbnailTier::Fail => return false,
+        };
+        self.valid[index] && self.failed[index]
+    }
+}
+
+fn gio_thumbnail_snapshot(path: &Path) -> Option<GioThumbnailSnapshot> {
+    let attributes = GIO_THUMBNAIL_TIERS
+        .iter()
+        .flat_map(|(path_attribute, valid_attribute, failed_attribute)| {
+            [*path_attribute, *valid_attribute, *failed_attribute]
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let info = gio::File::for_path(path)
         .query_info(
-            &format!("{path_attribute},{valid_attribute}"),
+            &attributes,
             gio::FileQueryInfoFlags::NONE,
             None::<&gio::Cancellable>,
         )
         .ok()?;
-    if !info.boolean(valid_attribute) {
+    let mut paths = std::array::from_fn(|_| None);
+    let mut valid = [false; 4];
+    let mut failed = [false; 4];
+    for (index, (path_attribute, valid_attribute, failed_attribute)) in
+        GIO_THUMBNAIL_TIERS.iter().enumerate()
+    {
+        valid[index] = info.boolean(valid_attribute);
+        failed[index] = info.boolean(failed_attribute);
+        paths[index] = info
+            .attribute_byte_string(path_attribute)
+            .map(|value| PathBuf::from(value.as_str()));
+    }
+    Some(GioThumbnailSnapshot {
+        paths,
+        valid,
+        failed,
+    })
+}
+
+fn is_inside_thumbnail_cache(path: &Path, cache: &Path) -> bool {
+    let Ok(canonical_cache) = fs::canonicalize(cache) else {
+        return false;
+    };
+    let Ok(canonical_path) = fs::canonicalize(path) else {
+        return false;
+    };
+    canonical_path.starts_with(canonical_cache)
+}
+
+fn recent_retry_after_ms(metadata: &fs::Metadata, now: SystemTime) -> Option<u64> {
+    let Ok(modified) = metadata.modified() else {
+        return None;
+    };
+    let age = now.duration_since(modified).unwrap_or_default();
+    if age >= RECENT_FILE_COOLDOWN {
         return None;
     }
-    info.attribute_byte_string(path_attribute)
-        .map(|value| PathBuf::from(value.as_str()))
-}
-
-fn gio_failure_is_valid(path: &Path, tier: ThumbnailTier) -> bool {
-    let Some((path_attribute, valid_attribute)) = gio_thumbnail_attributes(tier) else {
-        return false;
-    };
-    let failure_attribute = match tier {
-        ThumbnailTier::Normal => "thumbnail::failed-normal",
-        ThumbnailTier::Large => "thumbnail::failed-large",
-        ThumbnailTier::XLarge => "thumbnail::failed-xlarge",
-        ThumbnailTier::XXLarge => "thumbnail::failed-xxlarge",
-        ThumbnailTier::Fail => return false,
-    };
-    gio::File::for_path(path)
-        .query_info(
-            &format!("{path_attribute},{valid_attribute},{failure_attribute}"),
-            gio::FileQueryInfoFlags::NONE,
-            None::<&gio::Cancellable>,
-        )
-        .map(|info| info.boolean(valid_attribute) && info.boolean(failure_attribute))
-        .unwrap_or(false)
-}
-
-fn gio_thumbnail_attributes(tier: ThumbnailTier) -> Option<(&'static str, &'static str)> {
-    match tier {
-        ThumbnailTier::Normal => Some(("thumbnail::path-normal", "thumbnail::is-valid-normal")),
-        ThumbnailTier::Large => Some(("thumbnail::path-large", "thumbnail::is-valid-large")),
-        ThumbnailTier::XLarge => Some(("thumbnail::path-xlarge", "thumbnail::is-valid-xlarge")),
-        ThumbnailTier::XXLarge => Some(("thumbnail::path-xxlarge", "thumbnail::is-valid-xxlarge")),
-        ThumbnailTier::Fail => None,
-    }
-}
-
-fn is_recently_modified(metadata: &fs::Metadata, now: SystemTime) -> bool {
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    now.duration_since(modified)
-        .map(|age| age < RECENT_FILE_COOLDOWN)
-        .unwrap_or(false)
+    let remaining = RECENT_FILE_COOLDOWN.saturating_sub(age).as_millis();
+    Some(remaining.clamp(1, u64::MAX as u128) as u64)
 }
 
 pub fn preview_url(path: &Path, is_dir: bool, modified_ms: i64, size: u64) -> String {
@@ -505,7 +606,7 @@ fn file_media_type(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thumbnail_cache::cache_filename;
+    use crate::thumbnail_cache::{cache_filename, failure_tier_path};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -749,6 +850,9 @@ mod tests {
         let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
 
         assert_eq!(item["status"], "deferred");
+        assert_eq!(item["retryable"], true);
+        assert!(item["retryAfterMs"].as_u64().unwrap() > 0);
+        assert_eq!(item["reason"], "recently-modified");
         assert!(calls.lock().unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
@@ -987,10 +1091,130 @@ mod tests {
         )
         .unwrap();
         let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
-        assert_eq!(item["status"], "deferred");
+        assert_eq!(item["status"], "unavailable");
+        assert_eq!(item["retryable"], false);
+        assert_eq!(item["reason"], "unreadable");
         assert!(calls.lock().unwrap().is_empty());
+        assert!(!cache.exists());
         assert!(!cache.join("fail").exists());
         fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_cached_png_is_replaced_when_source_is_generatable() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-corrupt-cache-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("photo.png");
+        write_fixture_png(&source);
+        let metadata = fs::metadata(&source).unwrap();
+        let version = SourceVersion::from_metadata(&metadata);
+        let uri = canonical_uri(&source).unwrap();
+        let cached = tier_path(&cache, ThumbnailTier::Normal, &uri);
+        write_standard_thumbnail(&source, &cached, &uri, version, Some("image/png")).unwrap();
+        let mut bytes = fs::read(&cached).unwrap();
+        let idat = bytes.windows(4).position(|chunk| chunk == b"IDAT").unwrap();
+        let data_length = u32::from_be_bytes(bytes[idat - 4..idat].try_into().unwrap()) as usize;
+        bytes.truncate(idat + 4 + data_length / 2);
+        fs::write(&cached, bytes).unwrap();
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = CountingGenerator {
+            calls: calls.clone(),
+            targets: Arc::new(Mutex::new(Vec::new())),
+        };
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "ready");
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[source.to_string_lossy().as_ref()]
+        );
+        assert!(read_valid_thumbnail(&cached, &uri, version, Some("image/png")).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn never_generates_for_sources_inside_the_global_thumbnail_tree() {
+        let subtrees = [
+            ("normal", "source.png"),
+            ("large", "source.png"),
+            ("x-large", "source.png"),
+            ("xx-large", "source.png"),
+            ("fail", "source.png"),
+            ("fail/orbit-explorer-test", "source.png"),
+            ("normal", ".orbit-thumbnail.tmp.png"),
+        ];
+        for (index, (subtree, file_name)) in subtrees.iter().enumerate() {
+            let root = std::env::temp_dir().join(format!(
+                "astrea-thumbnail-self-cache-{index}-{}",
+                std::process::id()
+            ));
+            let cache = root.join("thumbnails");
+            let source = cache.join(subtree).join(file_name);
+            fs::create_dir_all(source.parent().unwrap()).unwrap();
+            write_fixture_png(&source);
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let generator = CountingGenerator {
+                calls: calls.clone(),
+                targets: Arc::new(Mutex::new(Vec::new())),
+            };
+
+            let result = run_batch_with_generator_at(
+                &["128".to_string(), source.to_string_lossy().into_owned()],
+                &generator,
+                Some(&cache),
+                SystemTime::now() + Duration::from_secs(4),
+            )
+            .unwrap();
+            let item =
+                serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+            assert_eq!(item["status"], "direct", "subtree {subtree}");
+            assert!(item["previewUrl"].as_str().unwrap().starts_with("file:"));
+            assert!(calls.lock().unwrap().is_empty(), "subtree {subtree}");
+            let uri = canonical_uri(&source).unwrap();
+            assert!(!tier_path(&cache, ThumbnailTier::Normal, &uri).exists());
+            assert!(!failure_tier_path(&cache, &uri).exists());
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn sibling_thumbnail_backup_directory_is_not_the_global_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-cache-sibling-{}",
+            std::process::id()
+        ));
+        let cache = root.join("thumbnails");
+        let source = root.join("thumbnails-backup").join("source.png");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        write_fixture_png(&source);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = CountingGenerator {
+            calls: calls.clone(),
+            targets: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "ready");
+        assert_eq!(calls.lock().unwrap().len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 

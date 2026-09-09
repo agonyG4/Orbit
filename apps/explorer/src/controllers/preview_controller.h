@@ -9,6 +9,8 @@
 #include <QUrl>
 #include <QVector>
 
+#include <optional>
+
 #include "backend/rust_backend_client.h"
 #include "models/directory_model.h"
 
@@ -54,6 +56,7 @@ private:
         quint64 generation = 0;
         int target = 128;
         QVector<Intent> intents;
+        bool selectedPriority = false;
     };
 
     struct AppliedPreview
@@ -67,13 +70,15 @@ private:
         QString sourceVersion;
         QDateTime retryAfter;
         Intent intent;
+        bool retryable = true;
+        bool selectedPriority = false;
     };
 
     static bool isEligible(const DirectoryEntry &entry);
     static bool isDirectImagePath(const QString &path);
     static QString sourceVersion(const DirectoryEntry &entry);
     static int tierPixels(const QString &tier, int fallback);
-    bool isInFlight(const QString &path) const;
+    std::optional<int> inFlightTargetForPath(const QString &path) const;
     bool isSuppressed(const DirectoryEntry &entry, int target);
     void replaceViewportQueue(int firstIndex, int lastIndex, int target);
     void scheduleDispatch(int delayMs = 50);
@@ -95,9 +100,12 @@ private:
     QSet<QString> m_viewportPaths;
     Intent m_selectedIntent;
     bool m_hasSelectedIntent = false;
+    QString m_selectedPath;
+    bool m_hasSelectedPath = false;
     QHash<QString, AppliedPreview> m_appliedPreviews;
     QHash<QString, QString> m_failedSources;
     QHash<QString, QString> m_unsupportedSources;
+    QHash<QString, QString> m_unavailableSources;
     QHash<QString, DeferredPreviewState> m_deferredPreviews;
     bool m_hasVisibleRange = false;
     int m_lastVisibleFirst = 0;
