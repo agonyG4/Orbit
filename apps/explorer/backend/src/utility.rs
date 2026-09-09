@@ -22,7 +22,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "create-desktop-shortcut" => create_desktop_shortcut(args),
         "network-mount-probe" => network_mount_probe(args),
         "network-mount" => network_mount(args),
-        "warm-thumbnails" => warm_thumbnails(args),
+        "thumbnail-batch" => crate::thumbnails::batch(&args[1..]),
         "file-visual-metadata" => crate::file_visual_metadata::run(&args[1..]),
         "install-appimage" => install_appimage(args),
         "archive-extract" => crate::archive::extract(&args[1..]),
@@ -137,13 +137,6 @@ pub fn list_trash_entries_json() -> Result<String, String> {
     }
     entries.sort();
     Ok(format!("[{}]", entries.join(",")))
-}
-
-fn warm_thumbnails(args: &[String]) -> Result<String, String> {
-    let warmed = crate::thumbnails::warm_count(&args[1..])?;
-    Ok(format!(
-        "{{\"ok\":true,\"operation\":\"warm-thumbnails\",\"warmed\":{warmed}}}"
-    ))
 }
 
 fn install_appimage(args: &[String]) -> Result<String, String> {

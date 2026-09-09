@@ -28,7 +28,7 @@ fn run() -> Result<(), String> {
         Some("mount") => devices::run_mount(&args[2..], "mount", "mounted"),
         Some("unmount") => devices::run_mount(&args[2..], "unmount", "unmounted"),
         Some("remount") => devices::run_remount(&args[2..]),
-        Some("warm-thumbnails") => thumbnails::run_warm(&args[2..]),
+        Some("thumbnail-batch") => thumbnails::run_batch(&args[2..]),
         Some("install-appimage") => appimage::run(&args[2..]),
         Some("file-op") => file_ops::run(&args[2..]),
         Some("archive-extract") => archive::run_extract(&args[2..]),
@@ -36,6 +36,6 @@ fn run() -> Result<(), String> {
         Some("utility") => utility::run(&args[2..]),
         Some("serve") => worker::run(),
         _ if args.len() >= 6 => entries::run_list(&args[1..]),
-        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|warm-thumbnails|install-appimage|file-op|utility|serve ...".into()),
+        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|thumbnail-batch|install-appimage|file-op|utility|serve ...".into()),
     }
 }

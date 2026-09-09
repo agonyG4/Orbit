@@ -492,7 +492,13 @@ fn entry_from_parts_with_link_state(
 
     Entry {
         kind: file_kind(path, is_dir),
-        preview_url: preview_url_for_mode(path, is_dir, modified_ms, preview_mode),
+        preview_url: preview_url_for_mode(
+            path,
+            is_dir,
+            modified_ms,
+            if is_dir { 0 } else { meta.len() },
+            preview_mode,
+        ),
         name,
         path: path.to_string_lossy().into_owned(),
         is_dir,
@@ -508,41 +514,18 @@ fn entry_from_parts_with_link_state(
     }
 }
 
-fn preview_url_for_mode(path: &Path, is_dir: bool, modified_ms: i64, mode: PreviewMode) -> String {
+fn preview_url_for_mode(
+    path: &Path,
+    is_dir: bool,
+    modified_ms: i64,
+    size: u64,
+    mode: PreviewMode,
+) -> String {
     match mode {
         PreviewMode::None => String::new(),
-        PreviewMode::Cached => cached_preview_url(path, is_dir, modified_ms),
-        PreviewMode::Full => thumbnails::preview_url(path, is_dir, modified_ms),
+        PreviewMode::Cached => thumbnails::cached_preview_url(path, is_dir, modified_ms, size),
+        PreviewMode::Full => thumbnails::preview_url(path, is_dir, modified_ms, size),
     }
-}
-
-fn cached_preview_url(path: &Path, is_dir: bool, modified_ms: i64) -> String {
-    if is_dir {
-        return String::new();
-    }
-    if thumbnails::is_svg(path) {
-        return json::file_url(path);
-    }
-    let Some(home) = env::var_os("HOME") else {
-        return String::new();
-    };
-    let cached = PathBuf::from(home)
-        .join(".cache/explorer/thumbnails")
-        .join(format!("{}.png", thumbnail_cache_key(path, modified_ms)));
-    if cached.exists() {
-        json::file_url(&cached)
-    } else {
-        String::new()
-    }
-}
-
-fn thumbnail_cache_key(path: &Path, modified_ms: i64) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for &b in format!("v3|{}|{modified_ms}", path.to_string_lossy()).as_bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
 }
 
 fn entry_from_remote_parts(
