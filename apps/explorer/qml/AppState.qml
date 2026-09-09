@@ -114,10 +114,6 @@ QtObject {
     property bool showPreview: nativeAppState.showPreview
     property string viewMode: nativeAppState.viewMode
     property alias previewsEnabled: previewObj.previewsEnabled
-    property alias pendingThumbnailWarmRequest: previewObj.pendingThumbnailWarmRequest
-    property alias activeThumbnailWarmRequest: previewObj.activeThumbnailWarmRequest
-    property alias activePreviewRefreshPath: previewObj.activePreviewRefreshPath
-    property alias startupWarmQueue: previewObj.startupWarmQueue
     property real zoomLevel: nativeAppState.zoomLevel
 
     property alias deviceModel: deviceNetObj.deviceModel
@@ -291,7 +287,6 @@ QtObject {
             nativeAppState.loadRecent()
             deviceNet.loadSavedAutoMounts()
             deviceNet.scheduleStartupDeviceRefresh()
-            preview.enableStartupWork()
         }
     }
 
@@ -392,26 +387,25 @@ QtObject {
     function installAppImage(path) { fileOps.installAppImage(path) }
     function setAsWallpaper(path) { fileOps.setAsWallpaper(path) }
 
-    function refreshPreviewMetadata() { preview.refreshPreviewMetadata() }
-    function fileIconName(fileName, isFolder, isExecutable) { return preview.fileIconName(fileName, isFolder, isExecutable) }
-    function fileIconSource(path, isFolder, isExecutable, size, semanticIconName) {
-        return preview.fileIconSource(path, isFolder, isExecutable, size, semanticIconName || "")
+   function refreshPreviewMetadata() { preview.refreshPreviewMetadata() }
+   function fileIconName(fileName, isFolder, isExecutable) { return preview.fileIconName(fileName, isFolder, isExecutable) }
+    function fileIconSource(path, isFolder, isExecutable, size, semanticIconName, devicePixelRatio) {
+        return preview.fileIconSource(path, isFolder, isExecutable, size, semanticIconName || "", devicePixelRatio || 1.0)
+   }
+    function richFileIconSource(path, isFolder, isExecutable, size, semanticIconName, iconNames, iconFileUrl, iconFileVersion, devicePixelRatio) {
+        return preview.richFileIconSource(path, isFolder, isExecutable, size, semanticIconName || "", iconNames || [], iconFileUrl || "", iconFileVersion || "", devicePixelRatio || 1.0)
+   }
+    function emblemIconSource(name, size, devicePixelRatio) { return preview.emblemIconSource(name, size, devicePixelRatio) }
+    function portalIconSource(iconName, size, devicePixelRatio) { return preview.portalIconSource(iconName, size, devicePixelRatio) }
+    function sidebarIconSource(iconName, size, devicePixelRatio) { return preview.sidebarIconSource(iconName, size, devicePixelRatio) }
+    function requestVisibleThumbnailRange(firstIndex, lastIndex, physicalTarget) {
+        preview.requestVisibleThumbnailRange(firstIndex, lastIndex, physicalTarget)
     }
-    function richFileIconSource(path, isFolder, isExecutable, size, semanticIconName, iconNames, iconFileUrl, iconFileVersion) {
-        return preview.richFileIconSource(path, isFolder, isExecutable, size, semanticIconName || "", iconNames || [], iconFileUrl || "", iconFileVersion || "")
+    function requestSelectedThumbnail(filePath, physicalTarget) {
+        preview.requestSelectedThumbnail(filePath, physicalTarget)
     }
-    function emblemIconSource(name, size) { return preview.emblemIconSource(name, size) }
-    function portalIconSource(iconName, size) { return preview.portalIconSource(iconName, size) }
-    function sidebarIconSource(iconName, size) { return preview.sidebarIconSource(iconName, size) }
-    function isPreviewableFile(fileName, isDir) { return preview.isPreviewableFile(fileName, isDir) }
-    function requestThumbnailWarm(path, offset, limit) { preview.requestThumbnailWarm(path, offset, limit) }
-    function startThumbnailWarm(request) { preview.startThumbnailWarm(request) }
-    function warmCurrentDirectoryThumbnails() { preview.warmCurrentDirectoryThumbnails() }
-    function scheduleVisibleThumbnailWarm(firstIndex, lastIndex) { preview.scheduleVisibleThumbnailWarm(firstIndex, lastIndex) }
-    function requestFileVisualMetadata(firstIndex, lastIndex) { preview.requestFileVisualMetadata(firstIndex, lastIndex) }
-    function scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) { preview.scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) }
-    function enqueueStartupWarm(path, limit) { preview.enqueueStartupWarm(path, limit) }
-    function scheduleHomeThumbnailWarmup() { preview.scheduleHomeThumbnailWarmup() }
+   function requestFileVisualMetadata(firstIndex, lastIndex) { preview.requestFileVisualMetadata(firstIndex, lastIndex) }
+   function scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) { preview.scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) }
     function formatSize(bytes) { return preview.formatSize(bytes) }
     function formatDate(date) { return preview.formatDate(date) }
     function itemColor(name, hovered) { return preview.itemColor(name, hovered) }

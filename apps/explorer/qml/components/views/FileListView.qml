@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
+import QtQuick.Window 2.15
 import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
@@ -18,8 +19,8 @@ import Astrea.I18n 1.0 as AstreaI18n
 //    natural without manual `scrollBy()` helpers.
 //  • `cacheBuffer` raised to 600 (≈ 10 extra rows) so fast scrolls don't
 //    blank out; the original 480 was arbitrary and too low for big iconSizes.
-//  • `warmVisibleRange` timer interval dropped to 80 ms (was 120) — thumbnails
-//    appear noticeably faster after a scroll stop.
+//  • The visible preview scheduler is debounced at 80 ms so thumbnails
+//    appear quickly after a scroll stop without per-row warm-up work.
 //  • Delegate: extracted computed values into the ListView as `readonly property`
 //    so every delegate instance doesn't re-evaluate the same expression.
 //  • Drag: `pressedButtons & Qt.LeftButton` guard kept in `onPositionChanged` —
@@ -39,6 +40,11 @@ Item {
     property real pendingRestoreY: 0
     property int restoreAttempts: 0
     property alias restoreRetryTimerRef: restoreRetryTimer
+    readonly property real effectiveDpr: Math.max(0.5, Math.min(4.0,
+        Window.window ? Window.window.devicePixelRatio : Screen.devicePixelRatio))
+    function physicalDecodeSize(logicalSize) {
+        return Math.max(1, Math.ceil(logicalSize * root.effectiveDpr))
+    }
 
     // ── Activation (double-click emulation) ───────────────────────────────
     property string lastActivationCandidatePath: ""
@@ -66,6 +72,7 @@ Item {
     readonly property int  primaryFont:  Math.round(13 * Math.min(AppState.zoomLevel, 1.25))
     readonly property int  secondaryFont: Math.round(12 * Math.min(AppState.zoomLevel, 1.2))
     readonly property int  previewSize:  AppState.isPortalDialog ? 96 : 72
+    readonly property int  previewPhysicalSize: root.physicalDecodeSize(previewSize)
 
     // ── Helpers ───────────────────────────────────────────────────────────
     function resetActivationCandidate() {
@@ -97,7 +104,7 @@ Item {
             function() { root.rebuildDisplayModel() },
             function() { root.applyPendingScrollRestore() }
         )
-        warmTimer.restart()
+        previewScheduleTimer.restart()
     }
 
     function normalizedKind(kind, isDir, name) {
@@ -256,7 +263,7 @@ Item {
                 AppState.rememberScrollPosition(root.trackedPath, "list", list.contentY)
             root.prepareScrollRestore(AppState.currentPath)
             root.rebuildDisplayModel()
-            warmTimer.restart()
+            previewScheduleTimer.restart()
         }
     }
 
@@ -384,32 +391,32 @@ Item {
             return 0
         }
 
-        // ── Thumbnail warm-up ─────────────────────────────────────────────
-        function warmVisible() {
+        // ── Visible preview scheduling ────────────────────────────────────
+        function scheduleVisible() {
             if (AppState.fileModel.count <= 0) return
             const first = indexAt(8, contentY + 1)
             const last  = indexAt(8, contentY + height - 2)
-            AppState.scheduleVisibleThumbnailWarm(
-                sourceIndexNear(first < 0 ? 0 : first, false),
-                sourceIndexNear(last < 0 ? Math.min(root.displayModel.count - 1, (first < 0 ? 0 : first) + 36) : Math.min(root.displayModel.count - 1, last + 12), true))
-            AppState.scheduleVisibleFileVisualMetadata(
-                sourceIndexNear(first < 0 ? 0 : first, false),
-                sourceIndexNear(last < 0 ? Math.min(root.displayModel.count - 1, (first < 0 ? 0 : first) + 36) : Math.min(root.displayModel.count - 1, last + 12), true))
+            var firstSource = sourceIndexNear(first < 0 ? 0 : first, false)
+            var lastSource = sourceIndexNear(last < 0 ? Math.min(root.displayModel.count - 1, (first < 0 ? 0 : first) + 36) : Math.min(root.displayModel.count - 1, last + 12), true)
+            AppState.requestVisibleThumbnailRange(firstSource, lastSource, root.previewPhysicalSize)
+           AppState.scheduleVisibleFileVisualMetadata(
+                firstSource,
+                lastSource)
         }
 
         onContentYChanged: {
-            warmTimer.restart()
+            previewScheduleTimer.restart()
             if (root.scrollSyncReady && !root.restoringScroll && root.trackedPath === AppState.currentPath)
                 AppState.rememberScrollPosition(root.trackedPath, "list", contentY)
         }
         onHeightChanged: {
-            warmTimer.restart()
+            previewScheduleTimer.restart()
             root.applyPendingScrollRestore()
         }
         onContentHeightChanged: root.applyPendingScrollRestore()
-        Component.onCompleted: warmTimer.restart()
+        Component.onCompleted: previewScheduleTimer.restart()
 
-        Timer { id: warmTimer; interval: 80; repeat: false; onTriggered: list.warmVisible() }
+        Timer { id: previewScheduleTimer; interval: 80; repeat: false; onTriggered: list.scheduleVisible() }
 
         // ── Background click / context menu ───────────────────────────────
         MouseArea {
@@ -513,7 +520,7 @@ Item {
             readonly property int    dragPreviewSize: Math.max(42, Math.round(root.iconFrameSize * 0.9))
             readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    isHeaderRow ? Qt.resolvedUrl("") : AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion))
+                                                   isHeaderRow ? Qt.resolvedUrl("") : AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion, root.effectiveDpr))
 
             // Drag support
             property bool dragging: false
@@ -528,8 +535,8 @@ Item {
                 "text/plain": root.dragPathsForItem(itemName, itemPath).join("\n"),
                 "application/x-astrea-explorer-internal-drag": "move"
             })
-            Drag.imageSource: dragImageUrl
-            Drag.imageSourceSize: Qt.size(dragPreviewSize, dragPreviewSize)
+           Drag.imageSource: dragImageUrl
+            Drag.imageSourceSize: Qt.size(root.physicalDecodeSize(dragPreviewSize), root.physicalDecodeSize(dragPreviewSize))
             Drag.hotSpot: Qt.point(dragPreviewSize / 2, dragPreviewSize / 2)
 
             width:   ListView.view.width
@@ -576,14 +583,14 @@ Item {
                             Image {
                                 anchors.centerIn: parent
                                 visible: !row.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.richFileIconSource(row.itemPath, row.itemIsDir, row.itemExecutable, root.iconFrameSize, row.itemIconName, row.itemIconNames, row.itemIconFileUrl, row.itemIconFileVersion)
+                                source: AppState.richFileIconSource(row.itemPath, row.itemIsDir, row.itemExecutable, root.iconFrameSize, row.itemIconName, row.itemIconNames, row.itemIconFileUrl, row.itemIconFileVersion, root.effectiveDpr)
                                 width: root.iconFrameSize; height: root.iconFrameSize
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: false
                                 cache: true
                                 retainWhileLoading: true
                                 smooth: true
-                                sourceSize: Qt.size(root.iconFrameSize, root.iconFrameSize)
+                                sourceSize: Qt.size(root.physicalDecodeSize(root.iconFrameSize), root.physicalDecodeSize(root.iconFrameSize))
                             }
 
                             Image {
@@ -597,7 +604,7 @@ Item {
                                 smooth: true
                                 mipmap: true
                                 fillMode: Image.PreserveAspectFit
-                                sourceSize: Qt.size(row.previewRequestSize, row.previewRequestSize)
+                                sourceSize: Qt.size(root.previewPhysicalSize, root.previewPhysicalSize)
                             }
 
                             Repeater {
@@ -606,12 +613,12 @@ Item {
                                     width: 18; height: 18
                                     x: parent.width - width - index * 20
                                     y: parent.height - height
-                                    source: AppState.emblemIconSource(row.itemEmblemNames[index], 18)
+                                    source: AppState.emblemIconSource(row.itemEmblemNames[index], 18, root.effectiveDpr)
                                     visible: source !== ""
                                     asynchronous: false
                                     cache: true
                                     smooth: true
-                                    sourceSize: Qt.size(18, 18)
+                                    sourceSize: Qt.size(root.physicalDecodeSize(18), root.physicalDecodeSize(18))
                                 }
                             }
                         }

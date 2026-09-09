@@ -1,10 +1,16 @@
 import QtQuick 2.15
 import QtQuick.Controls.impl 2.15
+import QtQuick.Window 2.15
 import "../.."
 import Astrea.I18n 1.0 as AstreaI18n
 
 Rectangle {
     id: root
+    readonly property real effectiveDpr: Math.max(0.5, Math.min(4.0,
+        Window.window ? Window.window.devicePixelRatio : Screen.devicePixelRatio))
+    function physicalDecodeSize(logicalSize) {
+        return Math.max(1, Math.ceil(logicalSize * root.effectiveDpr))
+    }
 
     readonly property var selectedItem: AppState.fileModelRevision >= 0 ? AppState.selectedItem() : null
     readonly property string selectedName: AppState.selectedFile
@@ -13,11 +19,13 @@ Rectangle {
     readonly property bool selectedExecutable: Boolean(selectedItem && selectedItem.fileExecutable)
     readonly property string selectedPath: selectedItem ? (selectedItem.filePath || "") : ""
     readonly property string selectedUrl: selectedItem ? (selectedItem.fileUrl || "") : ""
+    readonly property bool selectedRemote: Boolean(selectedItem && selectedItem.fileRemote)
+    readonly property bool selectedMetadataLimited: Boolean(selectedItem && selectedItem.fileMetadataLimited)
     readonly property string selectedKind: selectedItem && selectedItem.fileKind ? selectedItem.fileKind : fallbackKind(selectedName, selectedIsDir)
     readonly property string selectedPreviewUrl: selectedItem ? (selectedItem.filePreviewUrl || "") : ""
-    readonly property bool selectedPreviewable: AppState.isPreviewableFile(selectedName, selectedIsDir)
-    readonly property string selectedPreviewSource: selectedPreviewUrl !== "" ? selectedPreviewUrl
-        : (selectedPreviewable ? selectedUrl : "")
+    readonly property bool selectedPreviewable: AppState.previewsEnabled && selectedPath !== ""
+        && !selectedIsDir && !selectedRemote && !selectedMetadataLimited
+    readonly property string selectedPreviewSource: selectedPreviewUrl
 
     color: Theme.bg
     clip: true
@@ -35,33 +43,22 @@ Rectangle {
         return name.slice(dot + 1).toUpperCase()
     }
 
-    function selectedIndex() {
-        for (var i = 0; i < AppState.fileModel.count; i++) {
-            var item = AppState.fileModel.get(i)
-            if (item && item.fileName === AppState.selectedFile)
-                return i
-        }
-        return -1
-    }
-
-    function warmSelectedPreview() {
-        if (!AppState.showPreview || !selectedPreviewable || selectedPreviewUrl !== "" || !AppState.currentPath)
+    function requestSelectedPreview() {
+        if (!AppState.showPreview || !selectedPreviewable || selectedPreviewUrl !== "" || !selectedPath)
             return
-        var index = selectedIndex()
-        if (index >= 0)
-            AppState.requestThumbnailWarm(AppState.currentPath, index, 1)
-    }
+        AppState.requestSelectedThumbnail(selectedPath, root.physicalDecodeSize(320))
+   }
 
-    onSelectedNameChanged: selectedWarmTimer.restart()
-    onSelectedPreviewUrlChanged: selectedWarmTimer.restart()
-    onVisibleChanged: selectedWarmTimer.restart()
+    onSelectedNameChanged: selectedPreviewTimer.restart()
+    onSelectedPreviewUrlChanged: selectedPreviewTimer.restart()
+    onVisibleChanged: selectedPreviewTimer.restart()
 
-    Timer {
-        id: selectedWarmTimer
-        interval: 80
-        repeat: false
-        onTriggered: root.warmSelectedPreview()
-    }
+   Timer {
+        id: selectedPreviewTimer
+       interval: 80
+       repeat: false
+        onTriggered: root.requestSelectedPreview()
+   }
 
     // Divisor esquerdo
     Rectangle { width: 1; height: parent.height; color: Theme.border }
@@ -99,22 +96,22 @@ Rectangle {
                 cache: true
                 smooth: true
                 mipmap: true
-                sourceSize: Qt.size(320, 240)
-            }
+                sourceSize: Qt.size(root.physicalDecodeSize(320), root.physicalDecodeSize(240))
+           }
 
-            Image {
-                anchors.centerIn: parent
-                source: AppState.fileIconSource(root.selectedPath, root.selectedIsDir, root.selectedExecutable, 64, "")
-                width: 64
-                height: 64
+           Image {
+               anchors.centerIn: parent
+                source: AppState.fileIconSource(root.selectedPath, root.selectedIsDir, root.selectedExecutable, 64, "", root.effectiveDpr)
+               width: 64
+               height: 64
                 fillMode: Image.PreserveAspectFit
                 asynchronous: false
                 cache: true
                 retainWhileLoading: true
                 smooth: true
-                sourceSize: Qt.size(64, 64)
-                visible: root.selectedPreviewSource === "" || previewImage.status !== Image.Ready
-            }
+                sourceSize: Qt.size(root.physicalDecodeSize(64), root.physicalDecodeSize(64))
+               visible: root.selectedPreviewSource === "" || previewImage.status !== Image.Ready
+           }
         }
 
         Text {

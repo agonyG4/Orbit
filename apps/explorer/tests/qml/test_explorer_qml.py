@@ -218,15 +218,16 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
         self.assertIn("onFilesChosen", portal_dialog)
         self.assertNotIn("Bench File Dialog", portal_dialog)
 
-    def test_remote_directories_disable_watchers_and_thumbnail_warmup(self):
+
+    def test_remote_directories_disable_watchers_and_native_preview_scheduling(self):
         app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
         preview = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
 
         self.assertIn("property bool remoteDirectoryActive: nativeAppState.remoteDirectoryActive", app_state)
         self.assertFalse((APP_ROOT / "state" / "NavigationState.qml").exists())
         self.assertNotIn("nativeNavigationActive", app_state)
-        self.assertIn("app.remoteDirectoryActive", preview)
-
+        self.assertIn("requestVisibleThumbnailRange", preview)
+        self.assertIn("requestSelectedThumbnail", preview)
 
 class ExplorerDateFormattingRegressionTests(unittest.TestCase):
     def test_file_dates_fall_back_to_explicit_absolute_dates(self):
@@ -296,11 +297,38 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
 
         self.assertIn("readonly property int   iconDecodeSize", icon_view)
         self.assertIn(
-            "AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion)",
+            "AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion, root.effectiveDpr)",
             icon_view,
         )
-        self.assertIn("sourceSize: Qt.size(grid.iconDecodeSize, grid.iconDecodeSize)", icon_view)
+        self.assertIn("readonly property int   iconDecodePhysicalSize", icon_view)
+        self.assertIn("sourceSize: Qt.size(grid.iconDecodePhysicalSize, grid.iconDecodePhysicalSize)", icon_view)
         self.assertNotIn("sourceSize: Qt.size(grid.iconSize, grid.iconSize)", icon_view)
+
+    def test_preview_surfaces_report_native_ranges_and_physical_decode_sizes(self):
+        preview_state = (APP_ROOT / "state/PreviewState.qml").read_text(encoding="utf-8")
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        icon_view = (APP_ROOT / "components/views/FileIconView.qml").read_text(encoding="utf-8")
+        list_view = (APP_ROOT / "components/views/FileListView.qml").read_text(encoding="utf-8")
+        panel = (APP_ROOT / "components/layout/PreviewPanel.qml").read_text(encoding="utf-8")
+        sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")
+
+        for source in [icon_view, list_view, panel, sidebar]:
+            self.assertIn("import QtQuick.Window 2.15", source)
+            self.assertIn("devicePixelRatio", source)
+            self.assertIn("Math.ceil", source)
+        self.assertIn("AppState.requestVisibleThumbnailRange", icon_view)
+        self.assertIn("grid.previewReqPhysicalSize", icon_view)
+        self.assertIn("AppState.requestVisibleThumbnailRange", list_view)
+        self.assertIn("root.previewPhysicalSize", list_view)
+        self.assertIn("AppState.requestSelectedThumbnail(selectedPath, root.physicalDecodeSize(320))", panel)
+        self.assertIn("sourceSize: Qt.size(root.physicalDecodeSize(320), root.physicalDecodeSize(240))", panel)
+        self.assertIn("source: root.selectedPreviewSource", panel)
+        self.assertIn("sourceSize: Qt.size(root.physicalDecodeSize(64), root.physicalDecodeSize(64))", panel)
+        self.assertIn("root.effectiveDpr", sidebar)
+        self.assertIn("function requestVisibleThumbnailRange", preview_state)
+        self.assertIn("function requestSelectedThumbnail", preview_state)
+        self.assertNotIn("requestThumbnailWarm", app_state + preview_state + icon_view + list_view + panel)
+        self.assertNotIn("isPreviewableFile", app_state + preview_state + icon_view + list_view + panel)
 
     def test_native_icon_service_replaces_qml_theme_and_extension_selection(self):
         preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")

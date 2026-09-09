@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
 import QtQuick.Layouts
+import QtQuick.Window 2.15
 import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as Common
@@ -15,6 +16,11 @@ import Astrea.I18n 1.0 as AstreaI18n
 Item {
     id: root
     width: 256          // largura total incluindo margens externas
+    readonly property real effectiveDpr: Math.max(0.5, Math.min(4.0,
+        Window.window ? Window.window.devicePixelRatio : Screen.devicePixelRatio))
+    function physicalDecodeSize(logicalSize) {
+        return Math.max(1, Math.ceil(logicalSize * root.effectiveDpr))
+    }
 
     // ── Propriedades do drive context-menu (sem alteração) ────────────────────
     property bool   driveMenuOpen:        false
@@ -177,10 +183,10 @@ Item {
                 Behavior on color { ColorAnimation { duration: UI.Theme.animationQuick } }
 
                 Common.SymbolicIcon {
-                    source: AppState.sidebarIconSource("system-search", 16)
+                    source: AppState.sidebarIconSource("system-search", 16, root.effectiveDpr)
                     width: 14; height: 14
                     anchors.centerIn: parent
-                    sourcePixelSize: 14
+                    sourcePixelSize: root.physicalDecodeSize(14)
                     tintColor: searchHover.containsMouse ? UI.Theme.textPrimary : UI.Theme.textSecondary
                 }
 
@@ -837,10 +843,10 @@ Item {
                 Behavior on color { ColorAnimation { duration: UI.Theme.animationFast; easing.type: Easing.OutCubic } }
 
                 Common.SymbolicIcon {
-                    source: AppState.sidebarIconSource(sbItem.icon, 16)
+                    source: AppState.sidebarIconSource(sbItem.icon, 16, root.effectiveDpr)
                     width: 16; height: 16
                     anchors.centerIn: parent
-                    sourcePixelSize: 16
+                    sourcePixelSize: root.physicalDecodeSize(16)
                     opacity: sbItem.active ? 1.0 : 0.92
                     tintColor: sbItem.active ? root.sidebarIconActive
                         : itemHover.hovered ? root.sidebarIconHover
@@ -990,10 +996,10 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
 
                 Common.SymbolicIcon {
-                    source: AppState.sidebarIconSource(deviceItem.icon, 16)
+                    source: AppState.sidebarIconSource(deviceItem.icon, 16, root.effectiveDpr)
                     width: 16; height: 16
                     anchors.centerIn: parent
-                    sourcePixelSize: 16
+                    sourcePixelSize: root.physicalDecodeSize(16)
                     opacity: deviceItem.busy ? 0.40 : (deviceItem.active ? 1.0 : 0.88)
                     tintColor: deviceItem.active ? root.sidebarIconActive
                         : devHover.containsMouse ? root.sidebarIconHover

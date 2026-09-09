@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Controls.impl 2.15
+import QtQuick.Window 2.15
 import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
@@ -33,9 +34,8 @@ import "ViewShared.js" as ViewShared
 //    lives in one place.
 //  • Icon highlight (`Rectangle#highlight`) now has `Behavior on color` for
 //    a subtle hover fade rather than an instant jump.
-//  • `warmVisibleRange` now only listens to Y-scroll changes, not X
-//    (`onContentXChanged`) — GridView scrolls vertically only, so the X
-//    signal was a no-op that fired unnecessarily on resize.
+//  • The visible preview scheduler listens only to the GridView's vertical
+//    scroll changes, avoiding redundant scheduling during resize.
 // ─────────────────────────────────────────────────────────────────────────────
 
 Item {
@@ -57,6 +57,11 @@ Item {
     property real queuedDragY: 0
     property bool dragStartScheduled: false
     property bool dragInProgress: false
+    readonly property real effectiveDpr: Math.max(0.5, Math.min(4.0,
+        Window.window ? Window.window.devicePixelRatio : Screen.devicePixelRatio))
+    function physicalDecodeSize(logicalSize) {
+        return Math.max(1, Math.ceil(logicalSize * root.effectiveDpr))
+    }
 
     // ── Activation ────────────────────────────────────────────────────────
     property string lastActivationCandidatePath: ""
@@ -93,7 +98,7 @@ Item {
             function() { root.rebuildSectionModel() },
             function() { root.applyPendingScrollRestore() }
         )
-        warmTimer.restart()
+        previewScheduleTimer.restart()
     }
 
     function normalizedKind(kind, isDir, name) {
@@ -350,7 +355,7 @@ Item {
                 AppState.rememberScrollPosition(root.trackedPath, "icon", grid.contentY)
             root.prepareScrollRestore(AppState.currentPath)
             root.rebuildSectionModel()
-            warmTimer.restart()
+            previewScheduleTimer.restart()
         }
     }
 
@@ -393,8 +398,10 @@ Item {
             "text/plain": root.queuedDragItemPath,
             "application/x-astrea-explorer-internal-drag": "move"
         })
-        Drag.imageSource: root.queuedDragImageUrl
-        Drag.imageSourceSize: Qt.size(root.queuedDragPreviewSize, root.queuedDragPreviewSize)
+       Drag.imageSource: root.queuedDragImageUrl
+        Drag.imageSourceSize: Qt.size(
+            root.physicalDecodeSize(root.queuedDragPreviewSize),
+            root.physicalDecodeSize(root.queuedDragPreviewSize))
         Drag.hotSpot: Qt.point(width / 2, height / 2)
     }
 
@@ -434,8 +441,10 @@ Item {
                                             : Math.round(tileWidth * thumbnailFillRatios[AppState.thumbnailLevel()])
         readonly property var   iconDecodeSizes: [48, 64, 96, 128, 160, 256, 384]
         readonly property int   iconDecodeSize: AppState.isPortalDialog ? 96 : iconDecodeSizes[AppState.thumbnailLevel()]
+        readonly property int   iconDecodePhysicalSize: root.physicalDecodeSize(iconDecodeSize)
         readonly property var   previewReqSizes: [128, 128, 160, 192, 256, 320, 384]
         readonly property int   previewReqSize: AppState.isPortalDialog ? 160 : previewReqSizes[AppState.thumbnailLevel()]
+        readonly property int   previewReqPhysicalSize: root.physicalDecodeSize(previewReqSize)
         readonly property int   fontSize:   Math.round(11 + AppState.thumbnailLevel())
         readonly property int   textHeight: Math.round(fontSize * 1.4)
         readonly property int   tilePad:    compactLayout ? 2 : 3
@@ -446,8 +455,8 @@ Item {
         readonly property int   hlHeight:   iconTopPad + iconSize + labelTopGap + textHeight + labelBottomPad
         readonly property int   tileHeight: hlHeight + tilePad * 2
 
-        // ── Thumbnail warm-up ─────────────────────────────────────────────
-        function warmVisible() {
+        // ── Visible preview scheduling ────────────────────────────────────
+        function scheduleVisible() {
             if (AppState.fileModel.count <= 0)
                 return
             var firstSource = -1
@@ -476,31 +485,32 @@ Item {
             if (firstSource < 0 || lastSource < firstSource)
                 return
             var pad = grid.columns * 2
-            AppState.scheduleVisibleThumbnailWarm(
+            AppState.requestVisibleThumbnailRange(
                 Math.max(0, firstSource - pad),
-                Math.min(AppState.fileModel.count - 1, lastSource + pad))
+                Math.min(AppState.fileModel.count - 1, lastSource + pad),
+                grid.previewReqPhysicalSize)
             AppState.scheduleVisibleFileVisualMetadata(
                 Math.max(0, firstSource - pad),
                 Math.min(AppState.fileModel.count - 1, lastSource + pad))
         }
 
         onContentYChanged: {
-            warmTimer.restart()
+            previewScheduleTimer.restart()
             if (root.scrollSyncReady && !root.restoringScroll && root.trackedPath === AppState.currentPath)
                 AppState.rememberScrollPosition(root.trackedPath, "icon", contentY)
         }
         onWidthChanged: {
-            warmTimer.restart()
+            previewScheduleTimer.restart()
             root.applyPendingScrollRestore()
         }
         onHeightChanged: {
-            warmTimer.restart()
+            previewScheduleTimer.restart()
             root.applyPendingScrollRestore()
         }
         onContentHeightChanged: root.applyPendingScrollRestore()
-        Component.onCompleted: warmTimer.restart()
+        Component.onCompleted: previewScheduleTimer.restart()
 
-        Timer { id: warmTimer; interval: 80; repeat: false; onTriggered: grid.warmVisible() }
+        Timer { id: previewScheduleTimer; interval: 80; repeat: false; onTriggered: grid.scheduleVisible() }
 
 
         TapHandler {
@@ -627,8 +637,8 @@ Item {
                         readonly property int    previewDisplaySize: Math.min(grid.iconSize, Math.round(grid.iconSize * grid.previewFillRatios[AppState.thumbnailLevel()]))
                         readonly property int    dragPreviewSize: Math.max(48, Math.round(grid.iconSize * 0.78))
                         readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
-                                                    hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion))
+                                                   hasPreview && activePreviewUrl ? activePreviewUrl : "",
+                                                    AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion, root.effectiveDpr))
 
                         onModelDataChanged: {
                             activePreviewUrl = ""
@@ -663,15 +673,15 @@ Item {
 
                             Image {
                                 anchors.centerIn: parent
-                                visible: !tile.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion)
+                               visible: !tile.hasPreview || previewImage.status !== Image.Ready
+                               source: AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion, root.effectiveDpr)
                                 width: grid.iconSize; height: grid.iconSize
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: false
                                 cache: true
                                 retainWhileLoading: true
                                 smooth: true
-                                sourceSize: Qt.size(grid.iconDecodeSize, grid.iconDecodeSize)
+                               sourceSize: Qt.size(grid.iconDecodePhysicalSize, grid.iconDecodePhysicalSize)
                             }
 
                             Image {
@@ -684,22 +694,22 @@ Item {
                                 cache: true
                                 smooth: true
                                 mipmap: true
-                                fillMode: Image.PreserveAspectFit
-                                sourceSize: Qt.size(tile.previewRequestSize, tile.previewRequestSize)
+                               fillMode: Image.PreserveAspectFit
+                               sourceSize: Qt.size(grid.previewReqPhysicalSize, grid.previewReqPhysicalSize)
                             }
 
                             Repeater {
                                 model: Math.min(3, tile.itemEmblemNames.length)
                                 delegate: Image {
                                     width: 18; height: 18
-                                    x: iconSlot.width - width - index * 20
-                                    y: iconSlot.height - height
-                                    source: AppState.emblemIconSource(tile.itemEmblemNames[index], 18)
+                                   x: iconSlot.width - width - index * 20
+                                   y: iconSlot.height - height
+                                   source: AppState.emblemIconSource(tile.itemEmblemNames[index], 18, root.effectiveDpr)
                                     visible: source !== ""
                                     asynchronous: false
-                                    cache: true
-                                    smooth: true
-                                    sourceSize: Qt.size(18, 18)
+                                   cache: true
+                                   smooth: true
+                                   sourceSize: Qt.size(root.physicalDecodeSize(18), root.physicalDecodeSize(18))
                                 }
                             }
                         }
