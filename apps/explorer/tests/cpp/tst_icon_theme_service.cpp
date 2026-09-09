@@ -260,6 +260,8 @@ private slots:
     void rendersActualSymbolicArtworkWithoutRecoloring();
     void generatesCanonicalSymbolicAliases();
     void missingSymbolicCandidateUsesSymbolicFallback();
+    void missingEmblemIsOmitted();
+    void rendersAvailableEmblem();
     void reloadsCanonicalConfigAfterAtomicReplacement();
     void rendersAndReloadsAppearanceVariant();
     void environmentOverrideWinsOverCanonicalConfig();
@@ -733,6 +735,42 @@ void IconThemeServiceTest::missingSymbolicCandidateUsesSymbolicFallback()
     QVERIFY(fullColorSource.contains(QStringLiteral("custom-normal-icon")));
     QVERIFY(symbolicSource.contains(QStringLiteral("image-missing-symbolic")));
     QVERIFY(!symbolicSource.contains(QStringLiteral("mode=symbolic")));
+}
+
+void IconThemeServiceTest::missingEmblemIsOmitted()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("ThemeThatIsNotInstalled"));
+
+    IconThemeService service(configPath);
+    QCOMPARE(
+        service.emblemIconSource(
+            QStringLiteral("astrea-test-emblem-that-is-not-installed-987654"),
+            18),
+        QString());
+}
+
+void IconThemeServiceTest::rendersAvailableEmblem()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTheme(directory.path(), QStringLiteral("ThemeA"), QColor(0xdd, 0x55, 0x55), false);
+    writeIcon(
+        directory.path(),
+        QStringLiteral("ThemeA/16x16/actions"),
+        QStringLiteral("emblem-astrea-test"),
+        QColor(0x22, 0xaa, 0x66));
+    QIcon::setThemeSearchPaths({directory.path()});
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath, QStringLiteral("ThemeA"));
+    IconThemeService service(configPath);
+
+    const QString source = service.emblemIconSource(QStringLiteral("astrea-test"), 16);
+    QVERIFY(!source.isEmpty());
+    QVERIFY(source.contains(QStringLiteral("emblem-astrea-test")));
 }
 
 void IconThemeServiceTest::reloadsCanonicalConfigAfterAtomicReplacement()

@@ -89,6 +89,7 @@ class BackendClientTest final : public QObject
 private slots:
     void initTestCase();
     void decodesRoleCompatibleListPayload();
+    void decodesOptionalVisualMetadataFields();
     void rejectsMalformedJsonPayload();
     void forwardsLegacyCliArgumentsForListAndSearch();
     void decodesDevicesAndForwardsDeviceOperations();
@@ -168,6 +169,47 @@ void BackendClientTest::decodesRoleCompatibleListPayload()
     QCOMPARE(entries.constFirst().fileRemote, false);
     QCOMPARE(entries.constFirst().fileMetadataLimited, false);
     QCOMPARE(entries.constFirst().fileFilesystem, QStringLiteral("ext4"));
+}
+
+void BackendClientTest::decodesOptionalVisualMetadataFields()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+
+    QSignalSpy readySpy(&client, &IRustBackendClient::listReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    ListRequest request;
+    request.path = QStringLiteral("/tmp/example");
+    const BackendRequestId requestId = client.list(request);
+    transport.succeed(
+        requestId,
+        QByteArrayLiteral(
+            "[{\"fileName\":\"link\",\"filePath\":\"/tmp/example/link\","
+            "\"fileUrl\":\"file:///tmp/example/link\",\"fileIsDir\":false,"
+            "\"fileExecutable\":false,\"fileHidden\":false,\"fileSize\":7,"
+            "\"fileModified\":1723265945000,\"fileKind\":\"SYMLINK\","
+            "\"filePreviewUrl\":\"\",\"fileRemote\":false,"
+            "\"fileMetadataLimited\":false,\"fileFilesystem\":\"ext4\","
+            "\"fileIconNames\":[\"folder-link\",\"inode-directory\"],"
+            "\"fileIconFileUrl\":\"file:///tmp/custom.svg\","
+            "\"fileIconFileVersion\":\"12-34\","
+            "\"fileEmblemNames\":[\"symbolic-link\",\"readonly\"],"
+            "\"fileIconMetadataReady\":true,\"fileIsSymlink\":true,"
+            "\"fileSymlinkBroken\":false}]"));
+
+    QTRY_COMPARE(readySpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    const DirectoryEntry entry = readySpy.takeFirst().at(1)
+        .value<QVector<DirectoryEntry>>()
+        .constFirst();
+    QCOMPARE(entry.fileIconNames, QStringList({QStringLiteral("folder-link"), QStringLiteral("inode-directory")}));
+    QCOMPARE(entry.fileIconFileUrl, QUrl(QStringLiteral("file:///tmp/custom.svg")));
+    QCOMPARE(entry.fileIconFileVersion, QStringLiteral("12-34"));
+    QCOMPARE(entry.fileEmblemNames, QStringList({QStringLiteral("symbolic-link"), QStringLiteral("readonly")}));
+    QCOMPARE(entry.fileIconMetadataReady, true);
+    QCOMPARE(entry.fileIsSymlink, true);
+    QCOMPARE(entry.fileSymlinkBroken, false);
 }
 
 void BackendClientTest::rejectsMalformedJsonPayload()

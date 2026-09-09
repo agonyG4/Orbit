@@ -1,6 +1,7 @@
 #include "controllers/navigation_controller.h"
 
 #include <QDir>
+#include <QJsonArray>
 #include <QVariantMap>
 #include <QUrl>
 
@@ -23,6 +24,15 @@ NavigationController::NavigationController(
     qRegisterMetaType<BackendRequestId>();
     qRegisterMetaType<QVector<DirectoryEntry>>();
     qRegisterMetaType<BackendError>();
+    qRegisterMetaType<UtilityResult>();
+
+    m_visualMetadataTimer.setSingleShot(true);
+    m_visualMetadataTimer.setInterval(50);
+    connect(
+        &m_visualMetadataTimer,
+        &QTimer::timeout,
+        this,
+        &NavigationController::dispatchVisualMetadata);
 
     connect(
         m_client,
@@ -41,6 +51,12 @@ NavigationController::NavigationController(
         &IRustBackendClient::failed,
         this,
         &NavigationController::handleBackendFailure,
+        Qt::QueuedConnection);
+    connect(
+        m_client,
+        &IRustBackendClient::utilityReady,
+        this,
+        &NavigationController::handleUtilityReady,
         Qt::QueuedConnection);
     connect(
         m_watcher,
@@ -512,6 +528,41 @@ int NavigationController::updateFileModelMetadata(const QVariantList &items)
     return m_model->updateMetadata(items, m_generation);
 }
 
+void NavigationController::requestFileVisualMetadata(int firstIndex, int lastIndex)
+{
+    if (m_currentPath.isEmpty() || m_remoteDirectoryActive || m_model->count() == 0) {
+        return;
+    }
+
+    const int first = qMax(0, firstIndex);
+    const int last = qMin(lastIndex, m_model->count() - 1);
+    if (first > last) {
+        return;
+    }
+
+    for (int row = first; row <= last; ++row) {
+        const QModelIndex modelIndex = m_model->index(row, 0);
+        if (!modelIndex.isValid()
+            || m_model->data(modelIndex, DirectoryModel::FileRemoteRole).toBool()
+            || m_model->data(modelIndex, DirectoryModel::FileMetadataLimitedRole).toBool()
+            || !m_model->data(modelIndex, DirectoryModel::FileUrlRole).toUrl().isLocalFile()
+            || m_model->data(modelIndex, DirectoryModel::FileIconMetadataReadyRole).toBool()) {
+            continue;
+        }
+
+        const QString path = m_model->data(modelIndex, DirectoryModel::FilePathRole).toString();
+        if (path.isEmpty() || m_pendingVisualMetadataPaths.contains(path)
+            || m_queuedVisualMetadataPaths.contains(path)) {
+            continue;
+        }
+        m_queuedVisualMetadataPaths.insert(path);
+    }
+
+    if (!m_queuedVisualMetadataPaths.isEmpty() && m_visualMetadataRequests.isEmpty()) {
+        m_visualMetadataTimer.start();
+    }
+}
+
 int NavigationController::removePathsFromFileModel(const QStringList &paths)
 {
     return m_model->removePaths(paths, m_generation);
@@ -519,6 +570,7 @@ int NavigationController::removePathsFromFileModel(const QStringList &paths)
 
 BackendRequestId NavigationController::startList(const QString &path)
 {
+    cancelVisualMetadata();
     const quint64 generation = ++m_generation;
     setLoading(true);
     setLoadError(QString());
@@ -567,6 +619,7 @@ BackendRequestId NavigationController::startSearch(
     const QString &root,
     const QString &query)
 {
+    cancelVisualMetadata();
     const quint64 generation = ++m_generation;
     setLoading(true);
     setLoadError(QString());
@@ -608,6 +661,56 @@ void NavigationController::cancelActiveRequest()
     if (cancelBackendRequest) {
         m_client->cancel(requestId);
     }
+}
+
+void NavigationController::cancelVisualMetadata()
+{
+    m_visualMetadataTimer.stop();
+    const QList<BackendRequestId> requestIds = m_visualMetadataRequests.keys();
+    for (const BackendRequestId requestId : requestIds) {
+        m_client->cancel(requestId);
+    }
+    m_visualMetadataRequests.clear();
+    m_pendingVisualMetadataPaths.clear();
+    m_queuedVisualMetadataPaths.clear();
+}
+
+void NavigationController::dispatchVisualMetadata()
+{
+    if (m_visualMetadataRequests.size() != 0
+        || m_queuedVisualMetadataPaths.isEmpty()
+        || m_generation == 0
+        || m_remoteDirectoryActive) {
+        return;
+    }
+
+    constexpr int maxBatchSize = 64;
+    constexpr qsizetype maxArgumentBytes = 256 * 1024;
+    QStringList paths;
+    qsizetype argumentBytes = 0;
+    const QSet<QString> queued = m_queuedVisualMetadataPaths;
+    for (const QString &path : queued) {
+        if (paths.size() >= maxBatchSize) {
+            break;
+        }
+        const qsizetype pathBytes = path.toUtf8().size();
+        if (!paths.isEmpty() && argumentBytes + pathBytes > maxArgumentBytes) {
+            break;
+        }
+        paths.append(path);
+        argumentBytes += pathBytes;
+        m_queuedVisualMetadataPaths.remove(path);
+        m_pendingVisualMetadataPaths.insert(path);
+    }
+    if (paths.isEmpty()) {
+        return;
+    }
+
+    UtilityRequest request;
+    request.operation = QStringLiteral("file-visual-metadata");
+    request.arguments = paths;
+    const BackendRequestId requestId = m_client->utility(request);
+    m_visualMetadataRequests.insert(requestId, {m_generation, paths});
 }
 
 void NavigationController::clearSearchState()
@@ -871,6 +974,19 @@ void NavigationController::handleRecentProjectionChanged()
 
 void NavigationController::handleBackendFailure(const BackendError &error)
 {
+    const auto visualIt = m_visualMetadataRequests.find(error.requestId);
+    if (visualIt != m_visualMetadataRequests.end()) {
+        const VisualMetadataRequest pending = visualIt.value();
+        m_visualMetadataRequests.erase(visualIt);
+        for (const QString &path : pending.paths) {
+            m_pendingVisualMetadataPaths.remove(path);
+        }
+        if (pending.generation == m_generation && !m_queuedVisualMetadataPaths.isEmpty()) {
+            m_visualMetadataTimer.start();
+        }
+        return;
+    }
+
     const auto pendingIt = m_pendingRequests.find(error.requestId);
     if (pendingIt == m_pendingRequests.end()) {
         return;
@@ -886,6 +1002,33 @@ void NavigationController::handleBackendFailure(const BackendError &error)
     setLoading(false);
     setLoadError(error.message);
     emit navigationFailed(error);
+}
+
+void NavigationController::handleUtilityReady(
+    BackendRequestId requestId,
+    const UtilityResult &result)
+{
+    const auto visualIt = m_visualMetadataRequests.find(requestId);
+    if (visualIt == m_visualMetadataRequests.end()) {
+        return;
+    }
+    const VisualMetadataRequest pending = visualIt.value();
+    m_visualMetadataRequests.erase(visualIt);
+    for (const QString &path : pending.paths) {
+        m_pendingVisualMetadataPaths.remove(path);
+    }
+
+    if (pending.generation == m_generation && result.ok
+        && result.operation == QStringLiteral("file-visual-metadata")) {
+        const QJsonValue items = result.data.value(QStringLiteral("items"));
+        if (items.isArray()) {
+            m_model->updateMetadata(items.toArray().toVariantList(), pending.generation);
+        }
+    }
+
+    if (pending.generation == m_generation && !m_queuedVisualMetadataPaths.isEmpty()) {
+        m_visualMetadataTimer.start();
+    }
 }
 
 void NavigationController::handleDirectoryChanged(const QString &path)

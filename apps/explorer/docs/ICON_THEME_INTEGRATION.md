@@ -46,6 +46,21 @@ pipelines explicit:
 QML does not select a theme, construct a theme path, or recolor ordinary
 full-color artwork into a sidebar icon.
 
+Rich file icon sources consume the ordered GIO names first. A validated local
+custom-icon file takes precedence and carries a version query component so
+replaced metadata assets invalidate the QML image URL. Emblem sources resolve
+without a generic missing-icon fallback, which lets the two views omit absent
+emblems instead of drawing a misleading badge.
+
+The Rust metadata boundary in
+apps/explorer/backend/src/file_visual_metadata.rs uses GIO/GVfs for local
+GFileInfo queries, including standard::icon, standard::is-symlink, access
+flags, custom icon metadata, and emblem metadata. It preserves GIO's ordered
+themed-icon names or returns a validated local custom-icon URI plus a version
+derived from the icon file's mtime and size. Non-local or unsupported GIcon
+implementations are represented as safe empty values; they are never
+downloaded by Explorer.
+
 ## Desktop theme selection
 
 `IconThemeService` keeps three related values distinct:
@@ -129,6 +144,36 @@ directories accordingly. The QML image provider currently passes `1.0`, so
 user-visible provider requests do not yet claim end-to-end HiDPI propagation;
 that limitation is intentional and documented until the provider receives a
 real device-scale input.
+
+## File visual metadata lifecycle
+
+The Rust worker handles bounded batches of at most 64 local paths. Navigation
+queues only the currently visible list/grid range, coalesces duplicate paths,
+and waits 50 ms before dispatching one batch. Requests are canceled when a
+directory, search, tab, or refresh changes the model generation. A result is
+applied only when both its request generation and file path still match the
+active model; failures leave the regular MIME/path icon fallback intact.
+
+The first listing remains cheap: ordinary directory enumeration carries
+symlink identity and broken-target state, while GIO icon/emblem metadata is
+hydrated lazily for visible local rows. Remote and metadata-limited rows are
+never sent to this local-only worker. Thumbnail readiness is independent of
+icon metadata readiness, so a preview can appear without suppressing the
+base icon or its emblem overlay.
+
+Symlink rows keep the link's visible name/path and are not followed during
+recursive search descent. If the target exists, directory/file semantics and
+executable state come from the target; a broken link remains a visible,
+non-directory row with fileSymlinkBroken=true. Automatic emblems follow the
+Nautilus convention for symbolic links, inaccessible items, and read-only
+items, then merge with GIO metadata emblems while preserving order and
+removing duplicates. Trash items do not receive the automatic read-only
+emblem.
+
+GIO metadata is queried on demand rather than watched independently. A
+filesystem refresh or another visible-range request rehydrates rows when the
+model is replaced; changes to custom icon metadata made outside those events
+may therefore wait until the next directory refresh or visibility request.
 
 ## Full-color and symbolic pipelines
 

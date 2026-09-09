@@ -373,6 +373,33 @@ QString IconThemeService::symbolicIconSourceForNames(const QStringList &names, i
         + QString::number(std::clamp(size, 1, kMaxIconSize));
 }
 
+QString IconThemeService::emblemIconSource(const QString &name, int size) const
+{
+    const QString normalizedName = name.trimmed();
+    if (normalizedName.isEmpty()) {
+        return {};
+    }
+
+    const QString candidateName = normalizedName.startsWith(QStringLiteral("emblem-"))
+        ? normalizedName
+        : QStringLiteral("emblem-") + normalizedName;
+    QStringList candidates {candidateName};
+    if (!isSymbolicName(candidateName)) {
+        candidates.append(candidateName + QStringLiteral("-symbolic"));
+    }
+    if (candidates.isEmpty() || resolveIcon(candidates).isNull()) {
+        return {};
+    }
+
+    const QByteArray encoded = QUrl::toPercentEncoding(candidates.join(QLatin1Char('|')));
+    return QStringLiteral("image://astrea-icons/theme/")
+        + QString::fromLatin1(encoded)
+        + QStringLiteral("?revision=")
+        + QString::number(m_revision)
+        + QStringLiteral("&size=")
+        + QString::number(std::clamp(size, 1, kMaxIconSize));
+}
+
 QString IconThemeService::fileIconSource(
     const QString &path,
     bool isDirectory,
@@ -380,11 +407,58 @@ QString IconThemeService::fileIconSource(
     int size,
     const QString &semanticIconName) const
 {
+    return richFileIconSource(
+        path,
+        isDirectory,
+        isExecutable,
+        size,
+        semanticIconName,
+        {},
+        {},
+        {});
+}
+
+QString IconThemeService::richFileIconSource(
+    const QString &path,
+    bool isDirectory,
+    bool isExecutable,
+    int size,
+    const QString &semanticIconName,
+    const QStringList &iconNames,
+    const QUrl &iconFileUrl,
+    const QString &iconFileVersion) const
+{
     QStringList names;
     if (!semanticIconName.trimmed().isEmpty()) {
         names.append(semanticIconName.trimmed());
     }
+    names.append(iconNames);
     names.append(iconCandidatesForFile(path, isDirectory, isExecutable));
+
+    const QStringList fallbackNames = iconCandidatesForNames(names);
+    if (iconFileUrl.isValid() && iconFileUrl.isLocalFile()) {
+        const QFileInfo iconFile(iconFileUrl.toLocalFile());
+        if (iconFile.isFile()) {
+            const QString version = iconFileVersion.trimmed().isEmpty()
+                ? QStringLiteral("0")
+                : iconFileVersion.trimmed();
+            const QByteArray encodedUrl = QUrl::toPercentEncoding(
+                iconFileUrl.toString(QUrl::FullyEncoded));
+            const QByteArray encodedFallback = QUrl::toPercentEncoding(
+                fallbackNames.join(QLatin1Char('|')));
+            return QStringLiteral("image://astrea-icons/file/")
+                + QString::fromLatin1(encodedUrl)
+                + QStringLiteral("?revision=")
+                + QString::number(m_revision)
+                + QStringLiteral("&version=")
+                + QString::fromLatin1(QUrl::toPercentEncoding(version))
+                + QStringLiteral("&fallback=")
+                + QString::fromLatin1(encodedFallback)
+                + QStringLiteral("&size=")
+                + QString::number(std::clamp(size, 1, kMaxIconSize));
+        }
+    }
+
     return iconSourceForNames(names, size);
 }
 

@@ -397,6 +397,10 @@ QtObject {
     function fileIconSource(path, isFolder, isExecutable, size, semanticIconName) {
         return preview.fileIconSource(path, isFolder, isExecutable, size, semanticIconName || "")
     }
+    function richFileIconSource(path, isFolder, isExecutable, size, semanticIconName, iconNames, iconFileUrl, iconFileVersion) {
+        return preview.richFileIconSource(path, isFolder, isExecutable, size, semanticIconName || "", iconNames || [], iconFileUrl || "", iconFileVersion || "")
+    }
+    function emblemIconSource(name, size) { return preview.emblemIconSource(name, size) }
     function portalIconSource(iconName, size) { return preview.portalIconSource(iconName, size) }
     function sidebarIconSource(iconName, size) { return preview.sidebarIconSource(iconName, size) }
     function isPreviewableFile(fileName, isDir) { return preview.isPreviewableFile(fileName, isDir) }
@@ -404,6 +408,8 @@ QtObject {
     function startThumbnailWarm(request) { preview.startThumbnailWarm(request) }
     function warmCurrentDirectoryThumbnails() { preview.warmCurrentDirectoryThumbnails() }
     function scheduleVisibleThumbnailWarm(firstIndex, lastIndex) { preview.scheduleVisibleThumbnailWarm(firstIndex, lastIndex) }
+    function requestFileVisualMetadata(firstIndex, lastIndex) { preview.requestFileVisualMetadata(firstIndex, lastIndex) }
+    function scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) { preview.scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) }
     function enqueueStartupWarm(path, limit) { preview.enqueueStartupWarm(path, limit) }
     function scheduleHomeThumbnailWarmup() { preview.scheduleHomeThumbnailWarmup() }
     function formatSize(bytes) { return preview.formatSize(bytes) }

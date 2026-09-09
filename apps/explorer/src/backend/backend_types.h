@@ -120,6 +120,13 @@ struct DirectoryEntry
     qint64 lastAccessed = 0;
     QString recentSource;
     QString fileIconName;
+    QStringList fileIconNames;
+    QUrl fileIconFileUrl;
+    QString fileIconFileVersion;
+    QStringList fileEmblemNames;
+    bool fileIconMetadataReady = false;
+    bool fileIsSymlink = false;
+    bool fileSymlinkBroken = false;
     QString trashItemId;
     QString trashInfoPath;
     QString trashLocationId;

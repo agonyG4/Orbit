@@ -1,7 +1,10 @@
 #include <functional>
 
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSignalSpy>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -28,6 +31,9 @@ private slots:
     void ignoresRecentCompletionAfterNavigationAway();
     void honorsConfiguredRemotePrefixesAtPathBoundaries();
     void forwardsListingOptionsToBackend();
+    void requestsVisibleVisualMetadataInBoundedBatches();
+    void ignoresStaleVisualMetadataAfterNavigation();
+    void skipsRemoteVisualMetadataRequests();
 };
 
 DirectoryEntry navigationEntry(const QString &name, const QString &path)
@@ -126,6 +132,106 @@ void NavigationControllerTest::forwardsListingOptionsToBackend()
     QCOMPARE(client.listRequests().constLast().foldersFirst, false);
     QCOMPARE(client.listRequests().constLast().previews, false);
     client.completeList(requestId, {});
+}
+
+void NavigationControllerTest::requestsVisibleVisualMetadataInBoundedBatches()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    QVector<DirectoryEntry> entries;
+    for (int index = 0; index < 70; ++index) {
+        entries.append(navigationEntry(
+            QStringLiteral("file-%1.txt").arg(index),
+            QStringLiteral("/fixture/file-%1.txt").arg(index)));
+    }
+    client.completeList(listRequest, entries);
+    QTRY_COMPARE(model.count(), 70);
+
+    navigation.requestFileVisualMetadata(0, 69);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+    const UtilityRequest firstRequest = client.utilityRequests().constFirst();
+    QCOMPARE(firstRequest.operation, QStringLiteral("file-visual-metadata"));
+    QCOMPARE(firstRequest.arguments.size(), 64);
+    QCOMPARE(QSet<QString>(firstRequest.arguments.cbegin(), firstRequest.arguments.cend()).size(), 64);
+
+    UtilityResult result;
+    result.operation = QStringLiteral("file-visual-metadata");
+    result.ok = true;
+    QJsonArray items;
+    QJsonObject item;
+    item.insert(QStringLiteral("filePath"), firstRequest.arguments.constFirst());
+    item.insert(QStringLiteral("fileIconNames"), QJsonArray {QStringLiteral("text-x-generic")});
+    item.insert(QStringLiteral("fileEmblemNames"), QJsonArray {QStringLiteral("readonly")});
+    item.insert(QStringLiteral("fileIconMetadataReady"), true);
+    items.append(item);
+    result.data.insert(QStringLiteral("items"), items);
+    client.completeUtility(BackendRequestId(2), result);
+
+    int firstRow = -1;
+    for (int row = 0; row < model.count(); ++row) {
+        if (model.data(model.index(row, 0), DirectoryModel::FilePathRole).toString()
+            == firstRequest.arguments.constFirst()) {
+            firstRow = row;
+            break;
+        }
+    }
+    QVERIFY(firstRow >= 0);
+    QTRY_COMPARE(model.data(model.index(firstRow, 0), DirectoryModel::FileIconMetadataReadyRole).toBool(), true);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 1000);
+    QCOMPARE(client.utilityRequests().at(1).arguments.size(), 6);
+}
+
+void NavigationControllerTest::ignoresStaleVisualMetadataAfterNavigation()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId firstList = navigation.navigateTo(QStringLiteral("/first"));
+    client.completeList(firstList, {
+        navigationEntry(QStringLiteral("old.txt"), QStringLiteral("/first/old.txt"))});
+    QTRY_COMPARE(model.count(), 1);
+    navigation.requestFileVisualMetadata(0, 0);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+
+    const BackendRequestId secondList = navigation.navigateTo(QStringLiteral("/second"));
+    QVERIFY(client.cancelledRequests().contains(BackendRequestId(2)));
+    client.completeUtility(BackendRequestId(2), UtilityResult {
+        .requestId = 2,
+        .operation = QStringLiteral("file-visual-metadata"),
+        .ok = true,
+        .data = QJsonObject {{QStringLiteral("items"), QJsonArray {
+            QJsonObject {{QStringLiteral("filePath"), QStringLiteral("/first/old.txt")},
+                {QStringLiteral("fileIconMetadataReady"), true}}}}}});
+    client.completeList(secondList, {});
+
+    QTRY_COMPARE(model.count(), 0);
+    QCOMPARE(navigation.currentPath(), QStringLiteral("/second"));
+}
+
+void NavigationControllerTest::skipsRemoteVisualMetadataRequests()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    DirectoryEntry remote = navigationEntry(QStringLiteral("remote.txt"), QStringLiteral("/fixture/remote.txt"));
+    remote.fileRemote = true;
+    DirectoryEntry limited = navigationEntry(QStringLiteral("limited.txt"), QStringLiteral("/fixture/limited.txt"));
+    limited.fileMetadataLimited = true;
+    client.completeList(listRequest, {remote, limited});
+    QTRY_COMPARE(model.count(), 2);
+
+    navigation.requestFileVisualMetadata(0, 1);
+    QTest::qWait(100);
+    QCOMPARE(client.utilityRequests().size(), 0);
 }
 
 void NavigationControllerTest::preservesTabsAndHistory()

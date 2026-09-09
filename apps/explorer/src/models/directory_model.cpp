@@ -36,6 +36,21 @@ QDateTime variantDateTime(const QVariant &value)
     return QDateTime::fromString(value.toString(), Qt::ISODate);
 }
 
+QStringList variantStringList(const QVariant &value)
+{
+    if (value.canConvert<QStringList>()) {
+        return value.toStringList();
+    }
+
+    QStringList result;
+    for (const QVariant &item : value.toList()) {
+        if (item.metaType().id() == QMetaType::QString) {
+            result.append(item.toString());
+        }
+    }
+    return result;
+}
+
 DirectoryEntry entryFromVariant(const QVariantMap &item)
 {
     DirectoryEntry entry;
@@ -57,6 +72,15 @@ DirectoryEntry entryFromVariant(const QVariantMap &item)
     entry.lastAccessed = item.value(QStringLiteral("lastAccessed")).toLongLong();
     entry.recentSource = item.value(QStringLiteral("recentSource")).toString();
     entry.fileIconName = item.value(QStringLiteral("fileIconName")).toString();
+    entry.fileIconNames = variantStringList(item.value(QStringLiteral("fileIconNames")));
+    entry.fileIconFileUrl = item.contains(QStringLiteral("fileIconFileUrl"))
+        ? variantUrl(item.value(QStringLiteral("fileIconFileUrl")))
+        : QUrl();
+    entry.fileIconFileVersion = item.value(QStringLiteral("fileIconFileVersion")).toString();
+    entry.fileEmblemNames = variantStringList(item.value(QStringLiteral("fileEmblemNames")));
+    entry.fileIconMetadataReady = item.value(QStringLiteral("fileIconMetadataReady")).toBool();
+    entry.fileIsSymlink = item.value(QStringLiteral("fileIsSymlink")).toBool();
+    entry.fileSymlinkBroken = item.value(QStringLiteral("fileSymlinkBroken")).toBool();
     entry.trashItemId = item.value(QStringLiteral("trashItemId")).toString();
     entry.trashInfoPath = item.value(QStringLiteral("trashInfoPath")).toString();
     entry.trashLocationId = item.value(QStringLiteral("trashLocationId")).toString();
@@ -179,6 +203,55 @@ void assignMetadata(
             assign(DirectoryModel::FileIconNameRole);
         }
     }
+    if (item.contains(QStringLiteral("fileIconNames"))) {
+        const QStringList value = variantStringList(item.value(QStringLiteral("fileIconNames")));
+        if (entry->fileIconNames != value) {
+            entry->fileIconNames = value;
+            assign(DirectoryModel::FileIconNamesRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileIconFileUrl"))) {
+        const QUrl value = variantUrl(item.value(QStringLiteral("fileIconFileUrl")));
+        if (entry->fileIconFileUrl != value) {
+            entry->fileIconFileUrl = value;
+            assign(DirectoryModel::FileIconFileUrlRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileIconFileVersion"))) {
+        const QString value = item.value(QStringLiteral("fileIconFileVersion")).toString();
+        if (entry->fileIconFileVersion != value) {
+            entry->fileIconFileVersion = value;
+            assign(DirectoryModel::FileIconFileVersionRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileEmblemNames"))) {
+        const QStringList value = variantStringList(item.value(QStringLiteral("fileEmblemNames")));
+        if (entry->fileEmblemNames != value) {
+            entry->fileEmblemNames = value;
+            assign(DirectoryModel::FileEmblemNamesRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileIconMetadataReady"))) {
+        const bool value = item.value(QStringLiteral("fileIconMetadataReady")).toBool();
+        if (entry->fileIconMetadataReady != value) {
+            entry->fileIconMetadataReady = value;
+            assign(DirectoryModel::FileIconMetadataReadyRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileIsSymlink"))) {
+        const bool value = item.value(QStringLiteral("fileIsSymlink")).toBool();
+        if (entry->fileIsSymlink != value) {
+            entry->fileIsSymlink = value;
+            assign(DirectoryModel::FileIsSymlinkRole);
+        }
+    }
+    if (item.contains(QStringLiteral("fileSymlinkBroken"))) {
+        const bool value = item.value(QStringLiteral("fileSymlinkBroken")).toBool();
+        if (entry->fileSymlinkBroken != value) {
+            entry->fileSymlinkBroken = value;
+            assign(DirectoryModel::FileSymlinkBrokenRole);
+        }
+    }
 }
 
 } // namespace
@@ -242,6 +315,20 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         return entry.recentSource;
     case FileIconNameRole:
         return entry.fileIconName;
+    case FileIconNamesRole:
+        return entry.fileIconNames;
+    case FileIconFileUrlRole:
+        return entry.fileIconFileUrl;
+    case FileIconFileVersionRole:
+        return entry.fileIconFileVersion;
+    case FileEmblemNamesRole:
+        return entry.fileEmblemNames;
+    case FileIconMetadataReadyRole:
+        return entry.fileIconMetadataReady;
+    case FileIsSymlinkRole:
+        return entry.fileIsSymlink;
+    case FileSymlinkBrokenRole:
+        return entry.fileSymlinkBroken;
     case TrashItemIdRole:
         return entry.trashItemId;
     case TrashInfoPathRole:
@@ -282,6 +369,13 @@ QHash<int, QByteArray> DirectoryModel::roleNames() const
         {LastAccessedRole, QByteArrayLiteral("lastAccessed")},
         {RecentSourceRole, QByteArrayLiteral("recentSource")},
         {FileIconNameRole, QByteArrayLiteral("fileIconName")},
+        {FileIconNamesRole, QByteArrayLiteral("fileIconNames")},
+        {FileIconFileUrlRole, QByteArrayLiteral("fileIconFileUrl")},
+        {FileIconFileVersionRole, QByteArrayLiteral("fileIconFileVersion")},
+        {FileEmblemNamesRole, QByteArrayLiteral("fileEmblemNames")},
+        {FileIconMetadataReadyRole, QByteArrayLiteral("fileIconMetadataReady")},
+        {FileIsSymlinkRole, QByteArrayLiteral("fileIsSymlink")},
+        {FileSymlinkBrokenRole, QByteArrayLiteral("fileSymlinkBroken")},
         {TrashItemIdRole, QByteArrayLiteral("trashItemId")},
         {TrashInfoPathRole, QByteArrayLiteral("trashInfoPath")},
         {TrashLocationIdRole, QByteArrayLiteral("trashLocationId")},

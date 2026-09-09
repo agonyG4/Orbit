@@ -3,6 +3,7 @@ mod archive;
 mod devices;
 mod entries;
 mod file_ops;
+mod file_visual_metadata;
 mod json;
 mod thumbnails;
 mod utility;

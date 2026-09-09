@@ -23,6 +23,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "network-mount-probe" => network_mount_probe(args),
         "network-mount" => network_mount(args),
         "warm-thumbnails" => warm_thumbnails(args),
+        "file-visual-metadata" => crate::file_visual_metadata::run(&args[1..]),
         "install-appimage" => install_appimage(args),
         "archive-extract" => crate::archive::extract(&args[1..]),
         "archive-compress" => crate::archive::compress(&args[1..]),

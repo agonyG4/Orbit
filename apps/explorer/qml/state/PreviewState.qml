@@ -34,6 +34,17 @@ QtObject {
             ? bridge.fileIconSource(path || "", isFolder, isExecutable, size, semanticIconName || "")
             : ""
     }
+    function richFileIconSource(path, isFolder, isExecutable, size, semanticIconName, iconNames, iconFileUrl, iconFileVersion) {
+        var revision = iconThemeRevision
+        return bridge && typeof bridge.richFileIconSource === "function"
+            ? bridge.richFileIconSource(path || "", isFolder, isExecutable, size, semanticIconName || "", iconNames || [], iconFileUrl || "", iconFileVersion || "")
+            : fileIconSource(path, isFolder, isExecutable, size, semanticIconName)
+    }
+    function emblemIconSource(name, size) {
+        return bridge && typeof bridge.emblemIconSource === "function"
+            ? bridge.emblemIconSource(name || "", size)
+            : ""
+    }
     function portalIconSource(iconName, size) { return themedIconSource(iconName, size, "") }
     function sidebarIconSource(iconName, size) {
         return bridge && typeof bridge.sidebarIconSource === "function"
@@ -52,6 +63,13 @@ QtObject {
     function warmCurrentDirectoryThumbnails() { requestThumbnailWarm(app.currentPath, 0, viewMode === "icon" ? 18 : 24) }
     function scheduleVisibleThumbnailWarm(firstIndex, lastIndex) {
         requestThumbnailWarm(app.currentPath, firstIndex, Math.max(8, lastIndex - firstIndex + 1))
+    }
+    function requestFileVisualMetadata(firstIndex, lastIndex) {
+        if (bridge && typeof bridge.requestFileVisualMetadata === "function")
+            bridge.requestFileVisualMetadata(firstIndex || 0, lastIndex || firstIndex || 0)
+    }
+    function scheduleVisibleFileVisualMetadata(firstIndex, lastIndex) {
+        requestFileVisualMetadata(firstIndex, lastIndex)
     }
     function enqueueStartupWarm(path, limit) { startupWarmQueue.push({ path: path, limit: limit }) }
     function scheduleHomeThumbnailWarmup() {}

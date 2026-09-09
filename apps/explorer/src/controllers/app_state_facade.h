@@ -372,6 +372,7 @@ public:
     Q_INVOKABLE void openFile(const QString &path);
     Q_INVOKABLE void refreshPreviewMetadata();
     Q_INVOKABLE void requestThumbnailWarm(const QString &path, int offset, int limit);
+    Q_INVOKABLE void requestFileVisualMetadata(int firstIndex, int lastIndex);
     Q_INVOKABLE QString themedIconSource(const QString &iconName, int size, const QString &themeName);
     Q_INVOKABLE QString sidebarIconSource(const QString &iconName, int size);
     Q_INVOKABLE QString fileIconName(
@@ -384,6 +385,16 @@ public:
         bool isExecutable,
         int size,
         const QString &semanticIconName = QString()) const;
+    Q_INVOKABLE QString richFileIconSource(
+        const QString &path,
+        bool isDirectory,
+        bool isExecutable,
+        int size,
+        const QString &semanticIconName,
+        const QStringList &iconNames,
+        const QUrl &iconFileUrl,
+        const QString &iconFileVersion) const;
+    Q_INVOKABLE QString emblemIconSource(const QString &name, int size) const;
     Q_INVOKABLE bool writePortalResult(const QString &json);
     Q_INVOKABLE BackendRequestId requestMountDevice(
         const QString &devicePath,

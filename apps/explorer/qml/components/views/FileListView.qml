@@ -160,6 +160,13 @@ Item {
                 fileModified: item.fileModified,
                 fileKind: item.fileKind,
                 fileIconName: item.fileIconName || "",
+                fileIconNames: item.fileIconNames || [],
+                fileIconFileUrl: item.fileIconFileUrl || "",
+                fileIconFileVersion: item.fileIconFileVersion || "",
+                fileEmblemNames: item.fileEmblemNames || [],
+                fileIconMetadataReady: Boolean(item.fileIconMetadataReady),
+                fileIsSymlink: Boolean(item.fileIsSymlink),
+                fileSymlinkBroken: Boolean(item.fileSymlinkBroken),
                 filePreviewUrl: item.filePreviewUrl
             })
         }
@@ -190,6 +197,20 @@ Item {
                 displayModel.setProperty(i, "fileModified", item.fileModified)
             if (row.fileIconName !== (item.fileIconName || ""))
                 displayModel.setProperty(i, "fileIconName", item.fileIconName || "")
+            if (JSON.stringify(row.fileIconNames || []) !== JSON.stringify(item.fileIconNames || []))
+                displayModel.setProperty(i, "fileIconNames", item.fileIconNames || [])
+            if (row.fileIconFileUrl !== (item.fileIconFileUrl || ""))
+                displayModel.setProperty(i, "fileIconFileUrl", item.fileIconFileUrl || "")
+            if (row.fileIconFileVersion !== (item.fileIconFileVersion || ""))
+                displayModel.setProperty(i, "fileIconFileVersion", item.fileIconFileVersion || "")
+            if (JSON.stringify(row.fileEmblemNames || []) !== JSON.stringify(item.fileEmblemNames || []))
+                displayModel.setProperty(i, "fileEmblemNames", item.fileEmblemNames || [])
+            if (Boolean(row.fileIconMetadataReady) !== Boolean(item.fileIconMetadataReady))
+                displayModel.setProperty(i, "fileIconMetadataReady", Boolean(item.fileIconMetadataReady))
+            if (Boolean(row.fileIsSymlink) !== Boolean(item.fileIsSymlink))
+                displayModel.setProperty(i, "fileIsSymlink", Boolean(item.fileIsSymlink))
+            if (Boolean(row.fileSymlinkBroken) !== Boolean(item.fileSymlinkBroken))
+                displayModel.setProperty(i, "fileSymlinkBroken", Boolean(item.fileSymlinkBroken))
         }
     }
 
@@ -371,6 +392,9 @@ Item {
             AppState.scheduleVisibleThumbnailWarm(
                 sourceIndexNear(first < 0 ? 0 : first, false),
                 sourceIndexNear(last < 0 ? Math.min(root.displayModel.count - 1, (first < 0 ? 0 : first) + 36) : Math.min(root.displayModel.count - 1, last + 12), true))
+            AppState.scheduleVisibleFileVisualMetadata(
+                sourceIndexNear(first < 0 ? 0 : first, false),
+                sourceIndexNear(last < 0 ? Math.min(root.displayModel.count - 1, (first < 0 ? 0 : first) + 36) : Math.min(root.displayModel.count - 1, last + 12), true))
         }
 
         onContentYChanged: {
@@ -459,6 +483,10 @@ Item {
             readonly property string itemName:    isHeaderRow ? "" : fileName
             readonly property int    itemSourceIndex: isHeaderRow ? -1 : sourceIndex
             readonly property string itemIconName: isHeaderRow ? "" : (fileIconName || "")
+            readonly property var    itemIconNames: isHeaderRow ? [] : (fileIconNames || [])
+            readonly property var    itemIconFileUrl: isHeaderRow ? "" : (fileIconFileUrl || "")
+            readonly property string itemIconFileVersion: isHeaderRow ? "" : (fileIconFileVersion || "")
+            readonly property var    itemEmblemNames: isHeaderRow ? [] : (fileEmblemNames || [])
             readonly property int    modelRevision: AppState.fileModelRevision
             readonly property string livePreviewUrl: {
                 if (isHeaderRow || itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -485,7 +513,7 @@ Item {
             readonly property int    dragPreviewSize: Math.max(42, Math.round(root.iconFrameSize * 0.9))
             readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    isHeaderRow ? Qt.resolvedUrl("") : AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName))
+                                                    isHeaderRow ? Qt.resolvedUrl("") : AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, itemIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion))
 
             // Drag support
             property bool dragging: false
@@ -548,7 +576,7 @@ Item {
                             Image {
                                 anchors.centerIn: parent
                                 visible: !row.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.fileIconSource(row.itemPath, row.itemIsDir, row.itemExecutable, root.iconFrameSize, row.itemIconName)
+                                source: AppState.richFileIconSource(row.itemPath, row.itemIsDir, row.itemExecutable, root.iconFrameSize, row.itemIconName, row.itemIconNames, row.itemIconFileUrl, row.itemIconFileVersion)
                                 width: root.iconFrameSize; height: root.iconFrameSize
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: false
@@ -570,6 +598,21 @@ Item {
                                 mipmap: true
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize: Qt.size(row.previewRequestSize, row.previewRequestSize)
+                            }
+
+                            Repeater {
+                                model: Math.min(3, row.itemEmblemNames.length)
+                                delegate: Image {
+                                    width: 18; height: 18
+                                    x: parent.width - width - index * 20
+                                    y: parent.height - height
+                                    source: AppState.emblemIconSource(row.itemEmblemNames[index], 18)
+                                    visible: source !== ""
+                                    asynchronous: false
+                                    cache: true
+                                    smooth: true
+                                    sourceSize: Qt.size(18, 18)
+                                }
                             }
                         }
 

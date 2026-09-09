@@ -96,6 +96,7 @@ class IconImageProviderTest final : public QObject
 private slots:
     void rendersEncodedCandidateSynchronously();
     void rendersSymbolicCandidateFromUrl();
+    void rendersLocalFileIconRoute();
     void alwaysReturnsBuiltInFallbackForMissingCandidates();
 };
 
@@ -141,6 +142,37 @@ void IconImageProviderTest::rendersSymbolicCandidateFromUrl()
     QVERIFY(!image.isNull());
     QCOMPARE(image.pixelColor(8, 8), QColor(0xdd, 0x44, 0xbb));
     QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+}
+
+void IconImageProviderTest::rendersLocalFileIconRoute()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath);
+    const QString iconPath = QDir(directory.path()).filePath(QStringLiteral("custom.png"));
+    QImage custom(24, 12, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(QColor(0xee, 0x77, 0x22));
+    QVERIFY(custom.save(iconPath, "PNG"));
+
+    IconThemeService service(configPath);
+    AstreaIconImageProvider provider(&service);
+    const QString source = service.richFileIconSource(
+        QStringLiteral("/tmp/example.txt"),
+        false,
+        false,
+        16,
+        QString(),
+        {},
+        QUrl::fromLocalFile(iconPath),
+        QStringLiteral("1"));
+    const QString id = source.mid(QStringLiteral("image://astrea-icons/").size());
+
+    QSize requested;
+    const QImage image = provider.requestImage(id, &requested, QSize(16, 16));
+    QVERIFY(!image.isNull());
+    QCOMPARE(requested, QSize(16, 8));
+    QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0xee, 0x77, 0x22));
 }
 
 void IconImageProviderTest::alwaysReturnsBuiltInFallbackForMissingCandidates()

@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QSize>
 #include <QStringList>
+#include <QUrl>
 
 #include "freedesktop_icon_theme_catalog.h"
 
@@ -57,12 +58,22 @@ public:
 
     QString iconSourceForNames(const QStringList &names, int size) const;
     QString symbolicIconSourceForNames(const QStringList &names, int size) const;
+    QString emblemIconSource(const QString &name, int size) const;
     QString fileIconSource(
         const QString &path,
         bool isDirectory,
         bool isExecutable,
         int size,
         const QString &semanticIconName = QString()) const;
+    QString richFileIconSource(
+        const QString &path,
+        bool isDirectory,
+        bool isExecutable,
+        int size,
+        const QString &semanticIconName,
+        const QStringList &iconNames,
+        const QUrl &iconFileUrl,
+        const QString &iconFileVersion) const;
 
 signals:
     void themeChanged();

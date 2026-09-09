@@ -20,6 +20,8 @@ pub struct Entry {
     pub is_dir: bool,
     pub executable: bool,
     pub is_hidden: bool,
+    pub is_symlink: bool,
+    pub symlink_broken: bool,
     pub size: i64,
     pub modified_ms: i64,
     pub kind: String,
@@ -243,20 +245,38 @@ fn entry_from_dir_item(
     preview_mode: PreviewMode,
 ) -> Option<Entry> {
     let path = item.path();
-    let meta = item.metadata().ok()?;
-    let is_dir = meta.is_dir();
+    let file_type = item.file_type().ok()?;
+    let is_symlink = file_type.is_symlink();
+    let (meta, is_dir, symlink_broken) = if is_symlink {
+        match fs::metadata(&path) {
+            Ok(target_meta) => {
+                let is_dir = target_meta.is_dir();
+                (target_meta, is_dir, false)
+            }
+            Err(_) => {
+                let link_meta = fs::symlink_metadata(&path).ok()?;
+                (link_meta, false, true)
+            }
+        }
+    } else {
+        let meta = item.metadata().ok()?;
+        let is_dir = meta.is_dir();
+        (meta, is_dir, false)
+    };
     let name = item.file_name().to_string_lossy().into_owned();
     let is_hidden = name.starts_with('.');
     if !show_hidden && is_hidden {
         return None;
     }
-    Some(entry_from_parts(
+    Some(entry_from_parts_with_link_state(
         name,
         path.as_path(),
         meta,
         is_dir,
         is_hidden,
         preview_mode,
+        is_symlink,
+        symlink_broken,
     ))
 }
 
@@ -285,13 +305,16 @@ fn entry_from_remote_dir_item(
     if !show_hidden && is_hidden {
         return None;
     }
-    let is_dir = item.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+    let file_type = item.file_type().ok();
+    let is_dir = file_type.map(|kind| kind.is_dir()).unwrap_or(false);
+    let is_symlink = file_type.map(|kind| kind.is_symlink()).unwrap_or(false);
     Some(entry_from_remote_parts(
         name,
         item.path().as_path(),
         is_dir,
         is_hidden,
         profile,
+        is_symlink,
     ))
 }
 
@@ -334,17 +357,27 @@ fn search_dir_recursive_with_preview(
             Ok(file_type) => file_type,
             Err(_) => continue,
         };
-        let meta_result = if file_type.is_symlink() {
-            fs::metadata(&path)
+        let is_symlink = file_type.is_symlink();
+        let (meta, is_dir, symlink_broken) = if is_symlink {
+            match fs::metadata(&path) {
+                Ok(target_meta) => {
+                    let is_dir = target_meta.is_dir();
+                    (target_meta, is_dir, false)
+                }
+                Err(_) => match fs::symlink_metadata(&path) {
+                    Ok(link_meta) => (link_meta, false, true),
+                    Err(_) => continue,
+                },
+            }
         } else {
-            item.metadata()
+            let meta = match item.metadata() {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+            let is_dir = meta.is_dir();
+            (meta, is_dir, false)
         };
-        let meta = match meta_result {
-            Ok(meta) => meta,
-            Err(_) => continue,
-        };
-        let is_dir = meta.is_dir();
-        let should_descend = file_type.is_dir();
+        let should_descend = !is_symlink && is_dir;
         let name = item.file_name().to_string_lossy().into_owned();
         let is_hidden = name.starts_with('.');
 
@@ -353,13 +386,15 @@ fn search_dir_recursive_with_preview(
         }
 
         if query.is_empty() || name.to_lowercase().contains(query) {
-            out.push(entry_from_parts(
+            out.push(entry_from_parts_with_link_state(
                 name,
                 &path,
                 meta,
                 is_dir,
                 is_hidden,
                 preview_mode,
+                is_symlink,
+                symlink_broken,
             ));
         }
 
@@ -426,6 +461,28 @@ fn entry_from_parts(
     is_hidden: bool,
     preview_mode: PreviewMode,
 ) -> Entry {
+    entry_from_parts_with_link_state(
+        name,
+        path,
+        meta,
+        is_dir,
+        is_hidden,
+        preview_mode,
+        false,
+        false,
+    )
+}
+
+fn entry_from_parts_with_link_state(
+    name: String,
+    path: &Path,
+    meta: fs::Metadata,
+    is_dir: bool,
+    is_hidden: bool,
+    preview_mode: PreviewMode,
+    is_symlink: bool,
+    symlink_broken: bool,
+) -> Entry {
     let modified_ms = meta
         .modified()
         .ok()
@@ -439,8 +496,10 @@ fn entry_from_parts(
         name,
         path: path.to_string_lossy().into_owned(),
         is_dir,
-        executable: is_executable(&meta, is_dir),
+        executable: !symlink_broken && is_executable(&meta, is_dir),
         is_hidden,
+        is_symlink,
+        symlink_broken,
         size: if is_dir { 0 } else { meta.len() as i64 },
         modified_ms,
         remote: false,
@@ -492,6 +551,7 @@ fn entry_from_remote_parts(
     is_dir: bool,
     is_hidden: bool,
     profile: &ListingProfile,
+    is_symlink: bool,
 ) -> Entry {
     Entry {
         kind: file_kind(path, is_dir),
@@ -501,6 +561,8 @@ fn entry_from_remote_parts(
         is_dir,
         executable: false,
         is_hidden,
+        is_symlink,
+        symlink_broken: false,
         size: if is_dir { 0 } else { -1 },
         modified_ms: 0,
         remote: true,
@@ -559,7 +621,8 @@ fn entry_to_json(e: &Entry) -> String {
     let file_url = json::file_url(Path::new(&e.path));
     format!(
         "{{\"fileName\":\"{}\",\"filePath\":\"{}\",\"fileUrl\":\"{}\",\
-         \"fileIsDir\":{},\"fileExecutable\":{},\"fileHidden\":{},\"fileSize\":{},\"fileModified\":{},\
+         \"fileIsDir\":{},\"fileExecutable\":{},\"fileHidden\":{},\
+         \"fileIsSymlink\":{},\"fileSymlinkBroken\":{},\"fileSize\":{},\"fileModified\":{},\
          \"fileKind\":\"{}\",\"filePreviewUrl\":\"{}\",\
          \"fileRemote\":{},\"fileMetadataLimited\":{},\"fileFilesystem\":\"{}\"}}",
         json::escape(&e.name),
@@ -568,6 +631,8 @@ fn entry_to_json(e: &Entry) -> String {
         e.is_dir,
         e.executable,
         e.is_hidden,
+        e.is_symlink,
+        e.symlink_broken,
         e.size,
         e.modified_ms,
         json::escape(&e.kind),
@@ -882,6 +947,8 @@ mod tests {
             is_dir,
             executable: false,
             is_hidden: false,
+            is_symlink: false,
+            symlink_broken: false,
             size,
             modified_ms,
             kind: kind.to_string(),
@@ -928,7 +995,14 @@ mod tests {
         fs::write(&path, "x").unwrap();
 
         let profile = ListingProfile::remote("fuse.rclone".to_string());
-        let entry = entry_from_remote_parts("photo.png".to_string(), &path, false, false, &profile);
+        let entry = entry_from_remote_parts(
+            "photo.png".to_string(),
+            &path,
+            false,
+            false,
+            &profile,
+            false,
+        );
         let body = entry_to_json(&entry);
 
         assert!(entry.remote);
@@ -996,6 +1070,87 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_dir);
+        assert!(entries[0].is_symlink);
+        assert!(!entries[0].symlink_broken);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn normal_listing_keeps_file_symlink_identity_and_target_semantics() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-list-file-symlink-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("target.sh");
+        fs::write(&target, "#!/bin/sh\n").unwrap();
+        let mut permissions = fs::metadata(&target).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&target, permissions).unwrap();
+        let link = root.join("link.sh");
+        symlink(&target, &link).unwrap();
+
+        let entries = read_sorted_entries(&root, true, "name", true, false).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "link.sh")
+            .unwrap();
+        assert!(entry.is_symlink);
+        assert!(!entry.symlink_broken);
+        assert!(!entry.is_dir);
+        assert!(entry.executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn normal_listing_keeps_broken_symlink_rows() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-list-broken-symlink-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let link = root.join("broken-link");
+        symlink("missing-target", &link).unwrap();
+
+        let entries = read_sorted_entries(&root, true, "name", true, false).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "broken-link")
+            .unwrap();
+        assert!(entry.is_symlink);
+        assert!(entry.symlink_broken);
+        assert!(!entry.is_dir);
+        assert!(!entry.executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn recursive_search_keeps_broken_symlink_rows() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-search-broken-symlink-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        symlink("missing-target", root.join("broken-link")).unwrap();
+
+        let mut entries = Vec::new();
+        search_dir_recursive(&root, &root, true, "broken-link", 0, &mut entries).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_symlink);
+        assert!(entries[0].symlink_broken);
         let _ = fs::remove_dir_all(root);
     }
 

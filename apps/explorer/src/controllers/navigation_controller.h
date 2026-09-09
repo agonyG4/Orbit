@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHash>
+#include <QSet>
+#include <QTimer>
 #include <QVariantList>
 #include <QStringList>
 
@@ -87,6 +89,7 @@ public:
     Q_INVOKABLE BackendRequestId refreshCurrentFolder();
     Q_INVOKABLE bool replaceFileModel(const QVariantList &items);
     Q_INVOKABLE int updateFileModelMetadata(const QVariantList &items);
+    Q_INVOKABLE void requestFileVisualMetadata(int firstIndex, int lastIndex);
     Q_INVOKABLE int removePathsFromFileModel(const QStringList &paths);
 
 signals:
@@ -114,6 +117,9 @@ private slots:
     void handleRecentFailed(BackendRequestId requestId, const QString &message);
     void handleRecentProjectionChanged();
     void handleBackendFailure(const BackendError &error);
+    void handleUtilityReady(
+        BackendRequestId requestId,
+        const UtilityResult &result);
     void handleDirectoryChanged(const QString &path);
 
 private:
@@ -131,6 +137,12 @@ private:
         RequestKind kind = RequestKind::List;
     };
 
+    struct VisualMetadataRequest
+    {
+        quint64 generation = 0;
+        QStringList paths;
+    };
+
     struct Tab
     {
         int id = 0;
@@ -142,6 +154,8 @@ private:
     BackendRequestId startList(const QString &path);
     BackendRequestId startSearch(const QString &root, const QString &query);
     void cancelActiveRequest();
+    void cancelVisualMetadata();
+    void dispatchVisualMetadata();
     void clearSearchState();
     void syncActiveTab();
     void restoreTab(const Tab &tab);
@@ -156,6 +170,10 @@ private:
     DirectoryModel *m_model = nullptr;
     DirectoryWatchService *m_watcher = nullptr;
     QHash<BackendRequestId, PendingRequest> m_pendingRequests;
+    QHash<BackendRequestId, VisualMetadataRequest> m_visualMetadataRequests;
+    QSet<QString> m_pendingVisualMetadataPaths;
+    QSet<QString> m_queuedVisualMetadataPaths;
+    QTimer m_visualMetadataTimer;
     BackendRequestId m_activeRequest = 0;
     quint64 m_generation = 0;
     QString m_currentPath;

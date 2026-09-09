@@ -706,6 +706,32 @@ DirectoryEntry RustBackendClient::decodeEntry(
         *target = value.toInteger();
         return true;
     };
+    auto optionalString = [&](const QString &key, QString *target) {
+        const QJsonValue value = object.value(key);
+        if (!value.isUndefined() && value.isString()) {
+            *target = value.toString();
+        }
+    };
+    auto optionalStringList = [&](const QString &key, QStringList *target) {
+        const QJsonValue value = object.value(key);
+        if (!value.isArray()) {
+            return;
+        }
+        QStringList values;
+        for (const QJsonValue &item : value.toArray()) {
+            if (!item.isString()) {
+                return;
+            }
+            values.append(item.toString());
+        }
+        *target = values;
+    };
+    auto optionalBool = [&](const QString &key, bool *target) {
+        const QJsonValue value = object.value(key);
+        if (value.isBool()) {
+            *target = value.toBool();
+        }
+    };
 
     DirectoryEntry entry;
     QString fileUrl;
@@ -731,6 +757,20 @@ DirectoryEntry RustBackendClient::decodeEntry(
     entry.fileUrl = QUrl(fileUrl);
     entry.filePreviewUrl = QUrl(previewUrl);
     entry.fileModified = QDateTime::fromMSecsSinceEpoch(modifiedMs, QTimeZone::UTC);
+    optionalStringList(QStringLiteral("fileIconNames"), &entry.fileIconNames);
+    QString fileIconFileUrl;
+    optionalString(QStringLiteral("fileIconFileUrl"), &fileIconFileUrl);
+    if (!fileIconFileUrl.isEmpty()) {
+        const QUrl iconUrl(fileIconFileUrl);
+        if (iconUrl.isValid()) {
+            entry.fileIconFileUrl = iconUrl;
+        }
+    }
+    optionalString(QStringLiteral("fileIconFileVersion"), &entry.fileIconFileVersion);
+    optionalStringList(QStringLiteral("fileEmblemNames"), &entry.fileEmblemNames);
+    optionalBool(QStringLiteral("fileIconMetadataReady"), &entry.fileIconMetadataReady);
+    optionalBool(QStringLiteral("fileIsSymlink"), &entry.fileIsSymlink);
+    optionalBool(QStringLiteral("fileSymlinkBroken"), &entry.fileSymlinkBroken);
     entry.trashItemId = object.value(QStringLiteral("trashItemId")).toString();
     entry.trashInfoPath = object.value(QStringLiteral("trashInfoPath")).toString();
     entry.trashLocationId = object.value(QStringLiteral("trashLocationId")).toString();

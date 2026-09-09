@@ -1401,6 +1401,14 @@ void AppStateFacade::requestThumbnailWarm(const QString &path, int offset, int l
     m_thumbnailWarmRequest = m_filesystemService->warmThumbnails(path, offset, limit);
 }
 
+void AppStateFacade::requestFileVisualMetadata(int firstIndex, int lastIndex)
+{
+    if (m_navigation == nullptr) {
+        return;
+    }
+    m_navigation->requestFileVisualMetadata(firstIndex, lastIndex);
+}
+
 QString AppStateFacade::themedIconSource(
     const QString &iconName,
     int size,
@@ -1458,6 +1466,38 @@ QString AppStateFacade::fileIconSource(
         isExecutable,
         size,
         semanticIconName);
+}
+
+QString AppStateFacade::richFileIconSource(
+    const QString &path,
+    bool isDirectory,
+    bool isExecutable,
+    int size,
+    const QString &semanticIconName,
+    const QStringList &iconNames,
+    const QUrl &iconFileUrl,
+    const QString &iconFileVersion) const
+{
+    if (m_iconThemeService == nullptr) {
+        return {};
+    }
+    return m_iconThemeService->richFileIconSource(
+        path,
+        isDirectory,
+        isExecutable,
+        size,
+        semanticIconName,
+        iconNames,
+        iconFileUrl,
+        iconFileVersion);
+}
+
+QString AppStateFacade::emblemIconSource(const QString &name, int size) const
+{
+    if (m_iconThemeService == nullptr) {
+        return {};
+    }
+    return m_iconThemeService->emblemIconSource(name, size);
 }
 
 bool AppStateFacade::writePortalResult(const QString &json)

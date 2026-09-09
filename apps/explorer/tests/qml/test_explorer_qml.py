@@ -296,7 +296,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
 
         self.assertIn("readonly property int   iconDecodeSize", icon_view)
         self.assertIn(
-            "AppState.fileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName)",
+            "AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion)",
             icon_view,
         )
         self.assertIn("sourceSize: Qt.size(grid.iconDecodeSize, grid.iconDecodeSize)", icon_view)
@@ -308,6 +308,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         icon_service = (EXPLORER_ROOT / "src" / "services" / "icon_theme_service.cpp").read_text(encoding="utf-8")
 
         self.assertIn("bridge.fileIconSource", preview_state)
+        self.assertIn("bridge.richFileIconSource", preview_state)
         self.assertIn("iconThemeRevision", app_state)
         self.assertIn("nativeAppState.iconThemeRevision", app_state)
         self.assertIn("QMimeDatabase::MatchExtension", icon_service)
@@ -318,6 +319,7 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         self.assertIn("resolveAppearanceVariant", icon_service)
         self.assertIn("AppearanceMode", icon_service)
         self.assertIn("symbolicIconSourceForNames", icon_service)
+
         self.assertIn("symbolicCandidatesForNames", icon_service)
         self.assertNotIn("mode=symbolic", icon_service)
         self.assertNotIn("symbolicImage", icon_service)
@@ -331,6 +333,22 @@ class ExplorerIconRenderingRegressionTests(unittest.TestCase):
         ]:
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, preview_state)
+
+    def test_visible_file_views_schedule_metadata_independently_from_thumbnails(self):
+        preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(encoding="utf-8")
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        for relative in [
+            "components/views/FileIconView.qml",
+            "components/views/FileListView.qml",
+        ]:
+            source = (APP_ROOT / relative).read_text(encoding="utf-8")
+            with self.subTest(relative=relative):
+                self.assertIn("scheduleVisibleFileVisualMetadata", source)
+                self.assertIn("richFileIconSource", source)
+                self.assertIn("fileEmblemNames", source)
+        self.assertIn("function scheduleVisibleFileVisualMetadata", preview_state)
+        self.assertIn("function scheduleVisibleFileVisualMetadata", app_state)
+        self.assertIn("requestFileVisualMetadata", preview_state)
 
     def test_sidebar_uses_symbolic_pipeline_and_semantic_roles(self):
         sidebar = (APP_ROOT / "components/layout/Sidebar.qml").read_text(encoding="utf-8")

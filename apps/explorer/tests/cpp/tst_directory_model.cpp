@@ -18,6 +18,7 @@ private slots:
     void acceptsSortOrderReplacement();
     void updatesOnlyMatchingPreview();
     void updatesMetadataWithoutResettingUnrelatedEntries();
+    void exposesVisualMetadataRolesAndPartialUpdates();
     void removesPathsWithStableRowsAndGenerationChecks();
     void exposesRecentOnlyRoles();
     void looksUpEntryByPath();
@@ -71,6 +72,13 @@ void DirectoryModelTest::exposesLegacyRolesAndValues()
         QByteArrayLiteral("lastAccessed"),
         QByteArrayLiteral("recentSource"),
         QByteArrayLiteral("fileIconName"),
+        QByteArrayLiteral("fileIconNames"),
+        QByteArrayLiteral("fileIconFileUrl"),
+        QByteArrayLiteral("fileIconFileVersion"),
+        QByteArrayLiteral("fileEmblemNames"),
+        QByteArrayLiteral("fileIconMetadataReady"),
+        QByteArrayLiteral("fileIsSymlink"),
+        QByteArrayLiteral("fileSymlinkBroken"),
         QByteArrayLiteral("trashItemId"),
         QByteArrayLiteral("trashInfoPath"),
         QByteArrayLiteral("trashLocationId"),
@@ -255,6 +263,42 @@ void DirectoryModelTest::updatesMetadataWithoutResettingUnrelatedEntries()
     QVERIFY(changedSpy.constFirst().at(2).value<QVector<int>>().contains(
         DirectoryModel::FileKindRole));
     QVERIFY(model.updateMetadata({update}, 6) == 0);
+}
+
+void DirectoryModelTest::exposesVisualMetadataRolesAndPartialUpdates()
+{
+    DirectoryModel model;
+    DirectoryEntry entry = makeEntry(
+        QStringLiteral("photo.png"), QStringLiteral("/tmp/photo.png"));
+    QVERIFY(model.applyEntries({entry}, 9));
+
+    QVariantMap update;
+    update.insert(QStringLiteral("filePath"), entry.filePath);
+    update.insert(QStringLiteral("fileIconNames"), QStringList {QStringLiteral("image-x-generic"), QStringLiteral("image-missing")});
+    update.insert(QStringLiteral("fileIconFileUrl"), QStringLiteral("file:///tmp/custom.svg"));
+    update.insert(QStringLiteral("fileIconFileVersion"), QStringLiteral("12-34"));
+    update.insert(QStringLiteral("fileEmblemNames"), QStringList {QStringLiteral("readonly")});
+    update.insert(QStringLiteral("fileIconMetadataReady"), true);
+    update.insert(QStringLiteral("fileIsSymlink"), true);
+    update.insert(QStringLiteral("fileSymlinkBroken"), false);
+
+    QSignalSpy changedSpy(&model, &QAbstractItemModel::dataChanged);
+    QCOMPARE(model.updateMetadata({update}, 9), 1);
+    const QModelIndex index = model.index(0, 0);
+    QCOMPARE(model.data(index, DirectoryModel::FileIconNamesRole).toStringList(),
+             QStringList({QStringLiteral("image-x-generic"), QStringLiteral("image-missing")}));
+    QCOMPARE(model.data(index, DirectoryModel::FileIconFileUrlRole).toUrl(),
+             QUrl(QStringLiteral("file:///tmp/custom.svg")));
+    QCOMPARE(model.data(index, DirectoryModel::FileIconFileVersionRole).toString(), QStringLiteral("12-34"));
+    QCOMPARE(model.data(index, DirectoryModel::FileEmblemNamesRole).toStringList(),
+             QStringList({QStringLiteral("readonly")}));
+    QCOMPARE(model.data(index, DirectoryModel::FileIconMetadataReadyRole).toBool(), true);
+    QCOMPARE(model.data(index, DirectoryModel::FileIsSymlinkRole).toBool(), true);
+    QCOMPARE(model.data(index, DirectoryModel::FileSymlinkBrokenRole).toBool(), false);
+    QVERIFY(changedSpy.count() == 1);
+    const QVector<int> roles = changedSpy.constFirst().at(2).value<QVector<int>>();
+    QVERIFY(roles.contains(DirectoryModel::FileIconNamesRole));
+    QVERIFY(roles.contains(DirectoryModel::FileIconMetadataReadyRole));
 }
 
 void DirectoryModelTest::removesPathsWithStableRowsAndGenerationChecks()

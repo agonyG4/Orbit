@@ -219,6 +219,13 @@ Item {
                 fileModified: item.fileModified,
                 fileKind: item.fileKind,
                 fileIconName: item.fileIconName || "",
+                fileIconNames: item.fileIconNames || [],
+                fileIconFileUrl: item.fileIconFileUrl || "",
+                fileIconFileVersion: item.fileIconFileVersion || "",
+                fileEmblemNames: item.fileEmblemNames || [],
+                fileIconMetadataReady: Boolean(item.fileIconMetadataReady),
+                fileIsSymlink: Boolean(item.fileIsSymlink),
+                fileSymlinkBroken: Boolean(item.fileSymlinkBroken),
                 filePreviewUrl: item.filePreviewUrl
             })
         }
@@ -245,6 +252,13 @@ Item {
             fileModified: source.fileModified,
             fileKind: source.fileKind,
             fileIconName: source.fileIconName || "",
+            fileIconNames: source.fileIconNames || [],
+            fileIconFileUrl: source.fileIconFileUrl || "",
+            fileIconFileVersion: source.fileIconFileVersion || "",
+            fileEmblemNames: source.fileEmblemNames || [],
+            fileIconMetadataReady: Boolean(source.fileIconMetadataReady),
+            fileIsSymlink: Boolean(source.fileIsSymlink),
+            fileSymlinkBroken: Boolean(source.fileSymlinkBroken),
             filePreviewUrl: source.filePreviewUrl
         }
     }
@@ -274,6 +288,13 @@ Item {
                                 || item.fileSize !== source.fileSize
                                 || item.fileModified !== source.fileModified
                                 || item.fileIconName !== (source.fileIconName || "")
+                                || JSON.stringify(item.fileIconNames || []) !== JSON.stringify(source.fileIconNames || [])
+                                || item.fileIconFileUrl !== (source.fileIconFileUrl || "")
+                                || item.fileIconFileVersion !== (source.fileIconFileVersion || "")
+                                || JSON.stringify(item.fileEmblemNames || []) !== JSON.stringify(source.fileEmblemNames || [])
+                                || Boolean(item.fileIconMetadataReady) !== Boolean(source.fileIconMetadataReady)
+                                || Boolean(item.fileIsSymlink) !== Boolean(source.fileIsSymlink)
+                                || Boolean(item.fileSymlinkBroken) !== Boolean(source.fileSymlinkBroken)
                                 || Boolean(item.fileExecutable) !== Boolean(source.fileExecutable))) {
                         updatedItem = itemWithMetadata(item, source)
                         changed = true
@@ -429,34 +450,36 @@ Item {
         function warmVisible() {
             if (AppState.fileModel.count <= 0)
                 return
-            var firstSection = indexAt(8, contentY + 1)
-            var lastSection = indexAt(8, contentY + height - 2)
-            if (firstSection < 0)
-                firstSection = 0
-            if (lastSection < 0)
-                lastSection = Math.min(count - 1, firstSection + 2)
-            firstSection = Math.max(0, Math.min(firstSection, root.sectionModel.count - 1))
-            lastSection = Math.max(firstSection, Math.min(lastSection + 1, root.sectionModel.count - 1))
-
             var firstSource = -1
             var lastSource = -1
-            for (var i = firstSection; i <= lastSection; i++) {
-                var section = root.sectionModel.get(i)
-                var items = section && section.items ? section.items : []
-                if (items.length === 0)
+            var blocks = grid.contentItem.children || []
+            for (var blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+                var block = blocks[blockIndex]
+                if (!block || !block.flowRef)
                     continue
-                var firstItem = items[0]
-                var lastItem = items[items.length - 1]
-                if (!firstItem || !lastItem || firstItem.sourceIndex === undefined || lastItem.sourceIndex === undefined)
-                    continue
-                if (firstSource < 0)
-                    firstSource = firstItem.sourceIndex
-                lastSource = lastItem.sourceIndex
+                var tiles = block.flowRef.children || []
+                for (var tileIndex = 0; tileIndex < tiles.length; tileIndex++) {
+                    var tile = tiles[tileIndex]
+                    if (!tile || !tile.modelData || tile.modelData.sourceIndex === undefined)
+                        continue
+                    var tilePosition = tile.mapToItem(grid, 0, 0)
+                    if (tilePosition.y + tile.height < 0 || tilePosition.y > grid.height)
+                        continue
+                    var sourceIndex = tile.modelData.sourceIndex
+                    if (firstSource < 0)
+                        firstSource = sourceIndex
+                    else
+                        firstSource = Math.min(firstSource, sourceIndex)
+                    lastSource = Math.max(lastSource, sourceIndex)
+                }
             }
             if (firstSource < 0 || lastSource < firstSource)
                 return
             var pad = grid.columns * 2
             AppState.scheduleVisibleThumbnailWarm(
+                Math.max(0, firstSource - pad),
+                Math.min(AppState.fileModel.count - 1, lastSource + pad))
+            AppState.scheduleVisibleFileVisualMetadata(
                 Math.max(0, firstSource - pad),
                 Math.min(AppState.fileModel.count - 1, lastSource + pad))
         }
@@ -539,6 +562,7 @@ Item {
             id: sectionBlock
             required property string title
             required property var items
+            readonly property var flowRef: sectionFlow
 
             width: grid.width
             height: sectionHeader.height + sectionFlow.implicitHeight + 8
@@ -581,6 +605,10 @@ Item {
                         readonly property bool   itemExecutable: Boolean(modelData.fileExecutable)
                         readonly property string itemName:  modelData.fileName
                         readonly property string cachedIconName: modelData.fileIconName || ""
+                        readonly property var    itemIconNames: modelData.fileIconNames || []
+                        readonly property var    itemIconFileUrl: modelData.fileIconFileUrl || ""
+                        readonly property string itemIconFileVersion: modelData.fileIconFileVersion || ""
+                        readonly property var    itemEmblemNames: modelData.fileEmblemNames || []
                         readonly property int    modelRevision: AppState.fileModelRevision
                         readonly property string livePreviewUrl: {
                             if (itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -600,7 +628,7 @@ Item {
                         readonly property int    dragPreviewSize: Math.max(48, Math.round(grid.iconSize * 0.78))
                         readonly property url    dragImageUrl: AstreaFiles.DragDropSupport.dragImageUrl(
                                                     hasPreview && activePreviewUrl ? activePreviewUrl : "",
-                                                    AppState.fileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName))
+                                                    AppState.richFileIconSource(itemPath, itemIsDir, itemExecutable, dragPreviewSize, cachedIconName, itemIconNames, itemIconFileUrl, itemIconFileVersion))
 
                         onModelDataChanged: {
                             activePreviewUrl = ""
@@ -636,7 +664,7 @@ Item {
                             Image {
                                 anchors.centerIn: parent
                                 visible: !tile.hasPreview || previewImage.status !== Image.Ready
-                                source: AppState.fileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName)
+                                source: AppState.richFileIconSource(tile.itemPath, tile.itemIsDir, tile.itemExecutable, grid.iconDecodeSize, tile.cachedIconName, tile.itemIconNames, tile.itemIconFileUrl, tile.itemIconFileVersion)
                                 width: grid.iconSize; height: grid.iconSize
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: false
@@ -658,6 +686,21 @@ Item {
                                 mipmap: true
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize: Qt.size(tile.previewRequestSize, tile.previewRequestSize)
+                            }
+
+                            Repeater {
+                                model: Math.min(3, tile.itemEmblemNames.length)
+                                delegate: Image {
+                                    width: 18; height: 18
+                                    x: iconSlot.width - width - index * 20
+                                    y: iconSlot.height - height
+                                    source: AppState.emblemIconSource(tile.itemEmblemNames[index], 18)
+                                    visible: source !== ""
+                                    asynchronous: false
+                                    cache: true
+                                    smooth: true
+                                    sourceSize: Qt.size(18, 18)
+                                }
                             }
                         }
 
