@@ -27,6 +27,7 @@
 #include "controllers/explorer_settings_controller.h"
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
+#include "controllers/preview_controller.h"
 #include "controllers/open_with_controller.h"
 #include "controllers/portal_controller.h"
 #include "controllers/recent_controller.h"
@@ -221,6 +222,8 @@ int ExplorerApplication::run(int argc, char **argv)
         &directoryModel,
         &directoryWatcher,
         &application);
+    PreviewController previewController(&backendClient, &directoryModel, &application);
+    navigation.setPreviewController(&previewController);
     explorerSettingsController.bindNavigation(&navigation);
     explorerSettingsController.bindDeviceController(&devices);
     SidebarFavoritesController sidebarFavorites(&explorerSettingsController, &application);
@@ -242,6 +245,7 @@ int ExplorerApplication::run(int argc, char **argv)
     appStateDependencies.navigation = &navigation;
     appStateDependencies.selection = &selection;
     appStateDependencies.model = &directoryModel;
+    appStateDependencies.preview = &previewController;
     appStateDependencies.settings = &explorerSettingsController;
     appStateDependencies.sidebarFavorites = &sidebarFavorites;
     appStateDependencies.archive = &archive;

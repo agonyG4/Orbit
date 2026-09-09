@@ -29,10 +29,6 @@ public:
     Backend::BackendRequestId properties(const QString &path);
     Backend::BackendRequestId createDesktopShortcut(const QString &path);
     Backend::BackendRequestId networkMountProbe(const QString &rootPath);
-    Backend::BackendRequestId warmThumbnails(
-        const QString &path,
-        int offset,
-        int limit);
     Backend::BackendRequestId archiveExtract(
         const QString &archivePath,
         const QString &destination,

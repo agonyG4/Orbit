@@ -5,6 +5,8 @@
 #include <QVariantMap>
 #include <QUrl>
 
+#include "controllers/preview_controller.h"
+
 namespace Astrea::Explorer::Native::Backend {
 
 NavigationController::NavigationController(
@@ -256,6 +258,9 @@ void NavigationController::setFoldersFirst(bool foldersFirstValue)
 
 void NavigationController::setPreviews(bool previewsValue)
 {
+    if (m_previewController != nullptr) {
+        m_previewController->setEnabled(previewsValue);
+    }
     if (m_previews == previewsValue) {
         return;
     }
@@ -290,6 +295,15 @@ void NavigationController::setRecentController(
         &RecentController::projectionChanged,
         this,
         &NavigationController::handleRecentProjectionChanged);
+}
+
+void NavigationController::setPreviewController(PreviewController *controller)
+{
+    m_previewController = controller;
+    if (m_previewController != nullptr) {
+        m_previewController->beginGeneration(m_generation, m_remoteDirectoryActive);
+        m_previewController->setEnabled(m_previews);
+    }
 }
 
 BackendRequestId NavigationController::navigateTo(const QString &path)
@@ -591,6 +605,7 @@ BackendRequestId NavigationController::startList(const QString &path)
     setLoadError(QString());
     m_remoteDirectoryActive = isRemotePath(path);
     emit remoteStateChanged();
+    syncPreviewGeneration();
     updateWatcher();
 
     if (path == QStringLiteral("recent://")) {
@@ -640,6 +655,7 @@ BackendRequestId NavigationController::startSearch(
     setLoadError(QString());
     m_remoteDirectoryActive = isRemotePath(root);
     emit remoteStateChanged();
+    syncPreviewGeneration();
     updateWatcher();
     m_model->applyEntries({}, generation);
 
@@ -764,6 +780,15 @@ void NavigationController::restoreTab(const Tab &tab)
     emit historyChanged();
 }
 
+void NavigationController::syncPreviewGeneration()
+{
+    if (m_previewController != nullptr) {
+        m_previewController->beginGeneration(
+            m_generation,
+            m_remoteDirectoryActive);
+    }
+}
+
 void NavigationController::updateWatcher()
 {
     if (m_remoteDirectoryActive
@@ -791,6 +816,7 @@ void NavigationController::updateRemoteState(const QVector<DirectoryEntry> &entr
     }
     m_remoteDirectoryActive = remote;
     emit remoteStateChanged();
+    syncPreviewGeneration();
     updateWatcher();
 }
 

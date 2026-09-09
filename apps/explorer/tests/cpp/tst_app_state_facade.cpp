@@ -19,6 +19,7 @@
 
 #include "controllers/archive_controller.h"
 #include "controllers/app_state_facade.h"
+#include "controllers/preview_controller.h"
 
 using namespace Astrea::Explorer::Native::Backend;
 using namespace Astrea::Explorer::Native::Services;
@@ -40,6 +41,7 @@ private slots:
     void preservesSelectionAcrossModelRefresh();
     void delegatesQmlModelMutationsToNativeBoundary();
     void routesRecentOperationsToNativeBoundary();
+    void delegatesPreviewSchedulingToNativeController();
     void projectsArchiveCompletionThroughFilesystemActionFinished();
     void resetsArchivePresentationStateAcrossOperations();
     void retainsSelectionWhenDeleteFails();
@@ -52,6 +54,7 @@ struct FacadeFixture
     DirectoryWatchService watcher;
     NavigationController navigation {&client, &model, &watcher};
     SelectionController selection {&model};
+    PreviewController preview {&client, &model};
 };
 
 AppStateFacadeDependencies facadeDependencies(
@@ -74,6 +77,7 @@ AppStateFacadeDependencies facadeDependencies(
     dependencies.navigation = &fixture.navigation;
     dependencies.selection = &fixture.selection;
     dependencies.model = &fixture.model;
+    dependencies.preview = &fixture.preview;
     dependencies.settings = settings;
     dependencies.sidebarFavorites = sidebarFavorites;
     dependencies.archive = archive;
@@ -508,9 +512,10 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"setDefaultOpenWith(QString,QString)", "bool"},
         {"openItem(QString,bool,QString)", "void"},
         {"openFile(QString)", "void"},
-        {"refreshPreviewMetadata()", "void"},
-        {"requestThumbnailWarm(QString,int,int)", "void"},
-        {"themedIconSource(QString,int,QString)", "QString"},
+       {"refreshPreviewMetadata()", "void"},
+        {"requestVisibleThumbnailRange(int,int,int)", "void"},
+        {"requestSelectedThumbnail(QString,int)", "void"},
+       {"themedIconSource(QString,int,QString)", "QString"},
         {"sidebarIconSource(QString,int)", "QString"},
         {"fileIconName(QString,bool,bool)", "QString"},
         {"fileIconSource(QString,bool,bool,int,QString)", "QString"},
@@ -869,6 +874,41 @@ void AppStateFacadeTest::resetsArchivePresentationStateAcrossOperations()
     QCOMPARE(facade.archiveExtractionError(), QStringLiteral("archive failed"));
     QCOMPARE(facade.archiveExtractionTotalCount(), 0);
     QVERIFY(facade.archiveExtractionDestination().endsWith(QStringLiteral("/folder.zip")));
+}
+
+void AppStateFacadeTest::delegatesPreviewSchedulingToNativeController()
+{
+    FacadeFixture fixture;
+    DirectoryEntry entry = facadeSelectionEntry(
+        QStringLiteral("clip.mp4"),
+        QStringLiteral("/fixture/clip.mp4"));
+    entry.fileSize = 12;
+    fixture.model.applyEntries({entry}, 0);
+    AppStateFacade facade(facadeDependencies(fixture));
+
+    facade.requestVisibleThumbnailRange(0, 0, 256);
+    QTRY_COMPARE(fixture.client.utilityRequests().size(), 1);
+    QCOMPARE(
+        fixture.client.utilityRequests().constFirst().operation,
+        QStringLiteral("thumbnail-batch"));
+    const QStringList expectedVisibleArguments {
+        QStringLiteral("256"),
+        QStringLiteral("/fixture/clip.mp4")};
+    QCOMPARE(
+        fixture.client.utilityRequests().constFirst().arguments,
+        expectedVisibleArguments);
+
+    facade.requestSelectedThumbnail(entry.filePath, 640);
+    UtilityResult result;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    fixture.client.completeUtility(1, result);
+    QTRY_COMPARE(fixture.client.utilityRequests().size(), 2);
+    const QStringList expectedSelectedArguments {QStringLiteral("640"), entry.filePath};
+    QCOMPARE(
+        fixture.client.utilityRequests().constLast().arguments,
+        expectedSelectedArguments);
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

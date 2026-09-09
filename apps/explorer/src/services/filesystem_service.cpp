@@ -83,17 +83,6 @@ BackendRequestId FilesystemService::networkMountProbe(const QString &rootPath)
     return request(QStringLiteral("network-mount-probe"), {rootPath});
 }
 
-BackendRequestId FilesystemService::warmThumbnails(
-    const QString &path,
-    int offset,
-    int limit)
-{
-    return request(
-        QStringLiteral("warm-thumbnails"),
-        {path, QStringLiteral("0"), QStringLiteral("name"), QStringLiteral("1"),
-         QStringLiteral("1"), QString::number(qMax(0, offset)), QString::number(qMax(1, limit))});
-}
-
 BackendRequestId FilesystemService::archiveExtract(
     const QString &archivePath,
     const QString &destination,

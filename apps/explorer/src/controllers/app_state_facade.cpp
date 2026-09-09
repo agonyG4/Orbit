@@ -20,6 +20,7 @@
 #include "controllers/file_operations_controller.h"
 #include "controllers/navigation_controller.h"
 #include "controllers/open_with_controller.h"
+#include "controllers/preview_controller.h"
 #include "controllers/recent_controller.h"
 #include "controllers/selection_controller.h"
 #include "controllers/sidebar_favorites_controller.h"
@@ -36,6 +37,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     , m_navigation(dependencies.navigation)
     , m_selection(dependencies.selection)
     , m_model(dependencies.model)
+    , m_previewController(dependencies.preview)
     , m_settingsController(dependencies.settings)
     , m_sidebarFavorites(dependencies.sidebarFavorites)
     , m_archive(dependencies.archive)
@@ -247,10 +249,6 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
             &Services::FilesystemService::operationFinished,
             this,
             [this](const UtilityResult &result) {
-                if (result.operation == QStringLiteral("warm-thumbnails")
-                    && result.requestId != m_thumbnailWarmRequest) {
-                    return;
-                }
                 if (m_archive != nullptr
                     && (result.operation == QStringLiteral("archive-extract")
                         || result.operation == QStringLiteral("archive-compress"))) {
@@ -854,6 +852,9 @@ bool AppStateFacade::wallpaperApplyRunning() const { return m_wallpaperApplyRunn
 
 void AppStateFacade::setShowPreview(bool showPreviewValue)
 {
+    if (m_previewController != nullptr) {
+        m_previewController->setEnabled(showPreviewValue);
+    }
     if (m_settingsController != nullptr) {
         m_settingsController->setShowPreview(showPreviewValue);
         return;
@@ -1393,12 +1394,25 @@ void AppStateFacade::refreshPreviewMetadata()
     refreshCurrentFolder();
 }
 
-void AppStateFacade::requestThumbnailWarm(const QString &path, int offset, int limit)
+void AppStateFacade::requestVisibleThumbnailRange(
+    int firstIndex,
+    int lastIndex,
+    int physicalTarget)
 {
-    if (m_filesystemService == nullptr || path.isEmpty() || remoteDirectoryActive()) {
+    if (m_previewController == nullptr) {
         return;
     }
-    m_thumbnailWarmRequest = m_filesystemService->warmThumbnails(path, offset, limit);
+    m_previewController->requestVisibleRange(firstIndex, lastIndex, physicalTarget);
+}
+
+void AppStateFacade::requestSelectedThumbnail(
+    const QString &filePath,
+    int physicalTarget)
+{
+    if (m_previewController == nullptr) {
+        return;
+    }
+    m_previewController->requestSelectedPreview(filePath, physicalTarget);
 }
 
 void AppStateFacade::requestFileVisualMetadata(int firstIndex, int lastIndex)

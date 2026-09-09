@@ -30,6 +30,7 @@ class FileOperationsController;
 class NavigationController;
 class OpenWithController;
 class RecentController;
+class PreviewController;
 class SelectionController;
 class SidebarFavoritesController;
 
@@ -38,6 +39,7 @@ struct AppStateFacadeDependencies
     NavigationController *navigation = nullptr;
     SelectionController *selection = nullptr;
     DirectoryModel *model = nullptr;
+    PreviewController *preview = nullptr;
 
     ExplorerSettingsController *settings = nullptr;
     SidebarFavoritesController *sidebarFavorites = nullptr;
@@ -371,7 +373,13 @@ public:
     Q_INVOKABLE void openItem(const QString &path, bool isDirectory, const QString &fileUrl = QString());
     Q_INVOKABLE void openFile(const QString &path);
     Q_INVOKABLE void refreshPreviewMetadata();
-    Q_INVOKABLE void requestThumbnailWarm(const QString &path, int offset, int limit);
+    Q_INVOKABLE void requestVisibleThumbnailRange(
+        int firstIndex,
+        int lastIndex,
+        int physicalTarget);
+    Q_INVOKABLE void requestSelectedThumbnail(
+        const QString &filePath,
+        int physicalTarget);
     Q_INVOKABLE void requestFileVisualMetadata(int firstIndex, int lastIndex);
     Q_INVOKABLE QString themedIconSource(const QString &iconName, int size, const QString &themeName);
     Q_INVOKABLE QString sidebarIconSource(const QString &iconName, int size);
@@ -494,6 +502,7 @@ private:
     NavigationController *m_navigation = nullptr;
     SelectionController *m_selection = nullptr;
     DirectoryModel *m_model = nullptr;
+    PreviewController *m_previewController = nullptr;
     ExplorerSettingsController *m_settingsController = nullptr;
     SidebarFavoritesController *m_sidebarFavorites = nullptr;
     ArchiveController *m_archive = nullptr;
@@ -501,7 +510,6 @@ private:
     DeviceController *m_devices = nullptr;
     RecentController *m_recentController = nullptr;
     Services::FilesystemService *m_filesystemService = nullptr;
-    BackendRequestId m_thumbnailWarmRequest = 0;
     bool m_appImageInstallRunning = false;
     bool m_wallpaperApplyRunning = false;
     OpenWithController *m_openWith = nullptr;

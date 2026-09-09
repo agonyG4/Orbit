@@ -13,6 +13,8 @@
 
 namespace Astrea::Explorer::Native::Backend {
 
+class PreviewController;
+
 class NavigationController final : public QObject
 {
     Q_OBJECT
@@ -69,6 +71,7 @@ public:
     void setRecentController(
         RecentController *controller,
         const RecentSourcePaths &sourcePaths = {});
+    void setPreviewController(PreviewController *controller);
 
     Q_INVOKABLE BackendRequestId navigateTo(const QString &path);
     Q_INVOKABLE BackendRequestId submitSearch(
@@ -161,6 +164,7 @@ private:
     void restoreTab(const Tab &tab);
     void updateWatcher();
     void updateRemoteState(const QVector<DirectoryEntry> &entries);
+    void syncPreviewGeneration();
     static bool isRemotePath(const QString &path);
     void setCurrentPath(const QString &path);
     void setLoading(bool loading);
@@ -169,6 +173,7 @@ private:
     IRustBackendClient *m_client = nullptr;
     DirectoryModel *m_model = nullptr;
     DirectoryWatchService *m_watcher = nullptr;
+    PreviewController *m_previewController = nullptr;
     QHash<BackendRequestId, PendingRequest> m_pendingRequests;
     QHash<BackendRequestId, VisualMetadataRequest> m_visualMetadataRequests;
     QSet<QString> m_pendingVisualMetadataPaths;
