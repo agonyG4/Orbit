@@ -2,7 +2,8 @@ use gio::prelude::*;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -10,9 +11,9 @@ use std::time::{Duration, SystemTime};
 
 use crate::json;
 use crate::thumbnail_cache::{
-    SourceVersion, ThumbnailTier, cache_candidates, canonical_uri, read_failure_entry,
-    read_valid_thumbnail, thumbnail_root, tier_for_target, tier_path, write_failure_entry,
-    write_standard_thumbnail,
+    SourceVersion, ThumbnailTier, cache_candidates, canonical_uri, create_private_staging_file,
+    private_directory, read_failure_entry, read_valid_thumbnail, thumbnail_root, tier_for_target,
+    tier_path, write_failure_entry, write_standard_thumbnail,
 };
 
 pub(crate) const MAX_BATCH_ITEMS: usize = 32;
@@ -40,7 +41,7 @@ impl ThumbnailGenerator for ProcessThumbnailGenerator {
                 let filter =
                     format!("scale={target}:{target}:force_original_aspect_ratio=decrease");
                 Command::new("ffmpeg")
-                    .args(["-y", "-ss", "00:00:01", "-i"])
+                    .args(["-y", "-ss", "00:00:00", "-i"])
                     .arg(input)
                     .args(["-vframes", "1", "-vf", &filter])
                     .arg(output)
@@ -173,6 +174,7 @@ fn run_batch_at(
         Some(path) => path.to_path_buf(),
         None => thumbnail_root()?,
     };
+    private_directory(&cache)?;
     let pool = THUMBNAIL_POOL
         .get_or_init(|| {
             rayon::ThreadPoolBuilder::new()
@@ -232,6 +234,15 @@ fn process_item(
     };
     let requested_tier = tier_for_target(target);
     let mime = mime_for_path(path);
+    if !source_is_readable(path) {
+        return ThumbnailItem {
+            file_path,
+            status: "deferred",
+            preview_url: String::new(),
+            cache_tier: requested_tier.directory_name(),
+            source_version,
+        };
+    }
     for (tier, candidate) in cache_candidates(cache, &uri, requested_tier) {
         if read_valid_thumbnail(&candidate, &uri, version, mime).is_ok() {
             return ready_item(&file_path, &candidate, tier, source_version);
@@ -267,11 +278,16 @@ fn process_item(
 
     let destination = tier_path(cache, requested_tier, &uri);
     let raw = destination.parent().unwrap_or(cache).join(format!(
-        ".{}.raw-{}",
+        ".{}.raw-{}.png",
         crate::thumbnail_cache::cache_filename(&uri),
         std::process::id()
     ));
-    if fs::create_dir_all(destination.parent().unwrap_or(cache)).is_err() {
+    let destination_parent = destination.parent().unwrap_or(cache);
+    if private_directory(destination_parent).is_err() {
+        return failed_item(&file_path, source_version);
+    }
+    let _ = fs::remove_file(&raw);
+    if create_private_staging_file(&raw).is_err() {
         return failed_item(&file_path, source_version);
     }
     let generated = generator.generate(path, &raw, requested_tier.max_pixels());
@@ -318,6 +334,14 @@ fn failed_item(file_path: &str, source_version: String) -> ThumbnailItem {
         cache_tier: "fail",
         source_version,
     }
+}
+
+fn source_is_readable(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut probe = [0_u8; 1];
+    file.read(&mut probe).is_ok()
 }
 
 fn batch_result_json(target: u32, items: &[ThumbnailItem]) -> String {
@@ -481,7 +505,10 @@ fn file_media_type(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thumbnail_cache::cache_filename;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
 
     struct CountingGenerator {
@@ -509,6 +536,33 @@ mod tests {
 
     struct ConditionalGenerator {
         calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[cfg(unix)]
+    struct PermissionCheckingGenerator {
+        staging_mode: Arc<Mutex<Option<u32>>>,
+    }
+
+    #[cfg(unix)]
+    impl ThumbnailGenerator for PermissionCheckingGenerator {
+        fn generate(&self, _input: &Path, output: &Path, _target: u32) -> Result<(), String> {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = fs::metadata(output)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode()
+                & 0o777;
+            *self.staging_mode.lock().unwrap() = Some(mode);
+            let file = File::create(output).map_err(|error| error.to_string())?;
+            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+            writer
+                .write_image_data(&[255, 0, 0, 255])
+                .map_err(|error| error.to_string())
+        }
     }
 
     impl ThumbnailGenerator for ConditionalGenerator {
@@ -699,6 +753,56 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cache_paths_are_private_before_generator_runs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-private-generation-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("photo.png");
+        write_fixture_png(&source);
+        let staging_mode = Arc::new(Mutex::new(None));
+        let generator = PermissionCheckingGenerator {
+            staging_mode: staging_mode.clone(),
+        };
+
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "ready");
+        assert_eq!(
+            fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(cache.join("normal"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(*staging_mode.lock().unwrap(), Some(0o600));
+        let uri = canonical_uri(&source).unwrap();
+        let output = tier_path(&cache, ThumbnailTier::Normal, &uri);
+        assert_eq!(
+            fs::metadata(output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn failure_entries_suppress_same_source_and_retry_after_size_change() {
         let root =
@@ -732,6 +836,24 @@ mod tests {
         assert_eq!(items[0]["status"], "ready");
         assert_eq!(items[1]["status"], "failed");
         assert_eq!(first_calls.lock().unwrap().len(), 2);
+        let failure_uri = canonical_uri(&broken).unwrap();
+        let failure_path = cache
+            .join("fail")
+            .join(format!("orbit-explorer-{}", env!("CARGO_PKG_VERSION")))
+            .join(cache_filename(&failure_uri));
+        assert!(failure_path.is_file());
+        assert_eq!(
+            fs::metadata(failure_path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&failure_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
 
         let second_calls = Arc::new(Mutex::new(Vec::new()));
         let second_generator = ConditionalGenerator {
@@ -748,11 +870,11 @@ mod tests {
             SystemTime::now() + Duration::from_secs(4),
         )
         .unwrap();
-        let suppressed_items = serde_json::from_str::<serde_json::Value>(&suppressed)
-            .unwrap()["items"]
-            .as_array()
-            .unwrap()
-            .clone();
+        let suppressed_items =
+            serde_json::from_str::<serde_json::Value>(&suppressed).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .clone();
         assert_eq!(suppressed_items[1]["status"], "failed");
         assert!(second_calls.lock().unwrap().is_empty());
 
@@ -768,56 +890,107 @@ mod tests {
             SystemTime::now() + Duration::from_secs(4),
         )
         .unwrap();
-        let retried_item = serde_json::from_str::<serde_json::Value>(&retried).unwrap()["items"][0]
-            .clone();
+        let retried_item =
+            serde_json::from_str::<serde_json::Value>(&retried).unwrap()["items"][0].clone();
         assert_eq!(retried_item["status"], "failed");
-        assert_eq!(third_calls.lock().unwrap().as_slice(), &[broken.to_string_lossy().as_ref()]);
+        assert_eq!(
+            third_calls.lock().unwrap().as_slice(),
+            &[broken.to_string_lossy().as_ref()]
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn standard_cache_can_be_recognized_through_public_gio_attributes() {
+    fn real_ffmpeg_generator_produces_a_readable_standard_thumbnail() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            eprintln!("SKIPPED: ffmpeg is unavailable");
+            return;
+        }
+
         let root =
-            std::env::temp_dir().join(format!("astrea-thumbnail-gio-{}", std::process::id()));
+            std::env::temp_dir().join(format!("astrea-thumbnail-ffmpeg-{}", std::process::id()));
         let cache = root.join("cache");
         fs::create_dir_all(&root).unwrap();
-        let source = root.join("photo.png");
-        write_fixture_png(&source);
-        let metadata = fs::metadata(&source).unwrap();
-        let version = SourceVersion::from_metadata(&metadata);
-        let uri = canonical_uri(&source).unwrap();
-        let cached = tier_path(&cache, ThumbnailTier::Normal, &uri);
-        write_standard_thumbnail(&source, &cached, &uri, version, Some("image/png")).unwrap();
+        let source = root.join("fixture.mp4");
+        let fixture = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=16x16:d=2",
+                "-frames:v",
+                "2",
+                "-c:v",
+                "mpeg4",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(fixture.success());
 
-        let source_file = gio::File::for_path(&source);
-        let attributes = gio::FileInfo::new();
-        attributes.set_attribute_byte_string(
-            "thumbnail::path-normal",
-            cached.to_string_lossy().as_ref(),
-        );
-        attributes.set_attribute_boolean("thumbnail::is-valid-normal", true);
-        if source_file
-            .set_attributes_from_info(
-                &attributes,
-                gio::FileQueryInfoFlags::NONE,
-                None::<&gio::Cancellable>,
-            )
-            .is_ok()
-        {
-            let info = source_file
-                .query_info(
-                    "thumbnail::path-normal,thumbnail::is-valid-normal",
-                    gio::FileQueryInfoFlags::NONE,
-                    None::<&gio::Cancellable>,
-                )
-                .unwrap();
-            assert_eq!(
-                info.attribute_byte_string("thumbnail::path-normal")
-                    .as_deref(),
-                Some(cached.to_string_lossy().as_ref())
-            );
-            assert!(info.boolean("thumbnail::is-valid-normal"));
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &ProcessThumbnailGenerator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "ready");
+
+        let uri = canonical_uri(&source).unwrap();
+        let output = tier_path(&cache, ThumbnailTier::Normal, &uri);
+        let file = std::fs::File::open(&output).unwrap();
+        let mut reader = png::Decoder::new(std::io::BufReader::new(file))
+            .read_info()
+            .unwrap();
+        let mut buffer = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut buffer).unwrap();
+        let version = SourceVersion::from_metadata(&fs::metadata(&source).unwrap());
+        assert!(read_valid_thumbnail(&output, &uri, version, Some("video/mp4")).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_source_does_not_spawn_or_persist_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-unreadable-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("secret.png");
+        write_fixture_png(&source);
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&source).is_ok() {
+            eprintln!("SKIPPED: test user can read mode-000 files");
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+            let _ = fs::remove_dir_all(root);
+            return;
         }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = CountingGenerator {
+            calls: calls.clone(),
+            targets: Arc::new(Mutex::new(Vec::new())),
+        };
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "deferred");
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(!cache.join("fail").exists());
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
         let _ = fs::remove_dir_all(root);
     }
 

@@ -80,7 +80,8 @@ The canonical cache is the shared XDG thumbnail tree:
       large/        up to 256 px
       x-large/      up to 512 px
       xx-large/     up to 1024 px
-      fail/         source-version-scoped failure entries
+      fail/
+        orbit-explorer-<package-version>/<MD5>.png
 
 When XDG_CACHE_HOME is not set, the cache falls back to
 $HOME/.cache/thumbnails. Explorer does not write the retired
@@ -94,14 +95,16 @@ characters retain standard URI escaping.
 
 The smallest tier satisfying the physical target is selected. A valid larger
 tier can satisfy a smaller request and is reused. Every accepted PNG must
-contain matching Thumb::URI and Thumb::MTime; Thumb::Size and
-Thumb::Mimetype are checked when present. Explorer-generated files also
-carry Software.
+contain matching Thumb::URI and Thumb::MTime; Thumb::Size is checked when
+present. Thumb::Mimetype is descriptive and does not reject an otherwise
+valid thumbnail. Explorer-generated files also carry Software.
 
-Writes create the destination tier with private permissions, encode metadata
-into a temporary file in that same directory, and atomically rename the
-temporary file into place. Failure entries use the same metadata path and
-therefore become invalid automatically when the source mtime or size changes.
+The cache root, every tier, and the versioned failure directory are mode 0700;
+staging and installed PNG files are mode 0600. Directories and staging files
+are created privately before any generator runs. Writes encode metadata into
+a same-directory temporary file ending in .png and atomically rename it into
+place. Failure entries use the same metadata path and therefore become
+invalid automatically when the source mtime or size changes.
 
 Before generation, the backend checks both Explorer's standard cache
 locations and the public GIO thumbnail attributes:
@@ -114,7 +117,9 @@ locations and the public GIO thumbnail attributes:
 
 Private GVfs metadata is not parsed. The ordinary directory listing remains
 cheap and does not spawn a generator or perform per-row GIO thumbnail
-generation.
+generation. The interoperability test runs a separate GIO process with an
+isolated XDG cache home and verifies that GIO discovers the standard PNG
+without injecting file attributes.
 
 ## Generator and failure policy
 
@@ -131,10 +136,13 @@ Generation uses one process-wide Rayon pool with at most four workers. A
 single item failure is encoded in that item's result; it does not fail the
 whole batch.
 
-Recent files return deferred before a generator starts. A failed generation
-records a standard fail entry for the current source version. The
-controller's in-memory failure state and the shared failure entry both
-suppress repeated work until the source changes. This is important for
+Recent or unreadable files return deferred before a generator starts; an
+unreadable source does not create a persistent failure entry. A failed
+generation records a standard fail entry under the versioned fail directory
+for the current source version. The controller's in-memory failure state and
+the shared failure entry both suppress repeated work until the source changes.
+Deferred work carries its source version and is retried only after one
+earliest deadline for the still-visible range. This is important for
 unsupported or temporarily broken media: scrolling over the same item does
 not create an unbounded retry loop.
 

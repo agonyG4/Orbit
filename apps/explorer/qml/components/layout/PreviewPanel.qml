@@ -18,7 +18,6 @@ Rectangle {
     readonly property bool selectedIsDir: Boolean(selectedItem && selectedItem.fileIsDir)
     readonly property bool selectedExecutable: Boolean(selectedItem && selectedItem.fileExecutable)
     readonly property string selectedPath: selectedItem ? (selectedItem.filePath || "") : ""
-    readonly property string selectedUrl: selectedItem ? (selectedItem.fileUrl || "") : ""
     readonly property bool selectedRemote: Boolean(selectedItem && selectedItem.fileRemote)
     readonly property bool selectedMetadataLimited: Boolean(selectedItem && selectedItem.fileMetadataLimited)
     readonly property string selectedKind: selectedItem && selectedItem.fileKind ? selectedItem.fileKind : fallbackKind(selectedName, selectedIsDir)
@@ -44,11 +43,13 @@ Rectangle {
     }
 
     function requestSelectedPreview() {
-        if (!AppState.showPreview || !selectedPreviewable || selectedPreviewUrl !== "" || !selectedPath)
+        if (!AppState.showPreview || !selectedPreviewable || !selectedPath)
             return
         AppState.requestSelectedThumbnail(selectedPath, root.physicalDecodeSize(320))
    }
 
+    onEffectiveDprChanged: selectedPreviewTimer.restart()
+    onSelectedPathChanged: selectedPreviewTimer.restart()
     onSelectedNameChanged: selectedPreviewTimer.restart()
     onSelectedPreviewUrlChanged: selectedPreviewTimer.restart()
     onVisibleChanged: selectedPreviewTimer.restart()

@@ -62,17 +62,26 @@ private:
         int target = 0;
     };
 
+    struct DeferredPreviewState
+    {
+        QString sourceVersion;
+        QDateTime retryAfter;
+        Intent intent;
+    };
+
     static bool isEligible(const DirectoryEntry &entry);
     static bool isDirectImagePath(const QString &path);
     static QString sourceVersion(const DirectoryEntry &entry);
     static int tierPixels(const QString &tier, int fallback);
     bool isInFlight(const QString &path) const;
-    bool isSuppressed(const DirectoryEntry &entry, int target) const;
+    bool isSuppressed(const DirectoryEntry &entry, int target);
     void replaceViewportQueue(int firstIndex, int lastIndex, int target);
     void scheduleDispatch(int delayMs = 50);
+    void armDeferredRetryTimer();
     void clearQueuedWork();
     void dispatchBatch();
     void finishRequest(BackendRequestId requestId);
+    void handleDeferredRetry();
     void applyBatchItem(
         const InFlightBatch &request,
         const QJsonObject &item);
@@ -80,6 +89,7 @@ private:
     IRustBackendClient *m_client = nullptr;
     DirectoryModel *m_model = nullptr;
     QTimer m_dispatchTimer;
+    QTimer m_deferredRetryTimer;
     QHash<BackendRequestId, InFlightBatch> m_inFlight;
     QVector<Intent> m_viewportQueue;
     QSet<QString> m_viewportPaths;
@@ -87,7 +97,12 @@ private:
     bool m_hasSelectedIntent = false;
     QHash<QString, AppliedPreview> m_appliedPreviews;
     QHash<QString, QString> m_failedSources;
-    QHash<QString, QDateTime> m_deferredUntil;
+    QHash<QString, QString> m_unsupportedSources;
+    QHash<QString, DeferredPreviewState> m_deferredPreviews;
+    bool m_hasVisibleRange = false;
+    int m_lastVisibleFirst = 0;
+    int m_lastVisibleLast = -1;
+    int m_lastVisibleTarget = 128;
     quint64 m_generation = 0;
     bool m_remoteDirectoryActive = false;
     bool m_enabled = true;

@@ -2,8 +2,11 @@ use gio::prelude::*;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+const FAILURE_CACHE_APPLICATION: &str = "orbit-explorer";
+const FAILURE_CACHE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ThumbnailTier {
@@ -95,9 +98,19 @@ pub(crate) fn canonical_uri(path: &Path) -> Result<String, String> {
             .map_err(|error| format!("current directory: {error}"))?
             .join(path)
     };
-    let canonical = fs::canonicalize(&absolute)
-        .map_err(|error| format!("canonicalize {}: {error}", absolute.display()))?;
-    Ok(gio::File::for_path(canonical).uri().to_string())
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("path escapes its root: {}", absolute.display()));
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    Ok(gio::File::for_path(normalized).uri().to_string())
 }
 
 pub(crate) fn cache_filename(uri: &str) -> String {
@@ -105,7 +118,20 @@ pub(crate) fn cache_filename(uri: &str) -> String {
 }
 
 pub(crate) fn tier_path(root: &Path, tier: ThumbnailTier, uri: &str) -> PathBuf {
+    if tier == ThumbnailTier::Fail {
+        return failure_tier_path(root, uri);
+    }
     root.join(tier.directory_name()).join(cache_filename(uri))
+}
+
+pub(crate) fn failure_application_dir(root: &Path) -> PathBuf {
+    root.join("fail").join(format!(
+        "{FAILURE_CACHE_APPLICATION}-{FAILURE_CACHE_VERSION}"
+    ))
+}
+
+pub(crate) fn failure_tier_path(root: &Path, uri: &str) -> PathBuf {
+    failure_application_dir(root).join(cache_filename(uri))
 }
 
 pub(crate) fn cache_candidates(
@@ -162,7 +188,7 @@ pub(crate) fn read_valid_thumbnail(
     path: &Path,
     uri: &str,
     version: SourceVersion,
-    expected_mime: Option<&str>,
+    _expected_mime: Option<&str>,
 ) -> Result<(), String> {
     if !path.is_file() {
         return Err("thumbnail is not a file".to_string());
@@ -183,13 +209,6 @@ pub(crate) fn read_valid_thumbnail(
             return Err("thumbnail size does not match source".to_string());
         }
     }
-    if let Some(mime) = expected_mime {
-        if let Some(actual) = values.get("Thumb::Mimetype") {
-            if actual != mime {
-                return Err("thumbnail MIME type does not match source".to_string());
-            }
-        }
-    }
     Ok(())
 }
 
@@ -201,12 +220,45 @@ pub(crate) fn read_failure_entry(
     read_valid_thumbnail(path, uri, version, None)
 }
 
-fn private_directory(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|error| format!("create {}: {error}", path.display()))?;
+pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
-    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-        .map_err(|error| format!("permissions {}: {error}", path.display()))?;
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        if !path.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            if let Err(error) = builder.create(path) {
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(format!("create {}: {error}", path.display()));
+                }
+            }
+        }
+        if !path.is_dir() {
+            return Err(format!("{} is not a directory", path.display()));
+        }
+        fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .map_err(|error| format!("permissions {}: {error}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(path).map_err(|error| format!("create {}: {error}", path.display()))?;
     Ok(())
+}
+
+pub(crate) fn create_private_staging_file(path: &Path) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("create {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))
+        .map_err(|error| format!("permissions {}: {error}", path.display()))?;
+    Ok(file)
 }
 
 fn encode_png_with_metadata(
@@ -224,11 +276,6 @@ fn encode_png_with_metadata(
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("read PNG {}: {error}", input.display()))?;
-    let info = reader.info();
-    let width = info.width;
-    let height = info.height;
-    let color_type = info.color_type;
-    let bit_depth = info.bit_depth;
     let output_size = reader
         .output_buffer_size()
         .ok_or_else(|| "PNG output is too large".to_string())?;
@@ -237,17 +284,13 @@ fn encode_png_with_metadata(
         .next_frame(&mut buffer)
         .map_err(|error| format!("decode PNG {}: {error}", input.display()))?;
     let image_data = buffer[..frame.buffer_size()].to_vec();
+    let width = frame.width;
+    let height = frame.height;
+    let color_type = frame.color_type;
+    let bit_depth = frame.bit_depth;
     drop(reader);
 
-    let output_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output)
-        .map_err(|error| format!("create {}: {error}", output.display()))?;
-    #[cfg(unix)]
-    output_file
-        .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))
-        .map_err(|error| format!("permissions {}: {error}", output.display()))?;
+    let output_file = create_private_staging_file(output)?;
     let mut encoder = png::Encoder::new(BufWriter::new(output_file), width, height);
     encoder.set_color(color_type);
     encoder.set_depth(bit_depth);
@@ -312,7 +355,7 @@ pub(crate) fn write_failure_entry(
     uri: &str,
     version: SourceVersion,
 ) -> Result<PathBuf, String> {
-    let destination = tier_path(root, ThumbnailTier::Fail, uri);
+    let destination = failure_tier_path(root, uri);
     let parent = destination
         .parent()
         .ok_or_else(|| "failure entry has no parent directory".to_string())?;
@@ -331,7 +374,7 @@ pub(crate) fn write_failure_entry(
 }
 
 fn create_fixture_png(path: &Path) -> Result<(), String> {
-    let file = File::create(path).map_err(|error| format!("create fixture: {error}"))?;
+    let file = create_private_staging_file(path)?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), 1, 1);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
@@ -417,6 +460,7 @@ mod tests {
 
         write_standard_thumbnail(&input, &output, uri, version, Some("image/png")).unwrap();
         assert!(read_valid_thumbnail(&output, uri, version, Some("image/png")).is_ok());
+        assert!(read_valid_thumbnail(&output, uri, version, Some("image/jpeg")).is_ok());
         assert!(
             read_valid_thumbnail(
                 &output,
@@ -453,5 +497,155 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rewrite_uses_post_transform_png_layout_for_common_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-png-layout-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let uri = "file:///fixture/layout.png";
+        let version = SourceVersion {
+            modified_secs: 42,
+            size: 7,
+        };
+        let variants = [
+            (
+                "rgba",
+                png::ColorType::Rgba,
+                png::BitDepth::Eight,
+                vec![
+                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+                ],
+                None,
+            ),
+            (
+                "rgb",
+                png::ColorType::Rgb,
+                png::BitDepth::Eight,
+                vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+                None,
+            ),
+            (
+                "gray",
+                png::ColorType::Grayscale,
+                png::BitDepth::Eight,
+                vec![0, 85, 170, 255],
+                None,
+            ),
+            (
+                "indexed",
+                png::ColorType::Indexed,
+                png::BitDepth::Eight,
+                vec![0, 1, 2, 3],
+                Some(vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]),
+            ),
+            (
+                "indexed-low-bit",
+                png::ColorType::Indexed,
+                png::BitDepth::Two,
+                vec![0x1b, 0xe4],
+                Some(vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]),
+            ),
+        ];
+
+        for (name, color_type, bit_depth, data, palette) in variants {
+            let input = root.join(format!("{name}.png"));
+            let output = root.join(format!("{name}-out.png"));
+            write_variant_png(&input, color_type, bit_depth, &data, palette.as_deref());
+            write_standard_thumbnail(&input, &output, uri, version, Some("image/png")).unwrap();
+            assert!(read_valid_thumbnail(&output, uri, version, Some("image/jpeg")).is_ok());
+
+            let file = File::open(&output).unwrap();
+            let mut reader = png::Decoder::new(BufReader::new(file)).read_info().unwrap();
+            assert_eq!((reader.info().width, reader.info().height), (2, 2));
+            let output_size = reader.output_buffer_size().unwrap();
+            let mut buffer = vec![0; output_size];
+            let frame = reader.next_frame(&mut buffer).unwrap();
+            assert_eq!((frame.width, frame.height), (2, 2));
+            assert_eq!(frame.buffer_size(), output_size);
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_directories_and_files_are_private_before_generation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-permissions-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.png");
+        let output = cache.join("normal").join("thumb.png");
+        create_fixture_png(&input).unwrap();
+        let version = SourceVersion {
+            modified_secs: 42,
+            size: 7,
+        };
+        write_standard_thumbnail(&input, &output, "file:///fixture/input.png", version, None)
+            .unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(output.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_uri_preserves_symlink_identity_used_by_gio() {
+        let root =
+            std::env::temp_dir().join(format!("astrea-thumbnail-symlink-{}", std::process::id()));
+        let real = root.join("real");
+        let link = root.join("link");
+        std::fs::create_dir_all(&real).unwrap();
+        let source = real.join("photo # é.png");
+        std::fs::write(&source, b"fixture").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let user_path = link.join("photo # é.png");
+
+        let orbit_uri = canonical_uri(&user_path).unwrap();
+        let gio_uri = gio::File::for_path(&user_path).uri().to_string();
+        assert_eq!(orbit_uri, gio_uri);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn write_variant_png(
+        path: &Path,
+        color_type: png::ColorType,
+        bit_depth: png::BitDepth,
+        data: &[u8],
+        palette: Option<&[u8]>,
+    ) {
+        let file = File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(BufWriter::new(file), 2, 2);
+        encoder.set_color(color_type);
+        encoder.set_depth(bit_depth);
+        if let Some(palette) = palette {
+            encoder.set_palette(palette);
+        }
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(data).unwrap();
     }
 }

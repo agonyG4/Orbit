@@ -45,6 +45,7 @@ Item {
     function physicalDecodeSize(logicalSize) {
         return Math.max(1, Math.ceil(logicalSize * root.effectiveDpr))
     }
+    onEffectiveDprChanged: previewScheduleTimer.restart()
 
     // ── Activation (double-click emulation) ───────────────────────────────
     property string lastActivationCandidatePath: ""

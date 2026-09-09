@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <QtGlobal>
 
+#include <limits>
+
 namespace Astrea::Explorer::Native::Backend {
 
 PreviewController::PreviewController(
@@ -25,6 +27,12 @@ PreviewController::PreviewController(
         &QTimer::timeout,
         this,
         &PreviewController::dispatchQueued);
+    m_deferredRetryTimer.setSingleShot(true);
+    connect(
+        &m_deferredRetryTimer,
+        &QTimer::timeout,
+        this,
+        &PreviewController::handleDeferredRetry);
     connect(
         m_client,
         &IRustBackendClient::utilityReady,
@@ -64,10 +72,13 @@ void PreviewController::beginGeneration(
     m_generation = generation;
     m_remoteDirectoryActive = remoteDirectoryActive;
     m_dispatchTimer.stop();
+    m_deferredRetryTimer.stop();
     clearQueuedWork();
     m_appliedPreviews.clear();
     m_failedSources.clear();
-    m_deferredUntil.clear();
+    m_unsupportedSources.clear();
+    m_deferredPreviews.clear();
+    m_hasVisibleRange = false;
 }
 
 void PreviewController::setEnabled(bool enabled)
@@ -78,6 +89,7 @@ void PreviewController::setEnabled(bool enabled)
     m_enabled = enabled;
     if (!m_enabled) {
         m_dispatchTimer.stop();
+        m_deferredRetryTimer.stop();
         clearQueuedWork();
     }
 }
@@ -87,7 +99,16 @@ void PreviewController::requestVisibleRange(
     int lastIndex,
     int physicalTarget)
 {
+    m_hasVisibleRange = m_enabled
+        && !m_remoteDirectoryActive
+        && lastIndex >= firstIndex;
+    if (m_hasVisibleRange) {
+        m_lastVisibleFirst = firstIndex;
+        m_lastVisibleLast = lastIndex;
+        m_lastVisibleTarget = qMax(1, physicalTarget);
+    }
     replaceViewportQueue(firstIndex, lastIndex, physicalTarget);
+    armDeferredRetryTimer();
 }
 
 void PreviewController::requestSelectedPreview(
@@ -201,21 +222,42 @@ bool PreviewController::isInFlight(const QString &path) const
 
 bool PreviewController::isSuppressed(
     const DirectoryEntry &entry,
-    int target) const
+    int target)
 {
     const QString version = sourceVersion(entry);
-    const auto applied = m_appliedPreviews.constFind(entry.filePath);
-    if (applied != m_appliedPreviews.cend()
-        && applied->sourceVersion == version
-        && applied->target >= target) {
-        return true;
+    auto applied = m_appliedPreviews.constFind(entry.filePath);
+    if (applied != m_appliedPreviews.cend()) {
+        if (applied->sourceVersion != version) {
+            m_appliedPreviews.remove(entry.filePath);
+        } else if (applied->target >= target) {
+            return true;
+        }
     }
-    if (m_failedSources.value(entry.filePath) == version) {
-        return true;
+    auto failed = m_failedSources.constFind(entry.filePath);
+    if (failed != m_failedSources.cend()) {
+        if (failed.value() != version) {
+            m_failedSources.remove(entry.filePath);
+        } else {
+            return true;
+        }
     }
-    const auto deferred = m_deferredUntil.constFind(entry.filePath);
-    return deferred != m_deferredUntil.cend()
-        && deferred.value() > QDateTime::currentDateTimeUtc();
+    auto unsupported = m_unsupportedSources.constFind(entry.filePath);
+    if (unsupported != m_unsupportedSources.cend()) {
+        if (unsupported.value() != version) {
+            m_unsupportedSources.remove(entry.filePath);
+        } else {
+            return true;
+        }
+    }
+    const auto deferred = m_deferredPreviews.constFind(entry.filePath);
+    if (deferred == m_deferredPreviews.cend()) {
+        return false;
+    }
+    if (deferred->sourceVersion != version) {
+        m_deferredPreviews.remove(entry.filePath);
+        return false;
+    }
+    return deferred->retryAfter > QDateTime::currentDateTimeUtc();
 }
 
 void PreviewController::replaceViewportQueue(
@@ -263,12 +305,55 @@ void PreviewController::scheduleDispatch(int delayMs)
     }
 }
 
+void PreviewController::armDeferredRetryTimer()
+{
+    if (!m_enabled || m_remoteDirectoryActive || !m_hasVisibleRange) {
+        m_deferredRetryTimer.stop();
+        return;
+    }
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QDateTime earliest;
+    for (auto it = m_deferredPreviews.cbegin();
+         it != m_deferredPreviews.cend();
+         ++it) {
+        if (it.value().retryAfter <= now) {
+            continue;
+        }
+        if (!earliest.isValid() || it.value().retryAfter < earliest) {
+            earliest = it.value().retryAfter;
+        }
+    }
+    if (!earliest.isValid()) {
+        m_deferredRetryTimer.stop();
+        return;
+    }
+
+    const qint64 delay = now.msecsTo(earliest);
+    const qint64 boundedDelay = qMax<qint64>(
+        1,
+        qMin<qint64>(delay, std::numeric_limits<int>::max()));
+    m_deferredRetryTimer.start(static_cast<int>(boundedDelay));
+}
+
 void PreviewController::clearQueuedWork()
 {
     m_viewportQueue.clear();
     m_viewportPaths.clear();
     m_selectedIntent = {};
     m_hasSelectedIntent = false;
+}
+
+void PreviewController::handleDeferredRetry()
+{
+    if (!m_enabled || m_remoteDirectoryActive || !m_hasVisibleRange) {
+        return;
+    }
+    replaceViewportQueue(
+        m_lastVisibleFirst,
+        m_lastVisibleLast,
+        m_lastVisibleTarget);
+    armDeferredRetryTimer();
 }
 
 void PreviewController::dispatchQueued()
@@ -416,13 +501,33 @@ void PreviewController::applyBatchItem(
 
     const QString status = item.value(QStringLiteral("status")).toString();
     if (status == QStringLiteral("deferred")) {
-        m_deferredUntil.insert(
+        Intent deferredIntent;
+        for (const Intent &intent : request.intents) {
+            if (intent.path == filePath) {
+                deferredIntent = intent;
+                break;
+            }
+        }
+        m_deferredPreviews.insert(
             filePath,
-            QDateTime::currentDateTimeUtc().addSecs(3));
+            DeferredPreviewState {
+                currentVersion,
+                QDateTime::currentDateTimeUtc().addSecs(3),
+                deferredIntent,
+            });
+        armDeferredRetryTimer();
+        return;
+    }
+    if (status == QStringLiteral("unsupported")) {
+        m_deferredPreviews.remove(filePath);
+        m_unsupportedSources.insert(filePath, currentVersion);
+        armDeferredRetryTimer();
         return;
     }
     if (status == QStringLiteral("failed")) {
+        m_deferredPreviews.remove(filePath);
         m_failedSources.insert(filePath, currentVersion);
+        armDeferredRetryTimer();
         return;
     }
     if (status != QStringLiteral("ready")
@@ -439,6 +544,9 @@ void PreviewController::applyBatchItem(
         return;
     }
 
+    m_deferredPreviews.remove(filePath);
+    m_unsupportedSources.remove(filePath);
+    m_failedSources.remove(filePath);
     m_appliedPreviews.insert(
         filePath,
         AppliedPreview {
@@ -447,6 +555,7 @@ void PreviewController::applyBatchItem(
                 item.value(QStringLiteral("cacheTier")).toString(),
                 request.target),
         });
+    armDeferredRetryTimer();
 }
 
 } // namespace Astrea::Explorer::Native::Backend

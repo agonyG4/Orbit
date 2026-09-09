@@ -29,6 +29,10 @@ private slots:
     void hydratesGeneratedVideoImmediately();
     void rejectsSourceVersionChanges();
     void prioritizesSelectedPreviewWithoutDroppingViewport();
+    void upgradesSelectedPreviewAfterLowerResolutionResult();
+    void suppressesRepeatedUnsupportedBySourceVersion();
+    void changedSourceVersionEscapesDeferredState();
+    void retriesDeferredVisibleItemOnceAfterDeadline();
 };
 
 DirectoryEntry previewEntry(const QString &path)
@@ -351,6 +355,160 @@ void PreviewControllerTest::prioritizesSelectedPreviewWithoutDroppingViewport()
         QStringLiteral("/fixture/three.png"),
     };
     QCOMPARE(client.utilityRequests().at(1).arguments.mid(1), expectedPaths);
+}
+
+void PreviewControllerTest::upgradesSelectedPreviewAfterLowerResolutionResult()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/selected.mp4"));
+    entry.fileSize = 10;
+    model.applyEntries({entry}, 20);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(20, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("ready")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/normal.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("normal")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:10")},
+            },
+        });
+    client.completeUtility(1, result);
+    QTRY_COMPARE(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole).toUrl(),
+        QUrl(QStringLiteral("file:///cache/normal.png")));
+
+    controller.requestSelectedPreview(entry.filePath, 640);
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    QCOMPARE(client.utilityRequests().at(1).arguments.at(0), QStringLiteral("640"));
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments.mid(1),
+        QStringList {entry.filePath});
+}
+
+void PreviewControllerTest::suppressesRepeatedUnsupportedBySourceVersion()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/notes.txt"));
+    entry.fileSize = 5;
+    model.applyEntries({entry}, 20);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(20, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("unsupported")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:5")},
+            },
+        });
+    client.completeUtility(1, result);
+    QTest::qWait(40);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTest::qWait(100);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    entry.fileSize = 6;
+    model.applyEntries({entry}, 20);
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+}
+
+void PreviewControllerTest::changedSourceVersionEscapesDeferredState()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/changing.mp4"));
+    entry.fileSize = 10;
+    model.applyEntries({entry}, 21);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(21, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult result;
+    result.requestId = 1;
+    result.operation = QStringLiteral("thumbnail-batch");
+    result.ok = true;
+    result.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("deferred")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:10")},
+            },
+        });
+    client.completeUtility(1, result);
+    QTest::qWait(40);
+
+    entry.fileSize = 11;
+    model.applyEntries({entry}, 21);
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+}
+
+void PreviewControllerTest::retriesDeferredVisibleItemOnceAfterDeadline()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/recent.mp4"));
+    entry.fileSize = 12;
+    model.applyEntries({entry}, 22);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(22, false);
+    controller.setEnabled(true);
+
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult deferred;
+    deferred.requestId = 1;
+    deferred.operation = QStringLiteral("thumbnail-batch");
+    deferred.ok = true;
+    deferred.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("deferred")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:12")},
+            },
+        });
+    client.completeUtility(1, deferred);
+    QTest::qWait(40);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 3800);
+    QTest::qWait(100);
+    QCOMPARE(client.utilityRequests().size(), 2);
 }
 
 QTEST_GUILESS_MAIN(PreviewControllerTest)

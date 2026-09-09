@@ -76,6 +76,32 @@ void writeProviderTheme(const QString &root)
     QVERIFY(symbolic.save(symbolicPath, "PNG"));
 }
 
+void writeScaledProviderTheme(const QString &root)
+{
+    const QString theme = QDir(root).filePath(QStringLiteral("ScaledProviderTheme"));
+    writeFile(
+        QDir(theme).filePath(QStringLiteral("index.theme")),
+        QByteArrayLiteral(
+            "[Icon Theme]\nName=Scaled Provider Theme\nComment=Scale regression theme\n"
+            "Directories=16x16/mimetypes\nScaledDirectories=16x16@2/mimetypes\n\n"
+            "[16x16/mimetypes]\nSize=16\nScale=1\nContext=MimeTypes\nType=Fixed\n\n"
+            "[16x16@2/mimetypes]\nSize=16\nScale=2\nContext=MimeTypes\nType=Fixed\n"));
+
+    const QString scaleOnePath = QDir(theme).filePath(
+        QStringLiteral("16x16/mimetypes/test-mime.png"));
+    QVERIFY(QDir().mkpath(QFileInfo(scaleOnePath).absolutePath()));
+    QImage scaleOne(16, 16, QImage::Format_ARGB32_Premultiplied);
+    scaleOne.fill(QColor(0x22, 0x66, 0xcc));
+    QVERIFY(scaleOne.save(scaleOnePath, "PNG"));
+
+    const QString scaleTwoPath = QDir(theme).filePath(
+        QStringLiteral("16x16@2/mimetypes/test-mime.png"));
+    QVERIFY(QDir().mkpath(QFileInfo(scaleTwoPath).absolutePath()));
+    QImage scaleTwo(32, 32, QImage::Format_ARGB32_Premultiplied);
+    scaleTwo.fill(QColor(0xdd, 0x88, 0x22));
+    QVERIFY(scaleTwo.save(scaleTwoPath, "PNG"));
+}
+
 void writeThemeConfig(const QString &path)
 {
     QSaveFile file(path);
@@ -98,6 +124,7 @@ private slots:
     void rendersSymbolicCandidateFromUrl();
     void rendersLocalFileIconRoute();
     void rendersThemeIconAtRequestedDpr();
+    void rendersScaleOneAndTwoAssetsThroughProvider();
     void rendersLocalFileIconAtRequestedDpr();
     void fallsBackToRichThemedIdentityWhenCustomFileDisappears();
     void alwaysReturnsBuiltInFallbackForMissingCandidates();
@@ -195,6 +222,42 @@ void IconImageProviderTest::rendersThemeIconAtRequestedDpr()
     QCOMPARE(image.size(), QSize(32, 32));
     QCOMPARE(image.devicePixelRatio(), 2.0);
     QCOMPARE(requested, QSize(32, 32));
+}
+
+void IconImageProviderTest::rendersScaleOneAndTwoAssetsThroughProvider()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeScaledProviderTheme(directory.path());
+    QIcon::setThemeSearchPaths({directory.path()});
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeFile(
+        configPath,
+        QByteArrayLiteral("{\"desktop_icon_theme\":\"ScaledProviderTheme\"}"));
+    qunsetenv("ASTREA_ICON_THEME");
+    IconThemeService service(configPath);
+    AstreaIconImageProvider provider(&service);
+
+    const auto render = [&](qreal devicePixelRatio) {
+        const QString source = service.iconSourceForNames(
+            {QStringLiteral("test-mime")}, 16, devicePixelRatio);
+        const QString id = source.mid(QStringLiteral("image://astrea-icons/").size());
+        QSize requested;
+        const QImage image = provider.requestImage(id, &requested, QSize());
+        return image;
+    };
+
+    const QImage scaleOne = render(1.0);
+    const QImage scaleTwo = render(2.0);
+    QVERIFY(!scaleOne.isNull());
+    QVERIFY(!scaleTwo.isNull());
+    QCOMPARE(scaleOne.size(), QSize(16, 16));
+    QCOMPARE(scaleOne.devicePixelRatio(), 1.0);
+    QCOMPARE(scaleOne.pixelColor(8, 8), QColor(0x22, 0x66, 0xcc));
+    QCOMPARE(scaleTwo.size(), QSize(32, 32));
+    QCOMPARE(scaleTwo.devicePixelRatio(), 2.0);
+    QCOMPARE(scaleTwo.pixelColor(16, 16), QColor(0xdd, 0x88, 0x22));
 }
 
 void IconImageProviderTest::rendersLocalFileIconAtRequestedDpr()
