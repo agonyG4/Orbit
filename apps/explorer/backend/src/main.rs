@@ -5,6 +5,7 @@ mod entries;
 mod file_ops;
 mod file_visual_metadata;
 mod json;
+mod thumbnail_cache;
 mod thumbnails;
 mod utility;
 mod worker;
