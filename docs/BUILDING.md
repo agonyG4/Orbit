@@ -4,7 +4,9 @@
 
 Install Qt 6.11 or newer with Core, Gui, Qml, Quick, QuickControls2, and Test;
 CMake 3.23 or newer; a C++17 compiler; Rust/Cargo; and `dbus-run-session` for
-the portal test.
+the portal test. Building Explorer also requires the system GLib/GIO development
+interfaces (`glib-2.0` and `gio-2.0`) discoverable through the normal Rust
+`pkg-config` integration. GTK is not required by Explorer.
 
 ## Canonical builds
 

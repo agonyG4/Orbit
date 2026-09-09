@@ -172,9 +172,9 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
         &AppStateFacade::handleModelChanged);
     connect(
         m_model,
-        &QAbstractItemModel::dataChanged,
+        &DirectoryModel::contentChanged,
         this,
-        [this]() { handleModelChanged(); });
+        &AppStateFacade::handleModelChanged);
     connect(
         m_model,
         &QAbstractItemModel::rowsRemoved,

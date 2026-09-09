@@ -10,6 +10,7 @@
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QtTest>
 
 #define private public
@@ -111,6 +112,14 @@ void writeAlphaIcon(const QString &root, const QString &directory, const QString
             image.setPixelColor(x, y, color);
         }
     }
+    QVERIFY2(image.save(path, "PNG"), qPrintable(path));
+}
+
+void writeSolidImage(const QString &path, const QSize &size, const QColor &color)
+{
+    QVERIFY2(QDir().mkpath(QFileInfo(path).absolutePath()), qPrintable(path));
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(color);
     QVERIFY2(image.save(path, "PNG"), qPrintable(path));
 }
 
@@ -220,6 +229,32 @@ void writeThemeConfig(const QString &path, const QString &theme, const QString &
     QVERIFY2(file.commit(), qPrintable(path));
 }
 
+void configureSingleIconTheme(
+    const QString &root,
+    const QString &theme,
+    const QString &iconName,
+    const QColor &color,
+    QString *configPath)
+{
+    writeSimpleTheme(root, theme);
+    writeIcon(root, theme + QStringLiteral("/16x16/mimetypes"), iconName, color);
+    QIcon::setThemeSearchPaths({root});
+    *configPath = QDir(root).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(*configPath, theme);
+    qunsetenv("ASTREA_ICON_THEME");
+}
+
+QImage renderThemeSource(IconThemeService &service, const QString &source, const QSize &size)
+{
+    const QString prefix = QStringLiteral("image://astrea-icons/theme/");
+    const QString id = source.mid(prefix.size());
+    const int queryIndex = id.indexOf(QLatin1Char('?'));
+    const QString encodedCandidates = queryIndex < 0 ? id : id.left(queryIndex);
+    const QStringList candidates = QUrl::fromPercentEncoding(encodedCandidates.toUtf8())
+        .split(QLatin1Char('|'), Qt::SkipEmptyParts);
+    return service.renderIcon(candidates, size);
+}
+
 void writeAstreaThemeConfig(const QString &path, const QString &theme)
 {
     QVERIFY2(QDir().mkpath(QFileInfo(path).absolutePath()), qPrintable(path));
@@ -262,6 +297,11 @@ private slots:
     void missingSymbolicCandidateUsesSymbolicFallback();
     void missingEmblemIsOmitted();
     void rendersAvailableEmblem();
+    void resolvesSymbolicLinkEmblemIdentity();
+    void resolvesPrefixedSymbolicLinkEmblemIdentity();
+    void resolvesAutomaticAccessEmblemIdentities();
+    void resolvesBareMetadataEmblemKeyword();
+    void semanticIconOverrideBeatsExactCustomFile();
     void reloadsCanonicalConfigAfterAtomicReplacement();
     void rendersAndReloadsAppearanceVariant();
     void environmentOverrideWinsOverCanonicalConfig();
@@ -771,6 +811,111 @@ void IconThemeServiceTest::rendersAvailableEmblem()
     const QString source = service.emblemIconSource(QStringLiteral("astrea-test"), 16);
     QVERIFY(!source.isEmpty());
     QVERIFY(source.contains(QStringLiteral("emblem-astrea-test")));
+}
+
+void IconThemeServiceTest::resolvesSymbolicLinkEmblemIdentity()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString configPath;
+    configureSingleIconTheme(
+        directory.path(),
+        QStringLiteral("EmblemTheme"),
+        QStringLiteral("symbolic-link-symbolic"),
+        QColor(0x22, 0xaa, 0x66),
+        &configPath);
+    IconThemeService service(configPath);
+
+    QVERIFY(!service.emblemIconSource(QStringLiteral("symbolic-link-symbolic"), 16).isEmpty());
+}
+
+void IconThemeServiceTest::resolvesPrefixedSymbolicLinkEmblemIdentity()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString configPath;
+    configureSingleIconTheme(
+        directory.path(),
+        QStringLiteral("EmblemTheme"),
+        QStringLiteral("emblem-symbolic-link-symbolic"),
+        QColor(0x22, 0xaa, 0x66),
+        &configPath);
+    IconThemeService service(configPath);
+
+    QVERIFY(!service.emblemIconSource(QStringLiteral("symbolic-link-symbolic"), 16).isEmpty());
+}
+
+void IconThemeServiceTest::resolvesAutomaticAccessEmblemIdentities()
+{
+    ThemeSearchPathGuard guard;
+    for (const QString &iconName : {
+             QStringLiteral("not-accessible-symbolic"),
+             QStringLiteral("readonly-symbolic")}) {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString configPath;
+        configureSingleIconTheme(
+            directory.path(),
+            QStringLiteral("EmblemTheme"),
+            iconName,
+            QColor(0x22, 0xaa, 0x66),
+            &configPath);
+        IconThemeService service(configPath);
+
+        QVERIFY2(
+            !service.emblemIconSource(iconName, 16).isEmpty(),
+            qPrintable(iconName));
+    }
+}
+
+void IconThemeServiceTest::resolvesBareMetadataEmblemKeyword()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString configPath;
+    configureSingleIconTheme(
+        directory.path(),
+        QStringLiteral("EmblemTheme"),
+        QStringLiteral("emblem-favorite"),
+        QColor(0x22, 0xaa, 0x66),
+        &configPath);
+    IconThemeService service(configPath);
+
+    QVERIFY(!service.emblemIconSource(QStringLiteral("favorite"), 16).isEmpty());
+}
+
+void IconThemeServiceTest::semanticIconOverrideBeatsExactCustomFile()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString configPath;
+    configureSingleIconTheme(
+        directory.path(),
+        QStringLiteral("RichTheme"),
+        QStringLiteral("semantic-application"),
+        QColor(0xdd, 0x33, 0x33),
+        &configPath);
+    const QString customPath = QDir(directory.path()).filePath(QStringLiteral("custom.png"));
+    writeSolidImage(customPath, QSize(16, 16), QColor(0x33, 0x33, 0xdd));
+    IconThemeService service(configPath);
+
+    const QString source = service.richFileIconSource(
+        QStringLiteral("/tmp/example.desktop"),
+        false,
+        false,
+        16,
+        QStringLiteral("semantic-application"),
+        {},
+        QUrl::fromLocalFile(customPath),
+        QStringLiteral("1"));
+    QVERIFY(source.startsWith(QStringLiteral("image://astrea-icons/theme/")));
+    QCOMPARE(
+        centerColor(renderThemeSource(service, source, QSize(16, 16))),
+        QColor(0xdd, 0x33, 0x33));
 }
 
 void IconThemeServiceTest::reloadsCanonicalConfigAfterAtomicReplacement()

@@ -125,18 +125,7 @@ fn query_visual_metadata(path: &str) -> VisualMetadata {
         }
     }
 
-    let mut automatic = Vec::new();
-    if result.is_symlink {
-        automatic.push("symbolic-link-symbolic".to_string());
-    }
-    if info.has_attribute("access::can-read") && !info.boolean("access::can-read") {
-        automatic.push("not-accessible-symbolic".to_string());
-    } else if info.has_attribute("access::can-write")
-        && !info.boolean("access::can-write")
-        && !path_buf.starts_with(trash_root())
-    {
-        automatic.push("readonly-symbolic".to_string());
-    }
+    let automatic = automatic_emblem_names(&info, result.is_symlink, &path_buf);
     let metadata = info
         .attribute_stringv("metadata::emblems")
         .iter()
@@ -214,9 +203,15 @@ fn normalize_visual_icon_with_emblems(
     path: &Path,
 ) -> (NormalizedIcon, Vec<String>) {
     if let Some(custom) = custom {
-        let normalized = normalize_icon_and_emblems(custom, path);
-        if !normalized.0.names.is_empty() || normalized.0.file_url.is_some() {
-            return normalized;
+        let (mut icon, custom_emblems) = normalize_icon_and_emblems(custom, path);
+        if !icon.names.is_empty() || icon.file_url.is_some() {
+            let mut emblems = custom_emblems;
+            if let Some(standard) = standard {
+                let (standard_icon, standard_emblems) = normalize_icon_and_emblems(standard, path);
+                append_icon_names(&mut icon.names, standard_icon.names);
+                emblems = merge_emblem_names(&emblems, &standard_emblems);
+            }
+            return (icon, emblems);
         }
     }
     standard
@@ -278,19 +273,41 @@ fn append_icon_names(names: &mut Vec<String>, candidates: Vec<String>) {
     }
 }
 
+fn canonical_emblem_key(name: &str) -> String {
+    name.trim()
+        .strip_prefix("emblem-")
+        .unwrap_or(name.trim())
+        .to_string()
+}
+
 fn merge_emblem_names(automatic: &[String], metadata: &[String]) -> Vec<String> {
     let mut result = Vec::new();
+    let mut keys = Vec::new();
     for name in automatic.iter().chain(metadata.iter()) {
-        let normalized = name
-            .trim()
-            .trim_start_matches("emblem-")
-            .trim_end_matches("-symbolic")
-            .to_string();
-        if !normalized.is_empty() && !result.contains(&normalized) {
-            result.push(normalized);
+        let identity = name.trim();
+        let key = canonical_emblem_key(identity);
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+            result.push(identity.to_string());
         }
     }
     result
+}
+
+fn automatic_emblem_names(info: &gio::FileInfo, is_symlink: bool, path: &Path) -> Vec<String> {
+    let mut automatic = Vec::new();
+    if is_symlink {
+        automatic.push("symbolic-link-symbolic".to_string());
+    }
+    if info.has_attribute("access::can-read") && !info.boolean("access::can-read") {
+        automatic.push("not-accessible-symbolic".to_string());
+    } else if info.has_attribute("access::can-write")
+        && !info.boolean("access::can-write")
+        && !path.starts_with(trash_root())
+    {
+        automatic.push("readonly-symbolic".to_string());
+    }
+    automatic
 }
 
 fn file_version(path: &Path) -> Option<String> {
@@ -409,7 +426,32 @@ mod tests {
             normalized.file_url,
             Some(gio::File::for_path(&custom).uri().to_string())
         );
-        assert!(normalized.names.is_empty());
+        assert!(normalized.names.contains(&"text-x-generic".to_string()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_local_file_icon_keeps_standard_themed_fallback_names() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-visual-custom-fallback-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let custom = root.join("custom.svg");
+        fs::write(&custom, "<svg/>").unwrap();
+
+        let standard = gio::ThemedIcon::from_names(&["text-x-generic", "document"]);
+        let custom_icon: gio::Icon = gio::FileIcon::new(&gio::File::for_path(&custom)).upcast();
+        let standard_icon: gio::Icon = standard.upcast();
+        let normalized =
+            normalize_visual_icon_with_emblems(Some(&custom_icon), Some(&standard_icon), &custom).0;
+
+        assert!(normalized.file_url.is_some());
+        assert_eq!(
+            &normalized.names[..2],
+            &["text-x-generic".to_string(), "document".to_string()]
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -456,21 +498,66 @@ mod tests {
 
     #[test]
     fn emblem_merge_deduplicates_automatic_and_metadata_names() {
-        let automatic = vec!["symbolic-link".to_string(), "readonly".to_string()];
+        let automatic = vec![
+            "symbolic-link-symbolic".to_string(),
+            "readonly-symbolic".to_string(),
+        ];
         let metadata = vec![
-            "emblem-readonly".to_string(),
+            "emblem-readonly-symbolic".to_string(),
             "readonly-symbolic".to_string(),
             "emblem-favorite".to_string(),
-            "symbolic-link".to_string(),
+            "symbolic-link-symbolic".to_string(),
         ];
 
         assert_eq!(
             merge_emblem_names(&automatic, &metadata),
             vec![
-                "symbolic-link".to_string(),
-                "readonly".to_string(),
-                "favorite".to_string(),
+                "symbolic-link-symbolic".to_string(),
+                "readonly-symbolic".to_string(),
+                "emblem-favorite".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn unsupported_icon_normalizes_to_empty_identity() {
+        let icon: gio::Icon =
+            gio::BytesIcon::new(&gio::glib::Bytes::from_static(b"unsupported")).upcast();
+        let normalized = normalize_icon(&icon, Path::new("/tmp/item"));
+
+        assert_eq!(normalized, NormalizedIcon::default());
+    }
+
+    #[test]
+    fn missing_optional_file_info_attributes_are_safe() {
+        let info = gio::FileInfo::new();
+
+        assert!(!info.has_attribute("access::can-read"));
+        assert!(!info.has_attribute("access::can-write"));
+        assert!(info.attribute_string("metadata::custom-icon").is_none());
+        assert!(
+            info.attribute_string("metadata::custom-icon-name")
+                .is_none()
+        );
+        assert!(info.attribute_stringv("metadata::emblems").is_empty());
+    }
+
+    #[test]
+    fn automatic_access_emblems_use_gio_flags() {
+        let unreadable = gio::FileInfo::new();
+        unreadable.set_attribute_boolean("access::can-read", false);
+        unreadable.set_attribute_boolean("access::can-write", false);
+        assert_eq!(
+            automatic_emblem_names(&unreadable, false, Path::new("/tmp/item")),
+            vec!["not-accessible-symbolic".to_string()]
+        );
+
+        let readonly = gio::FileInfo::new();
+        readonly.set_attribute_boolean("access::can-read", true);
+        readonly.set_attribute_boolean("access::can-write", false);
+        assert_eq!(
+            automatic_emblem_names(&readonly, false, Path::new("/tmp/item")),
+            vec!["readonly-symbolic".to_string()]
         );
     }
 

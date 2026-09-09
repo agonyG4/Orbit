@@ -77,6 +77,7 @@ public:
 
 signals:
     void countChanged();
+    void contentChanged();
 
 private:
     QVector<DirectoryEntry> m_entries;

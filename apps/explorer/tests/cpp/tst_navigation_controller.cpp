@@ -32,6 +32,10 @@ private slots:
     void honorsConfiguredRemotePrefixesAtPathBoundaries();
     void forwardsListingOptionsToBackend();
     void requestsVisibleVisualMetadataInBoundedBatches();
+    void queuesVisualMetadataInModelOrder();
+    void latestVisibleRangeReplacesQueuedWork();
+    void latestVisibleRangeWinsAfterInFlightBatch();
+    void duplicateVisibleRangeSchedulingDoesNotDuplicateRequests();
     void ignoresStaleVisualMetadataAfterNavigation();
     void skipsRemoteVisualMetadataRequests();
 };
@@ -183,6 +187,131 @@ void NavigationControllerTest::requestsVisibleVisualMetadataInBoundedBatches()
     QTRY_COMPARE(model.data(model.index(firstRow, 0), DirectoryModel::FileIconMetadataReadyRole).toBool(), true);
     QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 1000);
     QCOMPARE(client.utilityRequests().at(1).arguments.size(), 6);
+}
+
+void NavigationControllerTest::queuesVisualMetadataInModelOrder()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    QVector<DirectoryEntry> entries;
+    for (int index = 0; index < 6; ++index) {
+        entries.append(navigationEntry(
+            QStringLiteral("row-%1.txt").arg(index),
+            QStringLiteral("/fixture/row-%1.txt").arg(index)));
+    }
+    client.completeList(listRequest, entries);
+    QTRY_COMPARE(model.count(), 6);
+
+    navigation.requestFileVisualMetadata(0, 5);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+    const QStringList expected {
+        QStringLiteral("/fixture/row-0.txt"),
+        QStringLiteral("/fixture/row-1.txt"),
+        QStringLiteral("/fixture/row-2.txt"),
+        QStringLiteral("/fixture/row-3.txt"),
+        QStringLiteral("/fixture/row-4.txt"),
+        QStringLiteral("/fixture/row-5.txt"),
+    };
+    QCOMPARE(
+        client.utilityRequests().constFirst().arguments,
+        expected);
+}
+
+void NavigationControllerTest::latestVisibleRangeReplacesQueuedWork()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    QVector<DirectoryEntry> entries;
+    for (int index = 0; index < 12; ++index) {
+        entries.append(navigationEntry(
+            QStringLiteral("row-%1.txt").arg(index),
+            QStringLiteral("/fixture/row-%1.txt").arg(index)));
+    }
+    client.completeList(listRequest, entries);
+    QTRY_COMPARE(model.count(), 12);
+
+    navigation.requestFileVisualMetadata(0, 2);
+    navigation.requestFileVisualMetadata(7, 9);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+    const QStringList expected {
+        QStringLiteral("/fixture/row-7.txt"),
+        QStringLiteral("/fixture/row-8.txt"),
+        QStringLiteral("/fixture/row-9.txt"),
+    };
+    QCOMPARE(
+        client.utilityRequests().constFirst().arguments,
+        expected);
+}
+
+void NavigationControllerTest::latestVisibleRangeWinsAfterInFlightBatch()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    QVector<DirectoryEntry> entries;
+    for (int index = 0; index < 12; ++index) {
+        entries.append(navigationEntry(
+            QStringLiteral("row-%1.txt").arg(index),
+            QStringLiteral("/fixture/row-%1.txt").arg(index)));
+    }
+    client.completeList(listRequest, entries);
+    QTRY_COMPARE(model.count(), 12);
+
+    navigation.requestFileVisualMetadata(0, 2);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+    navigation.requestFileVisualMetadata(5, 7);
+    navigation.requestFileVisualMetadata(9, 11);
+
+    UtilityResult result;
+    result.operation = QStringLiteral("file-visual-metadata");
+    result.ok = true;
+    result.data.insert(QStringLiteral("items"), QJsonArray {});
+    client.completeUtility(BackendRequestId(2), result);
+
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 2, 1000);
+    const QStringList expected {
+        QStringLiteral("/fixture/row-9.txt"),
+        QStringLiteral("/fixture/row-10.txt"),
+        QStringLiteral("/fixture/row-11.txt"),
+    };
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments,
+        expected);
+}
+
+void NavigationControllerTest::duplicateVisibleRangeSchedulingDoesNotDuplicateRequests()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    const BackendRequestId listRequest = navigation.navigateTo(QStringLiteral("/fixture"));
+    QVector<DirectoryEntry> entries;
+    for (int index = 0; index < 3; ++index) {
+        entries.append(navigationEntry(
+            QStringLiteral("row-%1.txt").arg(index),
+            QStringLiteral("/fixture/row-%1.txt").arg(index)));
+    }
+    client.completeList(listRequest, entries);
+    QTRY_COMPARE(model.count(), 3);
+
+    navigation.requestFileVisualMetadata(0, 2);
+    navigation.requestFileVisualMetadata(0, 2);
+    QTRY_COMPARE_WITH_TIMEOUT(client.utilityRequests().size(), 1, 1000);
+    QTest::qWait(100);
+    QCOMPARE(client.utilityRequests().size(), 1);
 }
 
 void NavigationControllerTest::ignoresStaleVisualMetadataAfterNavigation()

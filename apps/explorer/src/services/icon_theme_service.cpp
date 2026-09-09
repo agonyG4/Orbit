@@ -380,12 +380,21 @@ QString IconThemeService::emblemIconSource(const QString &name, int size) const
         return {};
     }
 
-    const QString candidateName = normalizedName.startsWith(QStringLiteral("emblem-"))
+    const bool prefixed = normalizedName.startsWith(QStringLiteral("emblem-"));
+    const QString keyword = prefixed
+        ? normalizedName.mid(QStringLiteral("emblem-").size())
+        : normalizedName;
+    const QString emblemName = prefixed
         ? normalizedName
         : QStringLiteral("emblem-") + normalizedName;
-    QStringList candidates {candidateName};
-    if (!isSymbolicName(candidateName)) {
-        candidates.append(candidateName + QStringLiteral("-symbolic"));
+    QStringList candidates;
+    appendUnique(candidates, emblemName);
+    appendUnique(candidates, prefixed ? keyword : normalizedName);
+    if (!isSymbolicName(emblemName)) {
+        appendUnique(candidates, emblemName + QStringLiteral("-symbolic"));
+    }
+    if (!isSymbolicName(keyword)) {
+        appendUnique(candidates, keyword + QStringLiteral("-symbolic"));
     }
     if (candidates.isEmpty() || resolveIcon(candidates).isNull()) {
         return {};
@@ -436,7 +445,8 @@ QString IconThemeService::richFileIconSource(
     names.append(iconCandidatesForFile(path, isDirectory, isExecutable));
 
     const QStringList fallbackNames = iconCandidatesForNames(names);
-    if (iconFileUrl.isValid() && iconFileUrl.isLocalFile()) {
+    const bool hasSemanticOverride = !semanticIconName.trimmed().isEmpty();
+    if (!hasSemanticOverride && iconFileUrl.isValid() && iconFileUrl.isLocalFile()) {
         const QFileInfo iconFile(iconFileUrl.toLocalFile());
         if (iconFile.isFile()) {
             const QString version = iconFileVersion.trimmed().isEmpty()

@@ -97,6 +97,7 @@ private slots:
     void rendersEncodedCandidateSynchronously();
     void rendersSymbolicCandidateFromUrl();
     void rendersLocalFileIconRoute();
+    void fallsBackToRichThemedIdentityWhenCustomFileDisappears();
     void alwaysReturnsBuiltInFallbackForMissingCandidates();
 };
 
@@ -173,6 +174,42 @@ void IconImageProviderTest::rendersLocalFileIconRoute()
     QVERIFY(!image.isNull());
     QCOMPARE(requested, QSize(16, 8));
     QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0xee, 0x77, 0x22));
+}
+
+void IconImageProviderTest::fallsBackToRichThemedIdentityWhenCustomFileDisappears()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeProviderTheme(directory.path());
+    QIcon::setThemeSearchPaths({directory.path()});
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfig(configPath);
+    qunsetenv("ASTREA_ICON_THEME");
+    IconThemeService service(configPath);
+    AstreaIconImageProvider provider(&service);
+
+    const QString customPath = QDir(directory.path()).filePath(QStringLiteral("custom.png"));
+    QImage custom(16, 16, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(QColor(0xee, 0x77, 0x22));
+    QVERIFY(custom.save(customPath, "PNG"));
+    const QString source = service.richFileIconSource(
+        QStringLiteral("/tmp/example.txt"),
+        false,
+        false,
+        16,
+        QString(),
+        {QStringLiteral("test-mime")},
+        QUrl::fromLocalFile(customPath),
+        QStringLiteral("1"));
+    QVERIFY(source.startsWith(QStringLiteral("image://astrea-icons/file/")));
+    QVERIFY(QFile::remove(customPath));
+
+    const QString id = source.mid(QStringLiteral("image://astrea-icons/").size());
+    QSize requested;
+    const QImage image = provider.requestImage(id, &requested, QSize(16, 16));
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0x33, 0xaa, 0x77));
 }
 
 void IconImageProviderTest::alwaysReturnsBuiltInFallbackForMissingCandidates()

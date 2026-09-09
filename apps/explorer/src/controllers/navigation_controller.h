@@ -173,6 +173,7 @@ private:
     QHash<BackendRequestId, VisualMetadataRequest> m_visualMetadataRequests;
     QSet<QString> m_pendingVisualMetadataPaths;
     QSet<QString> m_queuedVisualMetadataPaths;
+    QStringList m_queuedVisualMetadataOrder;
     QTimer m_visualMetadataTimer;
     BackendRequestId m_activeRequest = 0;
     quint64 m_generation = 0;

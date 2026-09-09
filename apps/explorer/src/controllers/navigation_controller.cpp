@@ -540,6 +540,8 @@ void NavigationController::requestFileVisualMetadata(int firstIndex, int lastInd
         return;
     }
 
+    QStringList desiredPaths;
+    QSet<QString> desiredPathSet;
     for (int row = first; row <= last; ++row) {
         const QModelIndex modelIndex = m_model->index(row, 0);
         if (!modelIndex.isValid()
@@ -552,13 +554,26 @@ void NavigationController::requestFileVisualMetadata(int firstIndex, int lastInd
 
         const QString path = m_model->data(modelIndex, DirectoryModel::FilePathRole).toString();
         if (path.isEmpty() || m_pendingVisualMetadataPaths.contains(path)
-            || m_queuedVisualMetadataPaths.contains(path)) {
+            || desiredPathSet.contains(path)) {
             continue;
         }
-        m_queuedVisualMetadataPaths.insert(path);
+        desiredPathSet.insert(path);
+        desiredPaths.append(path);
     }
 
-    if (!m_queuedVisualMetadataPaths.isEmpty() && m_visualMetadataRequests.isEmpty()) {
+    m_queuedVisualMetadataPaths.clear();
+    m_queuedVisualMetadataOrder.clear();
+    for (const QString &path : desiredPaths) {
+        m_queuedVisualMetadataPaths.insert(path);
+        m_queuedVisualMetadataOrder.append(path);
+    }
+
+    if (m_queuedVisualMetadataOrder.isEmpty()) {
+        m_visualMetadataTimer.stop();
+        return;
+    }
+
+    if (m_visualMetadataRequests.isEmpty()) {
         m_visualMetadataTimer.start();
     }
 }
@@ -673,12 +688,13 @@ void NavigationController::cancelVisualMetadata()
     m_visualMetadataRequests.clear();
     m_pendingVisualMetadataPaths.clear();
     m_queuedVisualMetadataPaths.clear();
+    m_queuedVisualMetadataOrder.clear();
 }
 
 void NavigationController::dispatchVisualMetadata()
 {
     if (m_visualMetadataRequests.size() != 0
-        || m_queuedVisualMetadataPaths.isEmpty()
+        || m_queuedVisualMetadataOrder.isEmpty()
         || m_generation == 0
         || m_remoteDirectoryActive) {
         return;
@@ -688,18 +704,21 @@ void NavigationController::dispatchVisualMetadata()
     constexpr qsizetype maxArgumentBytes = 256 * 1024;
     QStringList paths;
     qsizetype argumentBytes = 0;
-    const QSet<QString> queued = m_queuedVisualMetadataPaths;
-    for (const QString &path : queued) {
-        if (paths.size() >= maxBatchSize) {
-            break;
-        }
+    while (!m_queuedVisualMetadataOrder.isEmpty() && paths.size() < maxBatchSize) {
+        const QString path = m_queuedVisualMetadataOrder.constFirst();
         const qsizetype pathBytes = path.toUtf8().size();
+        if (pathBytes > maxArgumentBytes) {
+            m_queuedVisualMetadataOrder.removeFirst();
+            m_queuedVisualMetadataPaths.remove(path);
+            continue;
+        }
         if (!paths.isEmpty() && argumentBytes + pathBytes > maxArgumentBytes) {
             break;
         }
+        m_queuedVisualMetadataOrder.removeFirst();
+        m_queuedVisualMetadataPaths.remove(path);
         paths.append(path);
         argumentBytes += pathBytes;
-        m_queuedVisualMetadataPaths.remove(path);
         m_pendingVisualMetadataPaths.insert(path);
     }
     if (paths.isEmpty()) {

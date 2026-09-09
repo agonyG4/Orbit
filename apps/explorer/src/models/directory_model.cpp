@@ -459,6 +459,7 @@ bool DirectoryModel::updatePreview(
         entry.filePreviewUrl = previewUrl;
         const QModelIndex modelIndex = index(row, 0);
         emit dataChanged(modelIndex, modelIndex, {FilePreviewUrlRole});
+        emit contentChanged();
         return true;
     }
 
@@ -492,6 +493,9 @@ int DirectoryModel::updateMetadata(const QVariantList &items, quint64 generation
             }
             break;
         }
+    }
+    if (changedEntries > 0) {
+        emit contentChanged();
     }
     return changedEntries;
 }

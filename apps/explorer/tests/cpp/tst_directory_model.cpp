@@ -18,6 +18,7 @@ private slots:
     void acceptsSortOrderReplacement();
     void updatesOnlyMatchingPreview();
     void updatesMetadataWithoutResettingUnrelatedEntries();
+    void emitsSingleContentChangedForMetadataBatch();
     void exposesVisualMetadataRolesAndPartialUpdates();
     void removesPathsWithStableRowsAndGenerationChecks();
     void exposesRecentOnlyRoles();
@@ -241,6 +242,7 @@ void DirectoryModelTest::updatesMetadataWithoutResettingUnrelatedEntries()
     QVERIFY(model.applyEntries({first, second}, 7));
 
     QSignalSpy changedSpy(&model, &QAbstractItemModel::dataChanged);
+    QSignalSpy batchSpy(&model, &DirectoryModel::contentChanged);
     QVariantMap update;
     update.insert(QStringLiteral("filePath"), second.filePath);
     update.insert(QStringLiteral("fileKind"), QStringLiteral("IMAGE"));
@@ -250,6 +252,7 @@ void DirectoryModelTest::updatesMetadataWithoutResettingUnrelatedEntries()
 
     QCOMPARE(model.updateMetadata({update}, 7), 1);
     QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(batchSpy.count(), 1);
     QCOMPARE(
         model.data(model.index(0, 0), DirectoryModel::FileKindRole).toString(),
         QStringLiteral("TXT"));
@@ -263,6 +266,29 @@ void DirectoryModelTest::updatesMetadataWithoutResettingUnrelatedEntries()
     QVERIFY(changedSpy.constFirst().at(2).value<QVector<int>>().contains(
         DirectoryModel::FileKindRole));
     QVERIFY(model.updateMetadata({update}, 6) == 0);
+}
+
+void DirectoryModelTest::emitsSingleContentChangedForMetadataBatch()
+{
+    DirectoryModel model;
+    QVector<DirectoryEntry> entries;
+    QVariantList updates;
+    for (int index = 0; index < 64; ++index) {
+        const QString path = QStringLiteral("/tmp/batch-%1.txt").arg(index);
+        entries.append(makeEntry(QStringLiteral("batch-%1.txt").arg(index), path));
+        QVariantMap update;
+        update.insert(QStringLiteral("filePath"), path);
+        update.insert(QStringLiteral("fileKind"), QStringLiteral("IMAGE"));
+        updates.append(update);
+    }
+    QVERIFY(model.applyEntries(std::move(entries), 7));
+
+    QSignalSpy changedSpy(&model, &QAbstractItemModel::dataChanged);
+    QSignalSpy batchSpy(&model, &DirectoryModel::contentChanged);
+
+    QCOMPARE(model.updateMetadata(updates, 7), 64);
+    QCOMPARE(changedSpy.count(), 64);
+    QCOMPARE(batchSpy.count(), 1);
 }
 
 void DirectoryModelTest::exposesVisualMetadataRolesAndPartialUpdates()
