@@ -545,6 +545,9 @@ fn recent_retry_after_ms(metadata: &fs::Metadata, now: SystemTime) -> Option<u64
 }
 
 pub fn preview_url(path: &Path, is_dir: bool, modified_ms: i64, size: u64) -> String {
+    if is_dir {
+        return String::new();
+    }
     if is_svg(path) || file_media_type(path) == Some("image") {
         let version = SourceVersion {
             modified_secs: modified_ms.div_euclid(1000),
@@ -1219,7 +1222,7 @@ mod tests {
                 assert!(read_valid_thumbnail(&failure, &other_uri, version, None).is_err());
             }
         }
-        let leftovers = fs::read_dir(failure_application_dir(&cache).parent().unwrap())
+        let leftovers = fs::read_dir(failure_application_dir(&cache))
             .unwrap()
             .filter_map(Result::ok)
             .filter(|entry| {
