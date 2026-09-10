@@ -324,7 +324,15 @@ fn search_dir_recursive(
     depth: usize,
     out: &mut Vec<Entry>,
 ) -> Result<(), String> {
-    search_dir_recursive_with_preview(root, dir, show_hidden, query, depth, PreviewMode::Direct, out)
+    search_dir_recursive_with_preview(
+        root,
+        dir,
+        show_hidden,
+        query,
+        depth,
+        PreviewMode::Direct,
+        out,
+    )
 }
 
 fn search_dir_recursive_with_preview(
@@ -960,7 +968,11 @@ mod tests {
             &mut none_entries,
         )
         .unwrap();
-        assert!(none_entries.iter().all(|entry| entry.preview_url.is_empty()));
+        assert!(
+            none_entries
+                .iter()
+                .all(|entry| entry.preview_url.is_empty())
+        );
 
         let mut direct_entries = Vec::new();
         search_dir_recursive_with_preview(
@@ -974,12 +986,13 @@ mod tests {
         )
         .unwrap();
         assert!(direct_entries.iter().any(|entry| {
-            entry.path.ends_with("photo.png")
-                && entry.preview_url.contains("cacheTier=direct")
+            entry.path.ends_with("photo.png") && entry.preview_url.contains("cacheTier=direct")
         }));
-        assert!(direct_entries
-            .iter()
-            .any(|entry| entry.path.ends_with("clip.mp4") && entry.preview_url.is_empty()));
+        assert!(
+            direct_entries
+                .iter()
+                .any(|entry| entry.path.ends_with("clip.mp4") && entry.preview_url.is_empty())
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -987,17 +1000,17 @@ mod tests {
     #[test]
     fn initial_listing_does_not_validate_cached_png() {
         use crate::thumbnail_cache::{
-            canonical_uri, tier_path, write_standard_thumbnail, SourceVersion, ThumbnailTier,
+            SourceVersion, ThumbnailTier, canonical_uri, tier_path, write_standard_thumbnail,
         };
 
         let root = std::env::temp_dir().join(format!(
             "astrea-entry-initial-listing-cache-boundary-{}",
             std::process::id()
         ));
-        let cache_home = root
-            .parent()
-            .unwrap()
-            .join(format!("astrea-entry-initial-listing-xdg-cache-{}", std::process::id()));
+        let cache_home = root.parent().unwrap().join(format!(
+            "astrea-entry-initial-listing-xdg-cache-{}",
+            std::process::id()
+        ));
         let cache = cache_home.join("thumbnails");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -1051,15 +1064,9 @@ mod tests {
         }
 
         crate::thumbnail_cache::reset_full_validation_count();
-        let entries = read_sorted_entries_with_preview(
-            &root,
-            true,
-            "name",
-            true,
-            false,
-            PreviewMode::Direct,
-        )
-        .unwrap();
+        let entries =
+            read_sorted_entries_with_preview(&root, true, "name", true, false, PreviewMode::Direct)
+                .unwrap();
 
         let validation_count = crate::thumbnail_cache::full_validation_count();
         match old_xdg {
@@ -1073,16 +1080,20 @@ mod tests {
 
         assert_eq!(validation_count, 0);
         assert_eq!(entries.len(), 3);
-        assert!(entries
-            .iter()
-            .filter(|entry| entry.kind == "PNG")
-            .all(|entry| entry.preview_url.contains("cacheTier=direct")));
-        assert!(entries
-            .iter()
-            .find(|entry| entry.path.ends_with("clip.mp4"))
-            .unwrap()
-            .preview_url
-            .is_empty());
+        assert!(
+            entries
+                .iter()
+                .filter(|entry| entry.kind == "PNG")
+                .all(|entry| entry.preview_url.contains("cacheTier=direct"))
+        );
+        assert!(
+            entries
+                .iter()
+                .find(|entry| entry.path.ends_with("clip.mp4"))
+                .unwrap()
+                .preview_url
+                .is_empty()
+        );
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(cache_home);
