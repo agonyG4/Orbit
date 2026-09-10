@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime};
 use crate::json;
 use crate::thumbnail_cache::{
     SourceVersion, ThumbnailTier, cache_candidates, canonical_uri, create_private_staging_file,
-    private_directory, read_failure_entry, read_valid_thumbnail, thumbnail_root, tier_for_target,
-    tier_path, write_failure_entry, write_standard_thumbnail,
+    private_directory, private_thumbnail_directories, read_failure_entry, read_valid_thumbnail,
+    thumbnail_root, tier_for_target, tier_path, write_failure_entry, write_standard_thumbnail,
 };
 
 pub(crate) const MAX_BATCH_ITEMS: usize = 32;
@@ -261,7 +261,7 @@ fn process_item(
         return ThumbnailItem {
             file_path,
             status: "direct",
-            preview_url: json::file_url(path),
+            preview_url: preview_url_identity(path, &source_version, "direct"),
             cache_tier: "direct",
             source_version,
             retryable: None,
@@ -321,7 +321,9 @@ fn process_item(
         std::process::id()
     ));
     let destination_parent = destination.parent().unwrap_or(cache);
-    if private_directory(destination_parent).is_err() {
+    if private_thumbnail_directories(cache, requested_tier).is_err()
+        || private_directory(destination_parent).is_err()
+    {
         return failed_item(&file_path, source_version);
     }
     let _ = fs::remove_file(&raw);
@@ -499,13 +501,35 @@ fn gio_thumbnail_snapshot(path: &Path) -> Option<GioThumbnailSnapshot> {
 }
 
 fn is_inside_thumbnail_cache(path: &Path, cache: &Path) -> bool {
-    let Ok(canonical_cache) = fs::canonicalize(cache) else {
-        return false;
+    let lexical = lexical_absolute_path(path)
+        .zip(lexical_absolute_path(cache))
+        .is_some_and(|(path, cache)| path.starts_with(cache));
+    let physical = fs::canonicalize(path)
+        .ok()
+        .zip(fs::canonicalize(cache).ok())
+        .is_some_and(|(path, cache)| path.starts_with(cache));
+    lexical || physical
+}
+
+fn lexical_absolute_path(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
     };
-    let Ok(canonical_path) = fs::canonicalize(path) else {
-        return false;
-    };
-    canonical_path.starts_with(canonical_cache)
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    Some(normalized)
 }
 
 fn recent_retry_after_ms(metadata: &fs::Metadata, now: SystemTime) -> Option<u64> {
@@ -526,7 +550,11 @@ pub fn preview_url(path: &Path, is_dir: bool, modified_ms: i64, size: u64) -> St
         return cached;
     }
     if is_svg(path) || file_media_type(path) == Some("image") {
-        return json::file_url(path);
+        let version = SourceVersion {
+            modified_secs: modified_ms.div_euclid(1000),
+            size,
+        };
+        return preview_url_identity(path, &version.identity(), "direct");
     }
     String::new()
 }
@@ -606,11 +634,13 @@ fn file_media_type(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thumbnail_cache::{cache_filename, failure_tier_path};
+    use crate::thumbnail_cache::{
+        cache_filename, failure_application_dir, failure_tier_path, read_valid_thumbnail,
+    };
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Barrier, Mutex};
 
     struct CountingGenerator {
         calls: Arc<Mutex<Vec<String>>>,
@@ -666,6 +696,46 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    struct CachePermissionCheckingGenerator {
+        cache: PathBuf,
+        tier: ThumbnailTier,
+        modes: Arc<Mutex<Option<(u32, u32, u32)>>>,
+    }
+
+    #[cfg(unix)]
+    impl ThumbnailGenerator for CachePermissionCheckingGenerator {
+        fn generate(&self, _input: &Path, output: &Path, _target: u32) -> Result<(), String> {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root_mode = fs::metadata(&self.cache)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode()
+                & 0o777;
+            let tier_mode = fs::metadata(self.cache.join(self.tier.directory_name()))
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode()
+                & 0o777;
+            let staging_mode = fs::metadata(output)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode()
+                & 0o777;
+            *self.modes.lock().unwrap() = Some((root_mode, tier_mode, staging_mode));
+
+            let file = File::create(output).map_err(|error| error.to_string())?;
+            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+            writer
+                .write_image_data(&[255, 0, 0, 255])
+                .map_err(|error| error.to_string())
+        }
+    }
+
     impl ThumbnailGenerator for ConditionalGenerator {
         fn generate(&self, input: &Path, output: &Path, target: u32) -> Result<(), String> {
             self.calls
@@ -685,6 +755,22 @@ mod tests {
             writer
                 .write_image_data(&pixels)
                 .map_err(|error| error.to_string())
+        }
+    }
+
+    struct ConcurrentFailureGenerator {
+        barrier: Arc<Barrier>,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ThumbnailGenerator for ConcurrentFailureGenerator {
+        fn generate(&self, input: &Path, _output: &Path, _target: u32) -> Result<(), String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(input.to_string_lossy().into_owned());
+            self.barrier.wait();
+            Err("deterministic concurrent generator failure".to_string())
         }
     }
 
@@ -907,6 +993,105 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pre_existing_thumbnail_root_is_private_before_success_generation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-existing-root-permissions-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+        let source = root.join("photo.png");
+        write_fixture_png(&source);
+        let modes = Arc::new(Mutex::new(None));
+        let generator = CachePermissionCheckingGenerator {
+            cache: cache.clone(),
+            tier: ThumbnailTier::Normal,
+            modes: modes.clone(),
+        };
+
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "ready");
+        assert_eq!(*modes.lock().unwrap(), Some((0o700, 0o700, 0o600)));
+        assert_eq!(
+            fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(cache.join("normal"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_existing_failure_directories_are_private_before_failure_install() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-existing-failure-permissions-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        let fail = cache.join("fail");
+        fs::create_dir_all(&fail).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&fail, fs::Permissions::from_mode(0o755)).unwrap();
+        let source = root.join("broken.mp4");
+        fs::write(&source, b"broken").unwrap();
+        let generator = ConditionalGenerator {
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let result = run_batch_with_generator_at(
+            &["128".to_string(), source.to_string_lossy().into_owned()],
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let item = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+        assert_eq!(item["status"], "failed");
+        let application_dir = failure_application_dir(&cache);
+        assert_eq!(
+            fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&fail).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&application_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let uri = canonical_uri(&source).unwrap();
+        let failure = failure_tier_path(&cache, &uri);
+        assert_eq!(
+            fs::metadata(failure).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn failure_entries_suppress_same_source_and_retry_after_size_change() {
         let root =
@@ -1001,6 +1186,79 @@ mod tests {
             third_calls.lock().unwrap().as_slice(),
             &[broken.to_string_lossy().as_ref()]
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_failures_install_independent_source_scoped_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-concurrent-failures-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root).unwrap();
+        let sources = (0..4)
+            .map(|index| {
+                let source = root.join(format!("failed-{index}.mp4"));
+                fs::write(&source, format!("source-{index}")).unwrap();
+                source
+            })
+            .collect::<Vec<_>>();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = ConcurrentFailureGenerator {
+            barrier: Arc::new(Barrier::new(sources.len())),
+            calls: calls.clone(),
+        };
+
+        let args = std::iter::once("128".to_string())
+            .chain(
+                sources
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            )
+            .collect::<Vec<_>>();
+        let result = run_batch_with_generator_at(
+            &args,
+            &generator,
+            Some(&cache),
+            SystemTime::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let items = serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone();
+
+        assert_eq!(items.len(), sources.len());
+        assert!(items.iter().all(|item| item["status"] == "failed"));
+        assert_eq!(calls.lock().unwrap().len(), sources.len());
+        for (index, source) in sources.iter().enumerate() {
+            let uri = canonical_uri(source).unwrap();
+            let version = SourceVersion::from_metadata(&fs::metadata(source).unwrap());
+            let failure = failure_tier_path(&cache, &uri);
+            assert!(failure.is_file(), "missing failure entry for {source:?}");
+            assert!(read_failure_entry(&failure, &uri, version).is_ok());
+            assert_eq!(items[index]["filePath"], source.to_string_lossy().as_ref());
+            for (other_index, other_source) in sources.iter().enumerate() {
+                if other_index == index {
+                    continue;
+                }
+                let other_uri = canonical_uri(other_source).unwrap();
+                assert!(read_valid_thumbnail(&failure, &other_uri, version, None).is_err());
+            }
+        }
+        let leftovers = fs::read_dir(failure_application_dir(&cache).parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".failure-input-")
+            })
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty());
+
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1189,6 +1447,65 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn self_cache_containment_protects_lexical_and_physical_symlink_aliases() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-thumbnail-self-cache-aliases-{}",
+            std::process::id()
+        ));
+        let cache = root.join("thumbnails");
+        let outside = root.join("outside");
+        fs::create_dir_all(cache.join("normal")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let outside_source = outside.join("outside.png");
+        write_fixture_png(&outside_source);
+        let inside_symlink = cache.join("normal").join("inside-link.png");
+        std::os::unix::fs::symlink(&outside_source, &inside_symlink).unwrap();
+
+        let real_cache_source = cache.join("normal").join("real-cache.png");
+        write_fixture_png(&real_cache_source);
+        let outside_symlink = outside.join("outside-link.png");
+        std::os::unix::fs::symlink(&real_cache_source, &outside_symlink).unwrap();
+
+        let lexical_dotdot = cache
+            .join("normal")
+            .join("..")
+            .join("normal")
+            .join("dotdot.png");
+        write_fixture_png(&lexical_dotdot);
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let generator = CountingGenerator {
+            calls: calls.clone(),
+            targets: Arc::new(Mutex::new(Vec::new())),
+        };
+        for path in [&inside_symlink, &outside_symlink, &lexical_dotdot] {
+            let result = run_batch_with_generator_at(
+                &["128".to_string(), path.to_string_lossy().into_owned()],
+                &generator,
+                Some(&cache),
+                SystemTime::now() + Duration::from_secs(4),
+            )
+            .unwrap();
+            let item =
+                serde_json::from_str::<serde_json::Value>(&result).unwrap()["items"][0].clone();
+            assert_eq!(item["status"], "direct", "path {path:?}");
+            assert!(
+                item["previewUrl"]
+                    .as_str()
+                    .unwrap()
+                    .contains("?sourceVersion=")
+            );
+            let uri = canonical_uri(path).unwrap();
+            assert!(!failure_tier_path(&cache, &uri).exists());
+        }
+        assert!(calls.lock().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn sibling_thumbnail_backup_directory_is_not_the_global_cache() {
         let root = std::env::temp_dir().join(format!(
@@ -1252,6 +1569,28 @@ mod tests {
 
         assert_eq!(items[0]["status"], "ready");
         assert_eq!(items[1]["status"], "unsupported");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn direct_preview_url_identity_changes_with_source_version() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-direct-preview-identity-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        write_fixture_png(&source);
+        let first = preview_url(&source, false, 1_000, 11);
+        let second = preview_url(&source, false, 2_000, 12);
+        let file_url = json::file_url(&source);
+
+        assert_ne!(first, second);
+        assert!(first.starts_with(&format!("{file_url}?sourceVersion=")));
+        assert!(first.contains("cacheTier=direct"));
+        assert_eq!(first.split('?').next(), Some(file_url.as_str()));
+        assert!(second.contains("sourceVersion=2%3A12"));
+
         let _ = fs::remove_dir_all(root);
     }
 

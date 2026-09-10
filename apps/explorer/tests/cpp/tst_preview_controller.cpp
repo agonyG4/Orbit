@@ -32,6 +32,9 @@ private slots:
     void rejectsBrokenSymlinkFromThumbnailScheduling();
     void followsValidSymlinkForThumbnailScheduling();
     void disabledPreviewsBlockScheduling();
+    void staleGenerationSamePathQueuesCurrentViewportAfterCompletion();
+    void staleGenerationSamePathQueuesCurrentSelectedPreviewAfterCompletion();
+    void disabledInFlightResultsDoNotHydrateOrPoisonEnabledLifecycle();
     void hydratesGeneratedVideoImmediately();
     void rejectsSourceVersionChanges();
     void prioritizesSelectedPreviewWithoutDroppingViewport();
@@ -403,6 +406,248 @@ void PreviewControllerTest::disabledPreviewsBlockScheduling()
     controller.requestVisibleRange(0, 0, 128);
     QTest::qWait(80);
     QCOMPARE(client.utilityRequests().size(), 0);
+}
+
+void PreviewControllerTest::staleGenerationSamePathQueuesCurrentViewportAfterCompletion()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/photo.png"));
+    model.applyEntries({entry}, 1);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(1, false);
+    controller.requestVisibleRange(0, 0, 256);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    model.applyEntries({entry}, 2);
+    controller.beginGeneration(2, false);
+    controller.requestVisibleRange(0, 0, 256);
+    QTest::qWait(80);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult stale;
+    stale.requestId = 1;
+    stale.operation = QStringLiteral("thumbnail-batch");
+    stale.ok = true;
+    stale.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("generated")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/stale.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("large")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(1, stale);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    const QStringList expectedRequest {
+        QStringLiteral("256"),
+        entry.filePath,
+    };
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments,
+        expectedRequest);
+    QVERIFY(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole)
+            .toUrl()
+            .isEmpty());
+
+    UtilityResult current = stale;
+    current.requestId = 2;
+    current.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("generated")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/current.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("large")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(2, current);
+
+    QTRY_COMPARE(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole).toUrl(),
+        QUrl(QStringLiteral("file:///cache/current.png")));
+}
+
+void PreviewControllerTest::staleGenerationSamePathQueuesCurrentSelectedPreviewAfterCompletion()
+{
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/selected.mp4"));
+    model.applyEntries({entry}, 3);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(3, false);
+    controller.requestSelectedPreview(entry.filePath, 256);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+
+    model.applyEntries({entry}, 4);
+    controller.beginGeneration(4, false);
+    controller.requestSelectedPreview(entry.filePath, 256);
+    QTest::qWait(20);
+    QCOMPARE(client.utilityRequests().size(), 1);
+
+    UtilityResult stale;
+    stale.requestId = 1;
+    stale.operation = QStringLiteral("thumbnail-batch");
+    stale.ok = true;
+    stale.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("generated")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/stale-selected.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("large")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(1, stale);
+
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    const QStringList expectedRequest {
+        QStringLiteral("256"),
+        entry.filePath,
+    };
+    QCOMPARE(
+        client.utilityRequests().at(1).arguments,
+        expectedRequest);
+    QVERIFY(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole)
+            .toUrl()
+            .isEmpty());
+
+    UtilityResult current = stale;
+    current.requestId = 2;
+    current.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("generated")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/current-selected.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("large")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(2, current);
+
+    QTRY_COMPARE(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole).toUrl(),
+        QUrl(QStringLiteral("file:///cache/current-selected.png")));
+}
+
+void PreviewControllerTest::disabledInFlightResultsDoNotHydrateOrPoisonEnabledLifecycle()
+{
+    const QStringList statuses {
+        QStringLiteral("deferred"),
+        QStringLiteral("failed"),
+        QStringLiteral("unavailable"),
+    };
+    for (const QString &status : statuses) {
+        DirectoryModel model;
+        FakeRustBackendClient client;
+        const DirectoryEntry entry = previewEntry(
+            QStringLiteral("/fixture/disabled-%1.png").arg(status));
+        model.applyEntries({entry}, 5);
+        PreviewController controller(&client, &model);
+        controller.beginGeneration(5, false);
+        controller.requestVisibleRange(0, 0, 128);
+        QTRY_COMPARE(client.utilityRequests().size(), 1);
+        controller.setEnabled(false);
+
+        UtilityResult result;
+        result.requestId = 1;
+        result.operation = QStringLiteral("thumbnail-batch");
+        result.ok = true;
+        QJsonObject item {
+            {QStringLiteral("filePath"), entry.filePath},
+            {QStringLiteral("status"), status},
+            {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+        };
+        if (status == QStringLiteral("deferred")) {
+            item.insert(QStringLiteral("retryable"), true);
+            item.insert(QStringLiteral("retryAfterMs"), 1000);
+        } else if (status == QStringLiteral("unavailable")) {
+            item.insert(QStringLiteral("retryable"), false);
+        }
+        result.data.insert(QStringLiteral("items"), QJsonArray {item});
+        client.completeUtility(1, result);
+        QTest::qWait(50);
+        QVERIFY(
+            model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole)
+                .toUrl()
+                .isEmpty());
+
+        controller.setEnabled(true);
+        controller.requestVisibleRange(0, 0, 128);
+        QTRY_COMPARE(client.utilityRequests().size(), 2);
+        const QStringList expectedRequest {
+            QStringLiteral("128"),
+            entry.filePath,
+        };
+        QCOMPARE(
+            client.utilityRequests().at(1).arguments,
+            expectedRequest);
+    }
+
+    DirectoryModel model;
+    FakeRustBackendClient client;
+    const DirectoryEntry entry = previewEntry(QStringLiteral("/fixture/disabled-generated.png"));
+    model.applyEntries({entry}, 6);
+    PreviewController controller(&client, &model);
+    controller.beginGeneration(6, false);
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 1);
+    controller.setEnabled(false);
+
+    UtilityResult generated;
+    generated.requestId = 1;
+    generated.operation = QStringLiteral("thumbnail-batch");
+    generated.ok = true;
+    generated.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("generated")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/disabled.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("normal")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(1, generated);
+    QTest::qWait(50);
+    QVERIFY(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole)
+            .toUrl()
+            .isEmpty());
+
+    controller.setEnabled(true);
+    controller.requestVisibleRange(0, 0, 128);
+    QTRY_COMPARE(client.utilityRequests().size(), 2);
+    UtilityResult enabled = generated;
+    enabled.requestId = 2;
+    enabled.data.insert(
+        QStringLiteral("items"),
+        QJsonArray {
+            QJsonObject {
+                {QStringLiteral("filePath"), entry.filePath},
+                {QStringLiteral("status"), QStringLiteral("ready")},
+                {QStringLiteral("previewUrl"), QStringLiteral("file:///cache/enabled.png")},
+                {QStringLiteral("cacheTier"), QStringLiteral("normal")},
+                {QStringLiteral("sourceVersion"), QStringLiteral("0:0")},
+            },
+        });
+    client.completeUtility(2, enabled);
+    QTRY_COMPARE(
+        model.data(model.index(0, 0), DirectoryModel::FilePreviewUrlRole).toUrl(),
+        QUrl(QStringLiteral("file:///cache/enabled.png")));
 }
 
 void PreviewControllerTest::hydratesGeneratedVideoImmediately()

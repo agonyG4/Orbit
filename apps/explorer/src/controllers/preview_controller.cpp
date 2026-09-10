@@ -230,6 +230,9 @@ std::optional<int> PreviewController::inFlightTargetForPath(const QString &path)
 {
     std::optional<int> target;
     for (auto it = m_inFlight.cbegin(); it != m_inFlight.cend(); ++it) {
+        if (it.value().generation != m_generation) {
+            continue;
+        }
         for (const Intent &intent : it.value().intents) {
             if (intent.path == path) {
                 if (!target.has_value() || it.value().target > *target) {
@@ -598,7 +601,7 @@ void PreviewController::applyBatchItem(
         }
     }
     if (!requested || request.generation != m_generation
-        || m_remoteDirectoryActive) {
+        || m_remoteDirectoryActive || !m_enabled) {
         return;
     }
 

@@ -271,6 +271,19 @@ pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn private_thumbnail_directories(
+    root: &Path,
+    tier: ThumbnailTier,
+) -> Result<(), String> {
+    private_directory(root)?;
+    let tier_directory = root.join(tier.directory_name());
+    private_directory(&tier_directory)?;
+    if tier == ThumbnailTier::Fail {
+        private_directory(&failure_application_dir(root))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn create_private_staging_file(path: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -412,20 +425,27 @@ pub(crate) fn write_failure_entry(
     uri: &str,
     version: SourceVersion,
 ) -> Result<PathBuf, String> {
+    private_thumbnail_directories(root, ThumbnailTier::Fail)?;
     let destination = failure_tier_path(root, uri);
     let parent = destination
         .parent()
         .ok_or_else(|| "failure entry has no parent directory".to_string())?;
     private_directory(parent)?;
-    let fixture = parent.join(format!(".failure-input-{}", std::process::id()));
-    create_fixture_png(&fixture)?;
-    let result = write_standard_thumbnail(
-        &fixture,
-        &destination,
-        uri,
-        version,
-        Some("application/x-orbit-thumbnail-failure"),
-    );
+    let fixture = parent.join(format!(
+        ".failure-input-{}-{}",
+        std::process::id(),
+        cache_filename(uri)
+    ));
+    let result = (|| {
+        create_fixture_png(&fixture)?;
+        write_standard_thumbnail(
+            &fixture,
+            &destination,
+            uri,
+            version,
+            Some("application/x-orbit-thumbnail-failure"),
+        )
+    })();
     let _ = fs::remove_file(fixture);
     result.map(|()| destination)
 }
