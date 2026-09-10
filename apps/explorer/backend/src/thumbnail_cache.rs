@@ -5,9 +5,25 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 const FAILURE_CACHE_APPLICATION: &str = "orbit-explorer";
 const FAILURE_CACHE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_VALID_THUMBNAIL_DIMENSION: u32 = 1024;
+
+#[cfg(test)]
+static FULL_VALIDATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_full_validation_count() {
+    FULL_VALIDATION_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn full_validation_count() -> usize {
+    FULL_VALIDATION_COUNT.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ThumbnailTier {
@@ -172,6 +188,9 @@ pub(crate) fn cache_candidates(
 }
 
 fn png_text(path: &Path) -> Result<HashMap<String, String>, String> {
+    #[cfg(test)]
+    FULL_VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
+
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let decoder = png::Decoder::new(BufReader::new(file));
     let mut reader = decoder

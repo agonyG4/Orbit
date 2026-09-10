@@ -985,6 +985,110 @@ mod tests {
     }
 
     #[test]
+    fn initial_listing_does_not_validate_cached_png() {
+        use crate::thumbnail_cache::{
+            canonical_uri, tier_path, write_standard_thumbnail, SourceVersion, ThumbnailTier,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "astrea-entry-initial-listing-cache-boundary-{}",
+            std::process::id()
+        ));
+        let cache_home = root
+            .parent()
+            .unwrap()
+            .join(format!("astrea-entry-initial-listing-xdg-cache-{}", std::process::id()));
+        let cache = cache_home.join("thumbnails");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+
+        let image_path = root.join("photo.png");
+        let corrupt_image_path = root.join("corrupt.png");
+        let video_path = root.join("clip.mp4");
+        for path in [&image_path, &corrupt_image_path] {
+            let file = fs::File::create(path).unwrap();
+            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 0, 0, 255]).unwrap();
+        }
+        fs::write(&video_path, b"video fixture").unwrap();
+
+        let image_version = SourceVersion::from_metadata(&fs::metadata(&image_path).unwrap());
+        let image_uri = canonical_uri(&image_path).unwrap();
+        write_standard_thumbnail(
+            &image_path,
+            &tier_path(&cache, ThumbnailTier::Normal, &image_uri),
+            &image_uri,
+            image_version,
+            Some("image/png"),
+        )
+        .unwrap();
+
+        let corrupt_uri = canonical_uri(&corrupt_image_path).unwrap();
+        let corrupt_cache = tier_path(&cache, ThumbnailTier::Normal, &corrupt_uri);
+        fs::create_dir_all(corrupt_cache.parent().unwrap()).unwrap();
+        fs::write(&corrupt_cache, b"truncated cached PNG").unwrap();
+
+        let video_version = SourceVersion::from_metadata(&fs::metadata(&video_path).unwrap());
+        let video_uri = canonical_uri(&video_path).unwrap();
+        write_standard_thumbnail(
+            &image_path,
+            &tier_path(&cache, ThumbnailTier::Normal, &video_uri),
+            &video_uri,
+            video_version,
+            Some("video/mp4"),
+        )
+        .unwrap();
+
+        let old_xdg = std::env::var_os("XDG_CACHE_HOME");
+        let old_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &cache_home);
+            std::env::set_var("HOME", root.join("home"));
+        }
+
+        crate::thumbnail_cache::reset_full_validation_count();
+        let entries = read_sorted_entries_with_preview(
+            &root,
+            true,
+            "name",
+            true,
+            false,
+            PreviewMode::Direct,
+        )
+        .unwrap();
+
+        let validation_count = crate::thumbnail_cache::full_validation_count();
+        match old_xdg {
+            Some(value) => unsafe { std::env::set_var("XDG_CACHE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CACHE_HOME") },
+        }
+        match old_home {
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+
+        assert_eq!(validation_count, 0);
+        assert_eq!(entries.len(), 3);
+        assert!(entries
+            .iter()
+            .filter(|entry| entry.kind == "PNG")
+            .all(|entry| entry.preview_url.contains("cacheTier=direct")));
+        assert!(entries
+            .iter()
+            .find(|entry| entry.path.ends_with("clip.mp4"))
+            .unwrap()
+            .preview_url
+            .is_empty());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(cache_home);
+    }
+
+    #[test]
     fn sorting_is_case_insensitive_without_touching_display_names() {
         let mut entries = vec![
             test_entry("banana.txt", false, "TXT", 10, 1),
