@@ -545,40 +545,12 @@ fn recent_retry_after_ms(metadata: &fs::Metadata, now: SystemTime) -> Option<u64
 }
 
 pub fn preview_url(path: &Path, is_dir: bool, modified_ms: i64, size: u64) -> String {
-    let cached = cached_preview_url(path, is_dir, modified_ms, size);
-    if !cached.is_empty() {
-        return cached;
-    }
     if is_svg(path) || file_media_type(path) == Some("image") {
         let version = SourceVersion {
             modified_secs: modified_ms.div_euclid(1000),
             size,
         };
         return preview_url_identity(path, &version.identity(), "direct");
-    }
-    String::new()
-}
-
-pub fn cached_preview_url(path: &Path, is_dir: bool, modified_ms: i64, size: u64) -> String {
-    if is_dir {
-        return String::new();
-    }
-    let version = SourceVersion {
-        modified_secs: modified_ms.div_euclid(1000),
-        size,
-    };
-    if let Ok(uri) = canonical_uri(path) {
-        if let Ok(root) = thumbnail_root() {
-            for (tier, candidate) in cache_candidates(&root, &uri, tier_for_target(256)) {
-                if read_valid_thumbnail(&candidate, &uri, version, mime_for_path(path)).is_ok() {
-                    return preview_url_identity(
-                        &candidate,
-                        &version.identity(),
-                        tier.directory_name(),
-                    );
-                }
-            }
-        }
     }
     String::new()
 }

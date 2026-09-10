@@ -34,8 +34,7 @@ pub struct Entry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreviewMode {
     None,
-    Cached,
-    Full,
+    Direct,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,8 +47,7 @@ impl PreviewMode {
     fn parse(value: &str) -> Option<Self> {
         match value {
             "none" => Some(Self::None),
-            "cached" => Some(Self::Cached),
-            "full" => Some(Self::Full),
+            "direct" => Some(Self::Direct),
             _ => None,
         }
     }
@@ -163,7 +161,7 @@ pub fn read_sorted_entries(
         sort_field,
         sort_asc,
         folders_first,
-        PreviewMode::Full,
+        PreviewMode::Direct,
     )
 }
 
@@ -201,7 +199,7 @@ fn parse_list_args_with_preview(
 }
 
 fn parse_preview_mode_arg(args: &[String]) -> Result<PreviewMode, String> {
-    let mut mode = PreviewMode::Full;
+    let mut mode = PreviewMode::Direct;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -326,7 +324,7 @@ fn search_dir_recursive(
     depth: usize,
     out: &mut Vec<Entry>,
 ) -> Result<(), String> {
-    search_dir_recursive_with_preview(root, dir, show_hidden, query, depth, PreviewMode::Full, out)
+    search_dir_recursive_with_preview(root, dir, show_hidden, query, depth, PreviewMode::Direct, out)
 }
 
 fn search_dir_recursive_with_preview(
@@ -523,8 +521,7 @@ fn preview_url_for_mode(
 ) -> String {
     match mode {
         PreviewMode::None => String::new(),
-        PreviewMode::Cached => thumbnails::cached_preview_url(path, is_dir, modified_ms, size),
-        PreviewMode::Full => thumbnails::preview_url(path, is_dir, modified_ms, size),
+        PreviewMode::Direct => thumbnails::preview_url(path, is_dir, modified_ms, size),
     }
 }
 
@@ -838,7 +835,7 @@ mod tests {
             meta,
             false,
             false,
-            PreviewMode::Full,
+            PreviewMode::Direct,
         );
         let body = entry_to_json(&entry);
         let raw_file_url = format!("\"fileUrl\":\"file://{}\"", path.to_string_lossy());
@@ -849,16 +846,18 @@ mod tests {
     }
 
     #[test]
-    fn preview_mode_parser_defaults_to_full_and_accepts_flag_forms() {
-        assert_eq!(parse_preview_mode_arg(&[]).unwrap(), PreviewMode::Full);
+    fn preview_mode_parser_defaults_to_direct_and_accepts_flag_forms() {
+        assert_eq!(parse_preview_mode_arg(&[]).unwrap(), PreviewMode::Direct);
         assert_eq!(
             parse_preview_mode_arg(&["--preview-mode".into(), "none".into()]).unwrap(),
             PreviewMode::None
         );
         assert_eq!(
-            parse_preview_mode_arg(&["--preview-mode=cached".into()]).unwrap(),
-            PreviewMode::Cached
+            parse_preview_mode_arg(&["--preview-mode=direct".into()]).unwrap(),
+            PreviewMode::Direct
         );
+        assert!(parse_preview_mode_arg(&["--preview-mode=cached".into()]).is_err());
+        assert!(parse_preview_mode_arg(&["--preview-mode=full".into()]).is_err());
         assert!(parse_preview_mode_arg(&["--preview-mode=bad".into()]).is_err());
     }
 
@@ -887,6 +886,101 @@ mod tests {
         assert_eq!(entry.preview_url, "");
         assert!(body.contains("\"filePreviewUrl\":\"\""));
         assert_eq!(entry.name, "photo.png");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn direct_listing_policy_ignores_valid_or_corrupt_cached_previews() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-entry-preview-direct-test-{}",
+            std::process::id()
+        ));
+        let cache = root.join("cache").join("normal");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&cache).unwrap();
+
+        let image_path = root.join("photo.png");
+        let video_path = root.join("clip.mp4");
+        fs::write(&image_path, b"not decoded during listing").unwrap();
+        fs::write(&video_path, b"video fixture").unwrap();
+        fs::write(cache.join("cached.png"), b"corrupt cached PNG").unwrap();
+
+        let direct_image = entry_from_parts(
+            "photo.png".to_string(),
+            &image_path,
+            fs::metadata(&image_path).unwrap(),
+            false,
+            false,
+            PreviewMode::Direct,
+        );
+        let direct_video = entry_from_parts(
+            "clip.mp4".to_string(),
+            &video_path,
+            fs::metadata(&video_path).unwrap(),
+            false,
+            false,
+            PreviewMode::Direct,
+        );
+        let none_image = entry_from_parts(
+            "photo.png".to_string(),
+            &image_path,
+            fs::metadata(&image_path).unwrap(),
+            false,
+            false,
+            PreviewMode::None,
+        );
+
+        assert!(direct_image.preview_url.contains("sourceVersion="));
+        assert!(direct_image.preview_url.contains("cacheTier=direct"));
+        assert!(direct_video.preview_url.is_empty());
+        assert!(none_image.preview_url.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recursive_search_preserves_selected_preview_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "astrea-entry-search-preview-mode-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("photo.png"), b"image fixture").unwrap();
+        fs::write(root.join("clip.mp4"), b"video fixture").unwrap();
+
+        let mut none_entries = Vec::new();
+        search_dir_recursive_with_preview(
+            &root,
+            &root,
+            true,
+            "",
+            0,
+            PreviewMode::None,
+            &mut none_entries,
+        )
+        .unwrap();
+        assert!(none_entries.iter().all(|entry| entry.preview_url.is_empty()));
+
+        let mut direct_entries = Vec::new();
+        search_dir_recursive_with_preview(
+            &root,
+            &root,
+            true,
+            "",
+            0,
+            PreviewMode::Direct,
+            &mut direct_entries,
+        )
+        .unwrap();
+        assert!(direct_entries.iter().any(|entry| {
+            entry.path.ends_with("photo.png")
+                && entry.preview_url.contains("cacheTier=direct")
+        }));
+        assert!(direct_entries
+            .iter()
+            .any(|entry| entry.path.ends_with("clip.mp4") && entry.preview_url.is_empty()));
+
         let _ = fs::remove_dir_all(root);
     }
 
