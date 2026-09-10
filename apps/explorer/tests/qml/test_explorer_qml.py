@@ -1,5 +1,8 @@
 import unittest
 from pathlib import Path
+import os
+import shutil
+import subprocess
 
 
 EXPLORER_ROOT = Path(__file__).resolve().parents[2]
@@ -9,6 +12,27 @@ FILES_MODULE_ROOT = REPO_ROOT / "shared" / "qml" / "Astrea" / "Files"
 
 
 class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
+    def test_preview_state_converts_nested_icon_model_before_native_call(self):
+        qml6 = shutil.which("qml6")
+        if qml6 is None:
+            self.skipTest("qml6 is unavailable")
+
+        fixture = Path(__file__).with_name("preview_state_icon_model.qml")
+        environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        result = subprocess.run(
+            [qml6, str(fixture)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+
     def test_quicklook_is_not_wired_in_main_app_state_or_preview_state(self):
         sources = {
             "Main.qml": APP_ROOT / "Main.qml",
