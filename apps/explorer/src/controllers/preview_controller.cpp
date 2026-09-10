@@ -387,6 +387,21 @@ void PreviewController::handleDeferredRetry()
         return;
     }
 
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    bool hasDueRetry = false;
+    for (auto it = m_deferredPreviews.cbegin();
+         it != m_deferredPreviews.cend();
+         ++it) {
+        if (it.value().retryable && it.value().retryAfter <= now) {
+            hasDueRetry = true;
+            break;
+        }
+    }
+    if (!hasDueRetry) {
+        armDeferredRetryTimer();
+        return;
+    }
+
     if (m_hasVisibleRange) {
         replaceViewportQueue(
             m_lastVisibleFirst,
@@ -394,7 +409,6 @@ void PreviewController::handleDeferredRetry()
             m_lastVisibleTarget);
     }
 
-    const QDateTime now = QDateTime::currentDateTimeUtc();
     for (auto it = m_deferredPreviews.cbegin();
          it != m_deferredPreviews.cend();
          ++it) {
