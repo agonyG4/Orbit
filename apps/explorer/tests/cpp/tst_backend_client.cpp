@@ -256,6 +256,7 @@ void BackendClientTest::forwardsLegacyCliArgumentsForListAndSearch()
     searchRequest.sortField = QStringLiteral("date");
     searchRequest.sortAscending = false;
     searchRequest.foldersFirst = true;
+    searchRequest.previews = false;
 
     const BackendRequestId listId = client.list(listRequest);
     const BackendRequestId searchId = client.search(searchRequest);
@@ -283,7 +284,25 @@ void BackendClientTest::forwardsLegacyCliArgumentsForListAndSearch()
              QStringLiteral("1"),
              QStringLiteral("date"),
              QStringLiteral("0"),
-             QStringLiteral("1")}));
+             QStringLiteral("1"),
+             QStringLiteral("--preview-mode"),
+             QStringLiteral("none")}));
+
+    searchRequest.previews = true;
+    const BackendRequestId directSearchId = client.search(searchRequest);
+    QCOMPARE(directSearchId, BackendRequestId(3));
+    QCOMPARE(
+        transport.startedRequests.at(2).arguments,
+        QStringList(
+            {QStringLiteral("search"),
+             QStringLiteral("/tmp/search root"),
+             QStringLiteral("Needle"),
+             QStringLiteral("1"),
+             QStringLiteral("date"),
+             QStringLiteral("0"),
+             QStringLiteral("1"),
+             QStringLiteral("--preview-mode"),
+             QStringLiteral("direct")}));
 }
 
 void BackendClientTest::decodesDevicesAndForwardsDeviceOperations()

@@ -276,17 +276,15 @@ QStringList RustBackendClient::listArguments(const ListRequest &request) const
         boolArg(request.foldersFirst),
     };
 
-    if (!request.previews) {
-        arguments.append(QStringLiteral("--preview-mode"));
-        arguments.append(QStringLiteral("none"));
-    }
+    arguments.append(QStringLiteral("--preview-mode"));
+    arguments.append(request.previews ? QStringLiteral("direct") : QStringLiteral("none"));
 
     return arguments;
 }
 
 QStringList RustBackendClient::searchArguments(const SearchRequest &request) const
 {
-    return {
+    QStringList arguments {
         QStringLiteral("search"),
         request.rootPath,
         request.query,
@@ -295,6 +293,9 @@ QStringList RustBackendClient::searchArguments(const SearchRequest &request) con
         boolArg(request.sortAscending),
         boolArg(request.foldersFirst),
     };
+    arguments.append(QStringLiteral("--preview-mode"));
+    arguments.append(request.previews ? QStringLiteral("direct") : QStringLiteral("none"));
+    return arguments;
 }
 
 QStringList RustBackendClient::fileOperationArguments(

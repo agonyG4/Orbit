@@ -666,6 +666,7 @@ BackendRequestId NavigationController::startSearch(
     request.sortField = m_sortField;
     request.sortAscending = m_sortAscending;
     request.foldersFirst = m_foldersFirst;
+    request.previews = m_previews;
     const BackendRequestId requestId = m_client->search(request);
     m_pendingRequests.insert(requestId, {generation, root, RequestKind::Search});
     m_activeRequest = requestId;

@@ -30,6 +30,7 @@ struct SearchRequest
     QString sortField {QStringLiteral("name")};
     bool sortAscending = true;
     bool foldersFirst = true;
+    bool previews = true;
 };
 
 struct DeviceEntry

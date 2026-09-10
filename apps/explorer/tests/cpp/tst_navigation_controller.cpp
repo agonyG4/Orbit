@@ -31,6 +31,7 @@ private slots:
     void ignoresRecentCompletionAfterNavigationAway();
     void honorsConfiguredRemotePrefixesAtPathBoundaries();
     void forwardsListingOptionsToBackend();
+    void forwardsSearchPreviewPreference();
     void requestsVisibleVisualMetadataInBoundedBatches();
     void queuesVisualMetadataInModelOrder();
     void latestVisibleRangeReplacesQueuedWork();
@@ -136,6 +137,28 @@ void NavigationControllerTest::forwardsListingOptionsToBackend()
     QCOMPARE(client.listRequests().constLast().foldersFirst, false);
     QCOMPARE(client.listRequests().constLast().previews, false);
     client.completeList(requestId, {});
+}
+
+void NavigationControllerTest::forwardsSearchPreviewPreference()
+{
+    FakeRustBackendClient client;
+    DirectoryModel model;
+    DirectoryWatchService watcher;
+    NavigationController navigation(&client, &model, &watcher);
+
+    navigation.setPreviews(false);
+    const BackendRequestId disabledId = navigation.submitSearch(
+        QStringLiteral("/fixture"),
+        QStringLiteral("needle"));
+    QVERIFY(disabledId != 0);
+    QCOMPARE(client.searchRequests().constLast().previews, false);
+
+    navigation.setPreviews(true);
+    const BackendRequestId enabledId = navigation.submitSearch(
+        QStringLiteral("/fixture"),
+        QStringLiteral("needle"));
+    QVERIFY(enabledId != 0);
+    QCOMPARE(client.searchRequests().constLast().previews, true);
 }
 
 void NavigationControllerTest::requestsVisibleVisualMetadataInBoundedBatches()
