@@ -607,13 +607,18 @@ IconThemeService::ThemeSelection IconThemeService::selectTheme() const
         return {configuredVariant, QStringLiteral("config")};
     }
 
+    const QString compatibilityVariant = resolveAppearanceVariant(
+        QStringLiteral("MacTahoe"), appearance());
+    if (m_platformTheme.compare(QStringLiteral("hicolor"), Qt::CaseInsensitive) == 0
+        && !compatibilityVariant.isEmpty()) {
+        return {compatibilityVariant, QStringLiteral("compatibility-default")};
+    }
+
     if (themeIsUsable(m_platformTheme)) {
         return {m_platformTheme, QStringLiteral("platform")};
     }
 
-    if (const QString compatibilityVariant = resolveAppearanceVariant(
-            QStringLiteral("MacTahoe"), appearance());
-        !compatibilityVariant.isEmpty()) {
+    if (!compatibilityVariant.isEmpty()) {
         return {compatibilityVariant, QStringLiteral("compatibility-default")};
     }
 

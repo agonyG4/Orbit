@@ -288,6 +288,7 @@ private slots:
     void selectsAppearanceAwareInstalledVariant();
     void appearanceVariantFallsBackToBaseTheme();
     void compatibilityDefaultUsesAppearanceVariant();
+    void hicolorPlatformPrefersMacTahoeCompatibilityTheme();
     void variantFallbacksWhenSiblingUnavailable();
     void themeProbeRestoresGlobalTheme();
     void rendersRequestedSizeAndBuiltInFallback();
@@ -554,6 +555,28 @@ void IconThemeServiceTest::compatibilityDefaultUsesAppearanceVariant()
     });
     QTRY_COMPARE_WITH_TIMEOUT(service.effectiveTheme(), QStringLiteral("MacTahoe-light"), 3000);
     QCOMPARE(QIcon::themeName(), QStringLiteral("MacTahoe-light"));
+}
+
+void IconThemeServiceTest::hicolorPlatformPrefersMacTahoeCompatibilityTheme()
+{
+    ThemeSearchPathGuard guard;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTheme(directory.path(), QStringLiteral("MacTahoe"), QColor(0x55, 0x55, 0xdd), false);
+    writeSimpleTheme(directory.path(), QStringLiteral("hicolor"));
+    QIcon::setThemeSearchPaths({directory.path()});
+    QIcon::setThemeName(QStringLiteral("hicolor"));
+    const QString configPath = QDir(directory.path()).filePath(QStringLiteral("theme.json"));
+    writeThemeConfigObject(configPath, QJsonObject {
+        {QStringLiteral("theme"), QStringLiteral("dark")},
+        {QStringLiteral("theme_mode"), 0},
+    });
+    qunsetenv("ASTREA_ICON_THEME");
+
+    IconThemeService service(configPath);
+
+    QCOMPARE(service.effectiveTheme(), QStringLiteral("MacTahoe"));
+    QCOMPARE(QIcon::themeName(), QStringLiteral("MacTahoe"));
 }
 
 void IconThemeServiceTest::variantFallbacksWhenSiblingUnavailable()

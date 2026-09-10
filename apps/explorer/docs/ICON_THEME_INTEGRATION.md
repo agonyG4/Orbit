@@ -91,9 +91,10 @@ The effective desktop theme is selected in this order:
 2. valid and installed `desktop_icon_theme` in
    `~/.config/AstreaOS/ui/theme.json`, preferring the matching `-dark` or
    `-light` sibling when the configured value is a base theme;
-3. the installed platform `QIcon::themeName()`;
-4. the installed `MacTahoe` compatibility default, using the same appearance
-   sibling rule when available;
+3. the installed `MacTahoe` compatibility default, using the same appearance
+   sibling rule when the platform theme is the generic `hicolor` theme;
+4. the installed platform `QIcon::themeName()` when it is a more specific
+   installed theme;
 5. Qt/Freedesktop fallback lookup, followed by a built-in Astrea fallback
    image when no themed icon is available.
 
