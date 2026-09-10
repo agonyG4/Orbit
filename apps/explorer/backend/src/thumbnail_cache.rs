@@ -7,6 +7,8 @@ use std::time::UNIX_EPOCH;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 const FAILURE_CACHE_APPLICATION: &str = "orbit-explorer";
 const FAILURE_CACHE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -14,10 +16,18 @@ const MAX_VALID_THUMBNAIL_DIMENSION: u32 = 1024;
 
 #[cfg(test)]
 static FULL_VALIDATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static FULL_VALIDATION_ROOT: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 #[cfg(test)]
-pub(crate) fn reset_full_validation_count() {
+fn full_validation_root() -> &'static Mutex<Option<PathBuf>> {
+    FULL_VALIDATION_ROOT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) fn reset_full_validation_count(root: &Path) {
     FULL_VALIDATION_COUNT.store(0, Ordering::Relaxed);
+    *full_validation_root().lock().unwrap() = Some(root.to_path_buf());
 }
 
 #[cfg(test)]
@@ -189,7 +199,14 @@ pub(crate) fn cache_candidates(
 
 fn png_text(path: &Path) -> Result<HashMap<String, String>, String> {
     #[cfg(test)]
-    FULL_VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
+    if full_validation_root()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|root| path.starts_with(root))
+    {
+        FULL_VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
 
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let decoder = png::Decoder::new(BufReader::new(file));

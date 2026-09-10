@@ -1063,7 +1063,7 @@ mod tests {
             std::env::set_var("HOME", root.join("home"));
         }
 
-        crate::thumbnail_cache::reset_full_validation_count();
+        crate::thumbnail_cache::reset_full_validation_count(&cache);
         let entries =
             read_sorted_entries_with_preview(&root, true, "name", true, false, PreviewMode::Direct)
                 .unwrap();
