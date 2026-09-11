@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 
@@ -32,6 +33,63 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
             0,
             result.stdout + result.stderr,
         )
+
+    def test_nested_model_adapters_and_metadata_hydration_runtime(self):
+        qml6 = shutil.which("qml6")
+        if qml6 is None:
+            self.skipTest("qml6 is unavailable")
+
+        fixture = Path(__file__).with_name("model_adapters_nested.qml")
+        environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        result = subprocess.run(
+            [qml6, str(fixture)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+
+    def test_visual_metadata_paths_use_representation_adapters(self):
+        adapter = APP_ROOT / "utils" / "ModelAdapters.js"
+        list_view = (APP_ROOT / "components" / "views" / "FileListView.qml").read_text(
+            encoding="utf-8"
+        )
+        icon_view = (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(
+            encoding="utf-8"
+        )
+        preview_state = (APP_ROOT / "state" / "PreviewState.qml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertTrue(adapter.exists())
+        self.assertIn("ModelAdapters.stringListEquals", list_view)
+        self.assertIn("ModelAdapters.stringListEquals", icon_view)
+        self.assertIn("ModelAdapters.stringList", list_view)
+        self.assertIn("ModelAdapters.stringList", icon_view)
+        self.assertIn("ModelAdapters.listCount", icon_view)
+        self.assertIn("ModelAdapters.listAt", icon_view)
+        self.assertIn("ModelAdapters.stringList", preview_state)
+        self.assertNotIn("stringListFromModel", preview_state)
+
+        for source in [list_view, icon_view, preview_state]:
+            with self.subTest(source=source[:32]):
+                self.assertNotIn("dynamicRoles: true", source)
+        for forbidden in [
+            r"JSON\.stringify\([^)]*fileIconNames",
+            r"JSON\.stringify\([^)]*fileEmblemNames",
+            r"\bitemEmblemNames\s*\.\s*length",
+            r"\bitemEmblemNames\s*\[\s*index\s*\]",
+            r"\bitems\s*\.\s*length",
+            r"\bitems\s*\[\s*i\s*\]",
+        ]:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotRegex(list_view + "\n" + icon_view, forbidden)
 
     def test_quicklook_is_not_wired_in_main_app_state_or_preview_state(self):
         sources = {

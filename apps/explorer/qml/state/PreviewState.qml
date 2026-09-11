@@ -1,4 +1,5 @@
 import QtQuick 2.15
+import "../utils/ModelAdapters.js" as ModelAdapters
 
 // Preview generation and visual metadata hydration are native. This object
 // keeps formatting and icon source helpers close to presentation code.
@@ -33,45 +34,12 @@ QtObject {
                 devicePixelRatio || 1.0)
             : ""
     }
-    function stringListFromModel(value) {
-        if (value === undefined || value === null)
-            return []
-
-        if (typeof value.get === "function" && typeof value.count === "number") {
-            var modelValues = []
-            for (var i = 0; i < value.count; i++) {
-                var modelValue = value.get(i)
-                if (modelValue && typeof modelValue === "object") {
-                    if (modelValue.value !== undefined)
-                        modelValue = modelValue.value
-                    else if (modelValue.modelData !== undefined)
-                        modelValue = modelValue.modelData
-                }
-                if (modelValue !== undefined && modelValue !== null
-                        && String(modelValue) !== "")
-                    modelValues.push(String(modelValue))
-            }
-            return modelValues
-        }
-
-        if (Array.isArray(value)) {
-            var arrayValues = []
-            for (var j = 0; j < value.length; j++) {
-                if (value[j] !== undefined && value[j] !== null
-                        && String(value[j]) !== "")
-                    arrayValues.push(String(value[j]))
-            }
-            return arrayValues
-        }
-
-        return [String(value)]
-    }
     function richFileIconSource(path, isFolder, isExecutable, size, semanticIconName, iconNames, iconFileUrl, iconFileVersion, devicePixelRatio) {
         var revision = iconThemeRevision
         return bridge && typeof bridge.richFileIconSource === "function"
             ? bridge.richFileIconSource(
                 path || "", isFolder, isExecutable, size, semanticIconName || "",
-                stringListFromModel(iconNames), iconFileUrl || "", iconFileVersion || "",
+                ModelAdapters.stringList(iconNames), iconFileUrl || "", iconFileVersion || "",
                 devicePixelRatio || 1.0)
             : fileIconSource(path, isFolder, isExecutable, size, semanticIconName, devicePixelRatio)
     }

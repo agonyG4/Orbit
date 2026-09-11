@@ -6,6 +6,7 @@ import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
 import "ViewShared.js" as ViewShared
+import "../../utils/ModelAdapters.js" as ModelAdapters
 
 // ── FileGridView ──────────────────────────────────────────────────────────────
 // Icon-grid (thumbnail) view, paired with FileListView.
@@ -279,8 +280,8 @@ Item {
             var updatedItems = []
             var changed = false
 
-            for (var i = 0; i < items.length; i++) {
-                var item = items[i]
+            for (var i = 0; i < ModelAdapters.listCount(items); i++) {
+                var item = ModelAdapters.listAt(items, i)
                 var updatedItem = item
                 if (!item || item.sourceIndex === undefined)
                     updatedItems.push(updatedItem)
@@ -294,10 +295,10 @@ Item {
                                 || item.fileSize !== source.fileSize
                                 || item.fileModified !== source.fileModified
                                 || item.fileIconName !== (source.fileIconName || "")
-                                || JSON.stringify(item.fileIconNames || []) !== JSON.stringify(source.fileIconNames || [])
+                                || !ModelAdapters.stringListEquals(item.fileIconNames, source.fileIconNames)
                                 || item.fileIconFileUrl !== (source.fileIconFileUrl || "")
                                 || item.fileIconFileVersion !== (source.fileIconFileVersion || "")
-                                || JSON.stringify(item.fileEmblemNames || []) !== JSON.stringify(source.fileEmblemNames || [])
+                                || !ModelAdapters.stringListEquals(item.fileEmblemNames, source.fileEmblemNames)
                                 || Boolean(item.fileIconMetadataReady) !== Boolean(source.fileIconMetadataReady)
                                 || Boolean(item.fileIsSymlink) !== Boolean(source.fileIsSymlink)
                                 || Boolean(item.fileSymlinkBroken) !== Boolean(source.fileSymlinkBroken)
@@ -619,7 +620,7 @@ Item {
                         readonly property var    itemIconNames: modelData.fileIconNames || []
                         readonly property var    itemIconFileUrl: modelData.fileIconFileUrl || ""
                         readonly property string itemIconFileVersion: modelData.fileIconFileVersion || ""
-                        readonly property var    itemEmblemNames: modelData.fileEmblemNames || []
+                        readonly property var    itemEmblemNames: ModelAdapters.stringList(modelData.fileEmblemNames)
                         readonly property int    modelRevision: AppState.fileModelRevision
                         readonly property string livePreviewUrl: {
                             if (itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -700,12 +701,12 @@ Item {
                             }
 
                             Repeater {
-                                model: Math.min(3, tile.itemEmblemNames.length)
+                                model: Math.min(3, ModelAdapters.listCount(tile.itemEmblemNames))
                                 delegate: Image {
                                     width: 18; height: 18
                                    x: iconSlot.width - width - index * 20
                                    y: iconSlot.height - height
-                                   source: AppState.emblemIconSource(tile.itemEmblemNames[index], 18, root.effectiveDpr)
+                                   source: AppState.emblemIconSource(ModelAdapters.listAt(tile.itemEmblemNames, index), 18, root.effectiveDpr)
                                     visible: source !== ""
                                     asynchronous: false
                                    cache: true

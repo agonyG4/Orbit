@@ -6,6 +6,7 @@ import Astrea.Files 1.0 as AstreaFiles
 import "../.."
 import "../common" as CommonComponents
 import "ViewShared.js" as ViewShared
+import "../../utils/ModelAdapters.js" as ModelAdapters
 import Astrea.I18n 1.0 as AstreaI18n
 
 // ── FileListView ──────────────────────────────────────────────────────────────
@@ -205,13 +206,13 @@ Item {
                 displayModel.setProperty(i, "fileModified", item.fileModified)
             if (row.fileIconName !== (item.fileIconName || ""))
                 displayModel.setProperty(i, "fileIconName", item.fileIconName || "")
-            if (JSON.stringify(row.fileIconNames || []) !== JSON.stringify(item.fileIconNames || []))
+            if (!ModelAdapters.stringListEquals(row.fileIconNames, item.fileIconNames))
                 displayModel.setProperty(i, "fileIconNames", item.fileIconNames || [])
             if (row.fileIconFileUrl !== (item.fileIconFileUrl || ""))
                 displayModel.setProperty(i, "fileIconFileUrl", item.fileIconFileUrl || "")
             if (row.fileIconFileVersion !== (item.fileIconFileVersion || ""))
                 displayModel.setProperty(i, "fileIconFileVersion", item.fileIconFileVersion || "")
-            if (JSON.stringify(row.fileEmblemNames || []) !== JSON.stringify(item.fileEmblemNames || []))
+            if (!ModelAdapters.stringListEquals(row.fileEmblemNames, item.fileEmblemNames))
                 displayModel.setProperty(i, "fileEmblemNames", item.fileEmblemNames || [])
             if (Boolean(row.fileIconMetadataReady) !== Boolean(item.fileIconMetadataReady))
                 displayModel.setProperty(i, "fileIconMetadataReady", Boolean(item.fileIconMetadataReady))
@@ -494,7 +495,7 @@ Item {
             readonly property var    itemIconNames: isHeaderRow ? [] : (fileIconNames || [])
             readonly property var    itemIconFileUrl: isHeaderRow ? "" : (fileIconFileUrl || "")
             readonly property string itemIconFileVersion: isHeaderRow ? "" : (fileIconFileVersion || "")
-            readonly property var    itemEmblemNames: isHeaderRow ? [] : (fileEmblemNames || [])
+            readonly property var    itemEmblemNames: isHeaderRow ? [] : ModelAdapters.stringList(fileEmblemNames)
             readonly property int    modelRevision: AppState.fileModelRevision
             readonly property string livePreviewUrl: {
                 if (isHeaderRow || itemSourceIndex < 0 || itemSourceIndex >= AppState.fileModel.count)
@@ -609,12 +610,12 @@ Item {
                             }
 
                             Repeater {
-                                model: Math.min(3, row.itemEmblemNames.length)
+                                model: Math.min(3, ModelAdapters.listCount(row.itemEmblemNames))
                                 delegate: Image {
                                     width: 18; height: 18
                                     x: parent.width - width - index * 20
                                     y: parent.height - height
-                                    source: AppState.emblemIconSource(row.itemEmblemNames[index], 18, root.effectiveDpr)
+                                    source: AppState.emblemIconSource(ModelAdapters.listAt(row.itemEmblemNames, index), 18, root.effectiveDpr)
                                     visible: source !== ""
                                     asynchronous: false
                                     cache: true
