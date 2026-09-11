@@ -230,6 +230,8 @@ target_link_libraries(astrea_explorer_native_settings PUBLIC
 add_library(astrea_explorer_native_clipboard STATIC
     src/services/clipboard_service.h
     src/services/clipboard_service.cpp
+    src/services/file_uri_list.h
+    src/services/file_uri_list.cpp
 )
 
 target_include_directories(astrea_explorer_native_clipboard PUBLIC

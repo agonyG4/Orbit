@@ -116,18 +116,7 @@ Item {
     }
 
     function handleDroppedUrls(drop, destinationPath) {
-        var paths = AstreaFiles.DragDropSupport.dropPaths(drop)
-        if (!paths || paths.length === 0)
-            return false
-
-        const targetPath = destinationPath || AppState.currentPath
-        const dropMode = AstreaFiles.DragDropSupport.dropModeFor(drop, AppState)
-
-        drop.accepted = true
-        Qt.callLater(function() {
-            AppState.dropFilePaths(paths, targetPath, dropMode)
-        })
-        return true
+        return AstreaFiles.DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)
     }
 
     function dragPathsForItem(itemName, itemPath) {

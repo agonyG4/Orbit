@@ -55,6 +55,27 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
             result.stdout + result.stderr,
         )
 
+    def test_drag_drop_paths_merge_mime_formats_without_path_injection(self):
+        qml6 = shutil.which("qml6")
+        if qml6 is None:
+            self.skipTest("qml6 is unavailable")
+
+        fixture = Path(__file__).with_name("drag_drop_paths.qml")
+        environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        result = subprocess.run(
+            [qml6, "-I", str(REPO_ROOT / "shared" / "qml"), str(fixture)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+
     def test_visual_metadata_paths_use_representation_adapters(self):
         adapter = APP_ROOT / "utils" / "ModelAdapters.js"
         list_view = (APP_ROOT / "components" / "views" / "FileListView.qml").read_text(
@@ -269,8 +290,16 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
 
         self.assertIn("function dropModeFor(drop, appState)", drag_support)
         self.assertIn("selectedPathsInCurrentFolder", drag_support)
-        self.assertIn("dropModeFor(drop, AppState)", icon_view)
-        self.assertIn("handleDroppedUrls(AppState, drop, destinationPath)", list_view)
+        self.assertIn("DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)", list_view)
+        self.assertIn("DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)", icon_view)
+        self.assertNotIn("DragDropSupport.dropPaths(drop)", list_view)
+        self.assertNotIn("DragDropSupport.dropPaths(drop)", icon_view)
+        self.assertNotIn("dropFiles(", list_view)
+        self.assertNotIn("dropFiles(", icon_view)
+        for source in [icon_view, list_view]:
+            self.assertIn("AppState.isPathSelected(itemPath)", source)
+            self.assertIn("AppState.selectedPathsInCurrentFolder()", source)
+            self.assertIn("return [itemPath]", source)
 
     def test_drag_drop_uses_normalized_paths_for_multi_file_moves(self):
         drag_support = (FILES_MODULE_ROOT / "DragDropSupport.js").read_text(encoding="utf-8")
@@ -280,7 +309,7 @@ class ExplorerDialogAndDragRegressionTests(unittest.TestCase):
         self.assertIn('dataAsString(drop, "text/uri-list")', drag_support)
         self.assertIn('dataAsString(drop, "text/plain")', drag_support)
         self.assertIn("appState.dropFilePaths(", drag_support)
-        self.assertIn("AstreaFiles.DragDropSupport.dropPaths(drop)", (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8"))
+        self.assertIn("AstreaFiles.DragDropSupport.handleDroppedUrls(AppState, drop, destinationPath)", (APP_ROOT / "components" / "views" / "FileIconView.qml").read_text(encoding="utf-8"))
         self.assertIn("function dropFilePaths(paths, destinationPath, mode)", app_state)
         self.assertIn("function dropFilePaths(paths, destination, mode)", file_ops_qml)
         self.assertIn("pendingPasteRename", file_ops_qml)

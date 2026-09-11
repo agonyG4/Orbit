@@ -1,4 +1,5 @@
 #include "services/clipboard_service.h"
+#include "services/file_uri_list.h"
 
 #include <QBuffer>
 #include <QClipboard>
@@ -18,7 +19,6 @@ ClipboardService::ClipboardService(QClipboard *clipboard)
 std::unique_ptr<QMimeData> ClipboardService::fileMimeData(const QStringList &paths) const
 {
     QList<QUrl> urls;
-    QByteArray uriList;
     QStringList textPaths;
     for (const QString &path : paths) {
         if (path.isEmpty()) {
@@ -26,8 +26,6 @@ std::unique_ptr<QMimeData> ClipboardService::fileMimeData(const QStringList &pat
         }
         const QUrl url = QUrl::fromLocalFile(path);
         urls.append(url);
-        uriList.append(url.toEncoded(QUrl::FullyEncoded));
-        uriList.append("\r\n");
         textPaths.append(path);
     }
     if (urls.isEmpty()) {
@@ -36,7 +34,7 @@ std::unique_ptr<QMimeData> ClipboardService::fileMimeData(const QStringList &pat
 
     auto mimeData = std::make_unique<QMimeData>();
     mimeData->setUrls(urls);
-    mimeData->setData(QStringLiteral("text/uri-list"), uriList);
+    mimeData->setData(QStringLiteral("text/uri-list"), fileUriListData(paths));
     mimeData->setText(textPaths.join(QLatin1Char('\n')));
     return mimeData;
 }

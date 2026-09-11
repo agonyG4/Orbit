@@ -1,4 +1,5 @@
 #include "controllers/app_state_facade.h"
+#include "services/file_uri_list.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -1604,7 +1605,9 @@ QVariant AppStateFacade::selectedItem() const
 QString AppStateFacade::fileUrlForPath(const QString &path) const
 {
     const QUrl url(path);
-    return url.scheme().isEmpty() ? QUrl::fromLocalFile(path).toString() : path;
+    return url.scheme().isEmpty()
+        ? QString::fromUtf8(QUrl::fromLocalFile(path).toEncoded(QUrl::FullyEncoded))
+        : path;
 }
 
 QString AppStateFacade::joinPath(
@@ -1621,11 +1624,7 @@ QStringList AppStateFacade::selectedPathsInCurrentFolder() const
 
 QString AppStateFacade::selectedUriListInCurrentFolder() const
 {
-    QStringList urls;
-    for (const QString &path : selectedPathsInCurrentFolder()) {
-        urls.append(QUrl::fromLocalFile(path).toString());
-    }
-    return urls.join(QLatin1Char('\n'));
+    return QString::fromUtf8(Services::fileUriListData(selectedPathsInCurrentFolder()));
 }
 
 bool AppStateFacade::fileMatchesDialogFilter(

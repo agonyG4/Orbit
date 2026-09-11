@@ -12,6 +12,7 @@
 #include "models/sidebar_favorites_model.h"
 #include "services/directory_watch_service.h"
 #include "services/filesystem_service.h"
+#include "services/file_uri_list.h"
 #include "services/recent_store.h"
 #include "services/settings_service.h"
 #include "controllers/explorer_settings_controller.h"
@@ -42,6 +43,7 @@ private slots:
     void delegatesQmlModelMutationsToNativeBoundary();
     void routesRecentOperationsToNativeBoundary();
     void delegatesPreviewSchedulingToNativeController();
+    void selectedUriListUsesCanonicalEncodingAndSelectionOrder();
     void projectsArchiveCompletionThroughFilesystemActionFinished();
     void resetsArchivePresentationStateAcrossOperations();
     void retainsSelectionWhenDeleteFails();
@@ -909,6 +911,27 @@ void AppStateFacadeTest::delegatesPreviewSchedulingToNativeController()
     QCOMPARE(
         fixture.client.utilityRequests().constLast().arguments,
         expectedSelectedArguments);
+}
+
+void AppStateFacadeTest::selectedUriListUsesCanonicalEncodingAndSelectionOrder()
+{
+    FacadeFixture fixture;
+    const QString firstPath = QStringLiteral("/fixture/space folder#1");
+    const QString secondPath = QStringLiteral("/fixture/测试 folder%2");
+    fixture.model.applyEntries({
+        facadeSelectionEntry(QStringLiteral("space folder#1"), firstPath),
+        facadeSelectionEntry(QStringLiteral("测试 folder%2"), secondPath),
+    }, 0);
+    AppStateFacade facade(facadeDependencies(fixture));
+
+    facade.selectByPath(firstPath);
+    facade.handleSelection(QStringLiteral("测试 folder%2"), 1, true, false, false);
+
+    const QStringList selected {firstPath, secondPath};
+    QCOMPARE(facade.selectedPathsInCurrentFolder(), selected);
+    QCOMPARE(
+        facade.selectedUriListInCurrentFolder(),
+        QString::fromUtf8(fileUriListData(selected)));
 }
 
 QTEST_GUILESS_MAIN(AppStateFacadeTest)

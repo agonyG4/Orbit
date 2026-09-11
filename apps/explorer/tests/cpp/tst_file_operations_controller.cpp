@@ -22,9 +22,11 @@ private slots:
     void emptySelectionPreservesClipboardState();
     void repeatedCutIsOrderInsensitiveAndClearsClipboard();
     void pasteDelegatesTypedRequestAndPublishesProgress();
+    void cutPastePreservesTwoDirectoryBatch();
     void progressSignalsCarryLiveUpdates();
     void terminalSignalIsSingleAndCoherent();
     void exposesTerminalItemResults();
+    void dragTransferPreservesAllSourcesAndMoveMode();
     void pastePreflightsConflictsBeforeStarting();
     void dragTransferDoesNotMutateClipboard();
     void successfulMoveReconcilesCutClipboard();
@@ -136,6 +138,31 @@ void FileOperationsControllerTest::pasteDelegatesTypedRequestAndPublishesProgres
     QTRY_COMPARE(finishedSpy.count(), 1);
     QCOMPARE(controller.running(), false);
     QCOMPARE(finishedSpy.takeFirst().at(0).value<FileOperationResult>().ok, true);
+}
+
+void FileOperationsControllerTest::cutPastePreservesTwoDirectoryBatch()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    ClipboardService clipboard(QGuiApplication::clipboard());
+    FileOperationsController controller(&service, &clipboard);
+
+    const QStringList sources {
+        QStringLiteral("/tmp/folder-a"),
+        QStringLiteral("/tmp/folder-b"),
+    };
+    controller.setSelection(sources);
+    controller.cutSelection();
+    QCOMPARE(controller.clipboardMode(), QStringLiteral("cut"));
+
+    const BackendRequestId requestId = controller.pasteFiles(QStringLiteral("/tmp/destination"));
+
+    QVERIFY(requestId > 0);
+    QCOMPARE(client.fileOperationRequests().size(), 1);
+    const FileOperationRequest request = client.fileOperationRequests().constFirst();
+    QCOMPARE(request.sources, sources);
+    QCOMPARE(request.destination, QStringLiteral("/tmp/destination"));
+    QCOMPARE(request.mode, QStringLiteral("move"));
 }
 
 void FileOperationsControllerTest::progressSignalsCarryLiveUpdates()
@@ -292,6 +319,29 @@ void FileOperationsControllerTest::dragTransferDoesNotMutateClipboard()
     QVERIFY(requestId > 0);
     QCOMPARE(request.mode, QStringLiteral("move"));
     QCOMPARE(request.sources, QStringList({QStringLiteral("/tmp/dragged.txt")}));
+}
+
+void FileOperationsControllerTest::dragTransferPreservesAllSourcesAndMoveMode()
+{
+    FakeRustBackendClient client;
+    FileOperationService service(&client);
+    FileOperationsController controller(&service);
+
+    const QStringList sources {
+        QStringLiteral("/tmp/folder-a"),
+        QStringLiteral("/tmp/folder-b"),
+    };
+    const BackendRequestId requestId = controller.transferFiles(
+        sources,
+        QStringLiteral("/tmp/destination"),
+        QStringLiteral("move"));
+
+    QVERIFY(requestId > 0);
+    QCOMPARE(client.fileOperationRequests().size(), 1);
+    const FileOperationRequest request = client.fileOperationRequests().constFirst();
+    QCOMPARE(request.sources, sources);
+    QCOMPARE(request.destination, QStringLiteral("/tmp/destination"));
+    QCOMPARE(request.mode, QStringLiteral("move"));
 }
 
 void FileOperationsControllerTest::pastePreflightsConflictsBeforeStarting()

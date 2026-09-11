@@ -4,20 +4,31 @@
 // ownership is intentionally determined only by explicit drag metadata.
 
 function normalizeFileUrl(url) {
+    if (url && typeof url.toLocalFile === "function") {
+        try {
+            const localPath = String(url.toLocalFile() || "")
+            if (!/[\r\n\u0000]/.test(localPath))
+                return localPath
+        } catch (error) {
+            return ""
+        }
+    }
+
     const value = String(url || "").trim()
-    if (value.indexOf("file://") !== 0)
+    if (/[\r\n\u0000]/.test(value) || value.indexOf("file://") !== 0)
         return ""
     const encoded = value.slice("file://".length)
     try {
-        return decodeURIComponent(encoded)
+        const path = decodeURIComponent(encoded)
+        return /[\r\n\u0000]/.test(path) ? "" : path
     } catch (error) {
-        return encoded
+        return /[\r\n\u0000]/.test(encoded) ? "" : encoded
     }
 }
 
 function appendUniquePath(paths, seen, path) {
-    const value = String(path || "").trim()
-    if (!value || seen[value])
+    const value = String(path || "")
+    if (!value || /[\r\n\u0000]/.test(value) || seen[value])
         return
     seen[value] = true
     paths.push(value)
@@ -26,7 +37,10 @@ function appendUniquePath(paths, seen, path) {
 function appendUriList(paths, seen, text) {
     const entries = String(text || "").split(/\r?\n/)
     for (var i = 0; i < entries.length; i++) {
-        const path = normalizeFileUrl(entries[i])
+        const entry = entries[i].trim()
+        if (!entry || entry.indexOf("#") === 0)
+            continue
+        const path = normalizeFileUrl(entry)
         if (path)
             appendUniquePath(paths, seen, path)
     }
@@ -39,6 +53,22 @@ function appendPlainPathList(paths, seen, text) {
         if (value.indexOf("/") === 0)
             appendUniquePath(paths, seen, value)
     }
+}
+
+function appendDropUrl(paths, seen, url) {
+    if (url && typeof url.toLocalFile === "function") {
+        const path = normalizeFileUrl(url)
+        if (path)
+            appendUniquePath(paths, seen, path)
+        return
+    }
+
+    const value = String(url || "").trim()
+    if (/[\r\n\u0000]/.test(value))
+        return
+    const path = normalizeFileUrl(value)
+    if (path)
+        appendUniquePath(paths, seen, path)
 }
 
 function dataAsString(drop, format) {
@@ -56,17 +86,15 @@ function dropPaths(drop) {
     const paths = []
     const seen = {}
     for (var i = 0; i < urls.length; i++) {
-        const path = normalizeFileUrl(urls[i])
-        if (path)
-            appendUniquePath(paths, seen, path)
-        else
-            appendUriList(paths, seen, urls[i])
+        appendDropUrl(paths, seen, urls[i])
     }
 
     appendUriList(paths, seen, dataAsString(drop, "text/uri-list"))
     appendPlainPathList(paths, seen, dataAsString(drop, "text/plain"))
-    if (drop && drop.hasText)
+    if (drop && drop.text) {
+        appendUriList(paths, seen, drop.text)
         appendPlainPathList(paths, seen, drop.text)
+    }
 
     return paths
 }
@@ -86,16 +114,6 @@ function dragImageUrl(previewUrl, fallbackIconUrl) {
 }
 
 function handleDroppedUrls(appState, drop, destinationPath) {
-    const urls = [].concat((drop && drop.urls) || [])
-    if (urls.length > 0) {
-        appState.dropFiles(
-            urls,
-            destinationPath || appState.currentPath,
-            dropModeFor(drop, appState))
-        drop.accepted = true
-        return true
-    }
-
     const paths = dropPaths(drop)
     if (!paths || paths.length === 0)
         return false

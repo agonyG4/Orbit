@@ -1844,6 +1844,28 @@ mod tests {
     }
 
     #[test]
+    fn transfer_plan_rejects_multi_source_rename_policy() {
+        let root = std::env::temp_dir().join(format!("astrea-transfer-rename-{}", unix_millis()));
+        let first = root.join("first");
+        let second = root.join("second");
+        let destination = root.join("destination");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+
+        let error = plan_transfer(
+            OperationMode::Move,
+            &destination,
+            ConflictPolicy::Rename,
+            "renamed",
+            vec![first, second],
+        )
+        .expect_err("multi-source rename should remain invalid");
+        assert!(error.contains("exactly one source"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn run_inner_moves_a_large_sibling_batch() {
         let root = std::env::temp_dir().join(format!("astrea-transfer-batch-{}", unix_millis()));
         let sources = root.join("sources");
