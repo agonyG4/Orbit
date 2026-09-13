@@ -893,6 +893,7 @@ where
     command
         .args(args)
         .env("LC_ALL", "C")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -1323,10 +1324,8 @@ fn inspect_archive(
                 OsString::from("l"),
                 OsString::from("-slt"),
                 OsString::from("-bd"),
+                OsString::from(format!("-p{password}")),
             ];
-            if !password.is_empty() {
-                args.push(OsString::from(format!("-p{password}")));
-            }
             args.push(archive.as_os_str().to_os_string());
             let mut encrypted = false;
             let outcome = run_provider("7z", None, &args, cancellation, |line| {
@@ -1418,9 +1417,7 @@ fn extract_archive(
             ]);
             // 7z has no supported stdin password mode in this integration; the
             // provider limitation is isolated here and the password is never logged.
-            if !request.password.is_empty() {
-                args.push(OsString::from(format!("-p{}", request.password)));
-            }
+            args.push(OsString::from(format!("-p{}", request.password)));
             args.push(request.archive_path.as_os_str().to_os_string());
             args.push(OsString::from(format!("-o{}", stage.path.display())));
         }
@@ -2086,6 +2083,65 @@ mod tests {
         assert!(root.join("Extracted/report.txt").is_file());
         assert!(root.join("Extracted/photos/a.jpg").is_file());
         assert!(root.join("Extracted/notes/note.txt").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn real_7z_password_states_are_structured_and_retryable() {
+        if !super::discover_providers().seven_zip {
+            return;
+        }
+        let root = test_root("password");
+        let source = root.join("secret.txt");
+        let archive = root.join("protected.7z");
+        fs::write(&source, b"secret-data").unwrap();
+        let provider = std::process::Command::new("7z")
+            .args([
+                "a",
+                "-bd",
+                "-psecret",
+                "-mhe=on",
+                archive.to_str().unwrap(),
+                source.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(provider.status.success());
+
+        let request = |password: &str| OperationRequest {
+            kind: "extract".into(),
+            sources: Vec::new(),
+            archive_path: archive.clone(),
+            destination: root.join("Extracted"),
+            format: String::new(),
+            profile: "balanced".into(),
+            password: password.into(),
+            conflict_policy: "keep-both".into(),
+        };
+        let required = extract_archive(
+            &request(""),
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("encrypted archive without a password must continue");
+        assert_eq!(required, ArchiveError::PasswordRequired);
+
+        let wrong = extract_archive(
+            &request("wrong"),
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("wrong password must remain retryable");
+        assert_eq!(wrong, ArchiveError::BadPassword);
+
+        let success = extract_archive(
+            &request("secret"),
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .unwrap();
+        assert_eq!(success["state"], Value::String("success".into()));
+        assert!(root.join("Extracted/secret.txt").is_file());
         fs::remove_dir_all(root).unwrap();
     }
 
