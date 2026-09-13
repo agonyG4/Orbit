@@ -298,6 +298,10 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
             "function onArchiveStateChanged()",
             file_ops_qml,
         )
+        self.assertIn('ops.archivePassword = ""', file_ops_qml)
+        self.assertIn("snapshot.state === \"success\"", file_ops_qml)
+        self.assertIn("snapshot.state === \"cancelled\"", file_ops_qml)
+        self.assertIn("snapshot.state === \"failed\"", file_ops_qml)
         self.assertIn("currentArchiveOperationSnapshot()", file_ops_qml)
 
 

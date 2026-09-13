@@ -59,7 +59,13 @@ QtObject {
             ops.fileOperationChanged(ops.currentFileOperationSnapshot())
         }
         function onArchiveStateChanged() {
-            ops.archiveOperationChanged(ops.currentArchiveOperationSnapshot())
+            var snapshot = ops.currentArchiveOperationSnapshot()
+            if (snapshot.state === "success"
+                    || snapshot.state === "cancelled"
+                    || snapshot.state === "failed") {
+                ops.archivePassword = ""
+            }
+            ops.archiveOperationChanged(snapshot)
         }
     }
     property var pendingDeleteTargets: []

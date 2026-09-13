@@ -652,6 +652,24 @@ void AppStateCompatibilityTest::appStatePublishesArchiveOperationSnapshots()
     QCOMPARE(failed.value(QStringLiteral("error")).toString(), QStringLiteral("archive destination is not writable"));
     QCOMPARE(failed.value(QStringLiteral("status")).toString(), QStringLiteral("Failed"));
 
+    fileOps->setProperty("archivePassword", QStringLiteral("secret"));
+    facade.startArchiveExtraction(QStringLiteral("/tmp/cancelled.zip"), QStringLiteral("cancelled"));
+    QTRY_COMPARE(archiveSpy.count(), 7);
+    QTRY_COMPARE(pipelinePresenter->property("phase").toString(), QStringLiteral("running"));
+    facade.cancelArchiveOperation();
+    ArchiveOperationResult cancelled;
+    cancelled.operation = QStringLiteral("extract");
+    cancelled.state = QStringLiteral("cancelled");
+    client.completeArchiveOperation(5, cancelled);
+    QTRY_COMPARE(archiveSpy.count(), 8);
+    const QVariantMap cancelledSnapshot = archiveSpy.at(7).at(0).toMap();
+    QCOMPARE(cancelledSnapshot.value(QStringLiteral("state")).toString(), QStringLiteral("cancelled"));
+    QCOMPARE(cancelledSnapshot.value(QStringLiteral("status")).toString(), QStringLiteral("Cancelled"));
+    QTRY_COMPARE(pipelinePresenter->property("phase").toString(), QStringLiteral("terminal"));
+    QCOMPARE(pipelinePresenter->property("title").toString(), QStringLiteral("Cancelled"));
+    QVERIFY(!pipelinePresenter->property("failed").toBool());
+    QCOMPARE(fileOps->property("archivePassword").toString(), QString());
+
     delete pipeline;
     delete appState;
 }

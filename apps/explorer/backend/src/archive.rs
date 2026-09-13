@@ -3,7 +3,8 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -83,6 +84,7 @@ pub enum ArchiveError {
     UnsafeMember(String),
     ProviderFailed(String),
     InvalidRequest(String),
+    RecoveryRequired(String),
 }
 
 impl ArchiveError {
@@ -98,6 +100,7 @@ impl ArchiveError {
             Self::UnsafeMember(_) => "unsafe-member",
             Self::ProviderFailed(_) => "provider-failed",
             Self::InvalidRequest(_) => "invalid-request",
+            Self::RecoveryRequired(_) => "recovery-required",
         }
     }
 
@@ -108,7 +111,8 @@ impl ArchiveError {
             Self::InvalidSource(message)
             | Self::UnsafeMember(message)
             | Self::ProviderFailed(message)
-            | Self::InvalidRequest(message) => message.clone(),
+            | Self::InvalidRequest(message)
+            | Self::RecoveryRequired(message) => message.clone(),
             Self::Cancelled => "archive operation cancelled".into(),
             Self::PasswordRequired => String::new(),
             Self::BadPassword => "archive password is incorrect".into(),
@@ -722,34 +726,74 @@ struct SevenZipMemberRecord {
     attributes: String,
 }
 
-fn parse_seven_zip_slt_records(input: &str) -> Result<Vec<SevenZipMemberRecord>, ArchiveError> {
-    let mut records = Vec::new();
-    for block in input.split("\n\n") {
-        let mut record = SevenZipMemberRecord::default();
-        let mut has_field = false;
-        for line in block.lines() {
-            let Some((key, value)) = line.split_once(" = ") else {
-                continue;
-            };
-            has_field = true;
-            let value = value.trim();
-            match key {
-                "Path" => record.path = value.to_string(),
-                "Encrypted" => {
-                    record.encrypted = value == "+" || value.eq_ignore_ascii_case("true")
-                }
-                "Symbolic Link" => record.symbolic_link = !value.is_empty() && value != "-",
-                "Hard Link" => record.hard_link = !value.is_empty() && value != "-",
-                "Attributes" => record.attributes = value.to_string(),
-                _ => {}
-            }
+struct SevenZipSltRecordParser {
+    current: SevenZipMemberRecord,
+    has_field: bool,
+}
+
+impl SevenZipSltRecordParser {
+    fn new() -> Self {
+        Self {
+            current: SevenZipMemberRecord::default(),
+            has_field: false,
         }
-        if !has_field || record.path.is_empty() {
-            continue;
+    }
+
+    fn push_line(&mut self, line: &str) -> Result<Option<SevenZipMemberRecord>, ArchiveError> {
+        let line = line.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            return self.finish_record();
+        }
+        let Some((key, value)) = line.split_once(" = ") else {
+            return Ok(None);
+        };
+        self.has_field = true;
+        let value = value.trim();
+        match key {
+            "Path" => {
+                if !self.current.path.is_empty() {
+                    return Err(ArchiveError::ProviderFailed(
+                        "7z SLT record contained multiple Path fields".into(),
+                    ));
+                }
+                self.current.path = value.to_string();
+            }
+            "Encrypted" => {
+                self.current.encrypted = value == "+" || value.eq_ignore_ascii_case("true")
+            }
+            "Symbolic Link" => self.current.symbolic_link = !value.is_empty() && value != "-",
+            "Hard Link" => self.current.hard_link = !value.is_empty() && value != "-",
+            "Attributes" => self.current.attributes = value.to_string(),
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    fn finish_record(&mut self) -> Result<Option<SevenZipMemberRecord>, ArchiveError> {
+        if !self.has_field {
+            return Ok(None);
+        }
+        let mut record = std::mem::take(&mut self.current);
+        self.has_field = false;
+        if record.path.is_empty() {
+            return Ok(None);
         }
         let attributes = record.attributes.to_ascii_uppercase();
         record.symbolic_link |= attributes.contains('L');
         record.hard_link |= attributes.contains('H');
+        Ok(Some(record))
+    }
+}
+
+fn parse_seven_zip_slt_records(input: &str) -> Result<Vec<SevenZipMemberRecord>, ArchiveError> {
+    let mut parser = SevenZipSltRecordParser::new();
+    let mut records = Vec::new();
+    for line in input.split('\n') {
+        if let Some(record) = parser.push_line(line)? {
+            records.push(record);
+        }
+    }
+    if let Some(record) = parser.finish_record()? {
         records.push(record);
     }
     if records.is_empty() && !input.trim().is_empty() {
@@ -758,6 +802,64 @@ fn parse_seven_zip_slt_records(input: &str) -> Result<Vec<SevenZipMemberRecord>,
         ));
     }
     Ok(records)
+}
+
+const MAX_INSPECTED_MEMBERS: usize = 1_000_000;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ArchiveInspection {
+    member_count: usize,
+    encrypted: bool,
+}
+
+struct SevenZipSltInspector {
+    archive_path: String,
+    parser: SevenZipSltRecordParser,
+    inspection: ArchiveInspection,
+}
+
+impl SevenZipSltInspector {
+    fn new(archive: &Path) -> Self {
+        Self {
+            archive_path: archive.to_string_lossy().into_owned(),
+            parser: SevenZipSltRecordParser::new(),
+            inspection: ArchiveInspection::default(),
+        }
+    }
+
+    fn push_line(&mut self, line: &str) -> Result<(), ArchiveError> {
+        if let Some(record) = self.parser.push_line(line)? {
+            self.inspect_record(record)?;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<ArchiveInspection, ArchiveError> {
+        if let Some(record) = self.parser.finish_record()? {
+            self.inspect_record(record)?;
+        }
+        Ok(self.inspection)
+    }
+
+    fn inspect_record(&mut self, record: SevenZipMemberRecord) -> Result<(), ArchiveError> {
+        if record.path == self.archive_path {
+            return Ok(());
+        }
+        validate_member(&record.path).map_err(ArchiveError::UnsafeMember)?;
+        if record.symbolic_link || record.hard_link {
+            return Err(ArchiveError::UnsafeMember(
+                "archives containing symbolic or hard links are not supported".into(),
+            ));
+        }
+        self.inspection.member_count = self.inspection.member_count.saturating_add(1);
+        if self.inspection.member_count > MAX_INSPECTED_MEMBERS {
+            return Err(ArchiveError::ProviderFailed(
+                "archive inspection exceeded the member limit".into(),
+            ));
+        }
+        self.inspection.encrypted |= record.encrypted;
+        Ok(())
+    }
 }
 
 fn scan_sources(
@@ -1030,18 +1132,27 @@ fn seven_zip_profile_level(profile: CompressionProfile) -> u8 {
     }
 }
 
-fn materialize_sources(
+fn materialize_sources_with_hook<F>(
     root: &Path,
     sources: &[SourceInfo],
     cancellation: &Cancellation,
-) -> Result<(), ArchiveError> {
+    on_chunk: &mut F,
+) -> Result<(), ArchiveError>
+where
+    F: FnMut(),
+{
     fs::create_dir_all(root)
         .map_err(|error| ArchiveError::ProviderFailed(format!("create 7z input root: {error}")))?;
     for source in sources {
         if cancellation.is_cancelled() {
             return Err(ArchiveError::Cancelled);
         }
-        copy_source_without_links(&source.path, &root.join(&source.basename), cancellation)?;
+        copy_source_without_links(
+            &source.path,
+            &root.join(&source.basename),
+            cancellation,
+            on_chunk,
+        )?;
     }
     Ok(())
 }
@@ -1050,6 +1161,7 @@ fn copy_source_without_links(
     source: &Path,
     destination: &Path,
     cancellation: &Cancellation,
+    on_chunk: &mut impl FnMut(),
 ) -> Result<(), ArchiveError> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| ArchiveError::InvalidSource(format!("copy source: {error}")))?;
@@ -1060,7 +1172,7 @@ fn copy_source_without_links(
         )));
     }
     if metadata.is_file() {
-        copy_file_with_cancellation(source, destination, cancellation)?;
+        copy_file_with_cancellation(source, destination, cancellation, on_chunk)?;
         return Ok(());
     }
     fs::create_dir_all(destination).map_err(|error| {
@@ -1082,7 +1194,7 @@ fn copy_source_without_links(
         let name = entry
             .file_name()
             .ok_or_else(|| ArchiveError::InvalidSource("source member has no basename".into()))?;
-        copy_source_without_links(&entry, &destination.join(name), cancellation)?;
+        copy_source_without_links(&entry, &destination.join(name), cancellation, on_chunk)?;
     }
     Ok(())
 }
@@ -1093,6 +1205,7 @@ fn copy_file_with_cancellation(
     source: &Path,
     destination: &Path,
     cancellation: &Cancellation,
+    on_chunk: &mut impl FnMut(),
 ) -> Result<(), ArchiveError> {
     let mut input = fs::File::open(source)
         .map_err(|error| ArchiveError::InvalidSource(format!("open source: {error}")))?;
@@ -1117,6 +1230,7 @@ fn copy_file_with_cancellation(
         output
             .write_all(&buffer[..count])
             .map_err(|error| ArchiveError::ProviderFailed(format!("stage source: {error}")))?;
+        on_chunk();
     }
     let metadata = fs::metadata(source)
         .map_err(|error| ArchiveError::InvalidSource(format!("read source metadata: {error}")))?;
@@ -1153,6 +1267,18 @@ enum ProviderOutcome {
     Failed(String),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderStreamMode {
+    ProgressLossy,
+    InspectionLossless,
+}
+
 fn run_provider<F>(
     program: &str,
     cwd: Option<&Path>,
@@ -1162,6 +1288,31 @@ fn run_provider<F>(
 ) -> Result<ProviderOutcome, ArchiveError>
 where
     F: FnMut(&str),
+{
+    run_provider_with_mode(
+        program,
+        cwd,
+        args,
+        cancellation,
+        ProviderStreamMode::ProgressLossy,
+        |_, line| {
+            if !line.is_empty() {
+                on_line(line);
+            }
+        },
+    )
+}
+
+fn run_provider_with_mode<F>(
+    program: &str,
+    cwd: Option<&Path>,
+    args: &[OsString],
+    cancellation: &Cancellation,
+    mode: ProviderStreamMode,
+    mut on_line: F,
+) -> Result<ProviderOutcome, ArchiveError>
+where
+    F: FnMut(ProviderStream, &str),
 {
     let mut command = Command::new(program);
     command
@@ -1195,21 +1346,25 @@ where
         .take()
         .ok_or_else(|| ArchiveError::ProviderFailed("provider stderr unavailable".into()))?;
     let (line_sender, line_receiver) = sync_channel(64);
-    let stdout_thread = thread::spawn(move || read_provider_lines(stdout, line_sender));
+    let stdout_done = Arc::new(AtomicBool::new(false));
+    let stdout_done_thread = Arc::clone(&stdout_done);
+    let stdout_thread = thread::spawn(move || {
+        let result = read_provider_lines(stdout, line_sender, mode, ProviderStream::Stdout);
+        stdout_done_thread.store(true, Ordering::Release);
+        result
+    });
     let (stderr_sender, stderr_receiver) = sync_channel(64);
-    let stderr_thread = thread::spawn(move || read_provider_lines(stderr, stderr_sender));
+    let stderr_done = Arc::new(AtomicBool::new(false));
+    let stderr_done_thread = Arc::clone(&stderr_done);
+    let stderr_thread = thread::spawn(move || {
+        let result = read_provider_lines(stderr, stderr_sender, mode, ProviderStream::Stderr);
+        stderr_done_thread.store(true, Ordering::Release);
+        result
+    });
     let mut cancelled = false;
     loop {
-        while let Ok(line) = line_receiver.try_recv() {
-            if !line.is_empty() {
-                on_line(&line);
-            }
-        }
-        while let Ok(line) = stderr_receiver.try_recv() {
-            if !line.is_empty() {
-                on_line(&line);
-            }
-        }
+        drain_provider_lines(&line_receiver, ProviderStream::Stdout, mode, &mut on_line);
+        drain_provider_lines(&stderr_receiver, ProviderStream::Stderr, mode, &mut on_line);
         if cancellation.is_cancelled() {
             cancelled = true;
             kill_provider(&mut child);
@@ -1229,6 +1384,34 @@ where
     let status = child
         .wait()
         .map_err(|error| ArchiveError::ProviderFailed(format!("reap provider: {error}")))?;
+
+    if cancelled {
+        drop(line_receiver);
+        drop(stderr_receiver);
+        stdout_thread
+            .join()
+            .map_err(|_| ArchiveError::ProviderFailed("provider stdout reader panicked".into()))?
+            .map_err(|error| {
+                ArchiveError::ProviderFailed(format!("read provider stdout: {error}"))
+            })?;
+        stderr_thread
+            .join()
+            .map_err(|_| ArchiveError::ProviderFailed("provider stderr reader panicked".into()))?
+            .map_err(|error| {
+                ArchiveError::ProviderFailed(format!("read provider stderr: {error}"))
+            })?;
+        return Ok(ProviderOutcome::Cancelled);
+    }
+
+    while !stdout_done.load(Ordering::Acquire) || !stderr_done.load(Ordering::Acquire) {
+        drain_provider_lines(&line_receiver, ProviderStream::Stdout, mode, &mut on_line);
+        drain_provider_lines(&stderr_receiver, ProviderStream::Stderr, mode, &mut on_line);
+        if !stdout_done.load(Ordering::Acquire) || !stderr_done.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    drain_provider_lines(&line_receiver, ProviderStream::Stdout, mode, &mut on_line);
+    drain_provider_lines(&stderr_receiver, ProviderStream::Stderr, mode, &mut on_line);
     let stdout_result = stdout_thread
         .join()
         .map_err(|_| ArchiveError::ProviderFailed("provider stdout reader panicked".into()))?
@@ -1237,18 +1420,12 @@ where
         .join()
         .map_err(|_| ArchiveError::ProviderFailed("provider stderr reader panicked".into()))?
         .map_err(|error| ArchiveError::ProviderFailed(format!("read provider stderr: {error}")))?;
-    while let Ok(line) = line_receiver.try_recv() {
-        if !line.is_empty() {
-            on_line(&line);
-        }
-    }
-    while let Ok(line) = stderr_receiver.try_recv() {
-        if !line.is_empty() {
-            on_line(&line);
-        }
-    }
-    if cancelled {
-        return Ok(ProviderOutcome::Cancelled);
+    if mode == ProviderStreamMode::InspectionLossless
+        && (stdout_result.limit_exceeded || stderr_result.limit_exceeded)
+    {
+        return Err(ArchiveError::ProviderFailed(
+            "archive inspection output exceeded the configured limit".into(),
+        ));
     }
     if status.success() {
         return Ok(ProviderOutcome::Success);
@@ -1256,7 +1433,6 @@ where
     let stderr = String::from_utf8_lossy(&stderr_result.bytes)
         .trim()
         .to_string();
-    let _ = stdout_result;
     Ok(ProviderOutcome::Failed(if stderr.is_empty() {
         "archive provider failed".into()
     } else {
@@ -1269,16 +1445,23 @@ const MAX_PROVIDER_LINE_BYTES: usize = 64 * 1024;
 
 struct BoundedCapture {
     bytes: Vec<u8>,
+    limit_exceeded: bool,
 }
 
 fn read_provider_lines(
     stream: impl Read,
     sender: SyncSender<String>,
+    mode: ProviderStreamMode,
+    stream_kind: ProviderStream,
 ) -> io::Result<BoundedCapture> {
     let mut capture = Vec::new();
+    let mut limit_exceeded = false;
+    let capture_output =
+        mode == ProviderStreamMode::ProgressLossy || stream_kind == ProviderStream::Stderr;
     let mut reader = stream;
     let mut buffer = [0_u8; 8192];
     let mut line = Vec::with_capacity(MAX_PROVIDER_LINE_BYTES.min(8192));
+    let mut line_limit_exceeded = false;
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
@@ -1286,30 +1469,85 @@ fn read_provider_lines(
         }
         for byte in &buffer[..count] {
             if *byte == b'\n' {
-                if !send_provider_line(&mut capture, &sender, &line) {
-                    return Ok(BoundedCapture { bytes: capture });
+                limit_exceeded |= line_limit_exceeded;
+                if !send_provider_line(
+                    &mut capture,
+                    &sender,
+                    &line,
+                    mode,
+                    capture_output,
+                    &mut limit_exceeded,
+                ) {
+                    return Ok(BoundedCapture {
+                        bytes: capture,
+                        limit_exceeded,
+                    });
                 }
                 line.clear();
+                line_limit_exceeded = false;
             } else if line.len() < MAX_PROVIDER_LINE_BYTES {
                 line.push(*byte);
+            } else {
+                line_limit_exceeded = true;
             }
         }
     }
+    limit_exceeded |= line_limit_exceeded;
     if !line.is_empty() {
-        let _ = send_provider_line(&mut capture, &sender, &line);
+        let _ = send_provider_line(
+            &mut capture,
+            &sender,
+            &line,
+            mode,
+            capture_output,
+            &mut limit_exceeded,
+        );
     }
-    Ok(BoundedCapture { bytes: capture })
+    Ok(BoundedCapture {
+        bytes: capture,
+        limit_exceeded,
+    })
 }
 
-fn send_provider_line(capture: &mut Vec<u8>, sender: &SyncSender<String>, bytes: &[u8]) -> bool {
+fn send_provider_line(
+    capture: &mut Vec<u8>,
+    sender: &SyncSender<String>,
+    bytes: &[u8],
+    mode: ProviderStreamMode,
+    capture_output: bool,
+    limit_exceeded: &mut bool,
+) -> bool {
     let line = String::from_utf8_lossy(bytes)
         .trim_end_matches('\r')
         .to_string();
-    let remaining = MAX_PROVIDER_CAPTURE_BYTES.saturating_sub(capture.len());
-    capture.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
-    match sender.try_send(line) {
-        Ok(()) | Err(TrySendError::Full(_)) => true,
-        Err(TrySendError::Disconnected(_)) => false,
+    if capture_output {
+        let remaining = MAX_PROVIDER_CAPTURE_BYTES.saturating_sub(capture.len());
+        if bytes.len() > remaining {
+            *limit_exceeded = true;
+        }
+        capture.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+    }
+    match mode {
+        ProviderStreamMode::ProgressLossy => match sender.try_send(line) {
+            Ok(()) | Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+        },
+        ProviderStreamMode::InspectionLossless => sender.send(line).is_ok(),
+    }
+}
+
+fn drain_provider_lines<F>(
+    receiver: &std::sync::mpsc::Receiver<String>,
+    stream: ProviderStream,
+    mode: ProviderStreamMode,
+    on_line: &mut F,
+) where
+    F: FnMut(ProviderStream, &str),
+{
+    while let Ok(line) = receiver.try_recv() {
+        if mode == ProviderStreamMode::InspectionLossless || !line.is_empty() {
+            on_line(stream, &line);
+        }
     }
 }
 
@@ -1368,6 +1606,19 @@ fn create_archive(
     cancellation: &Cancellation,
     emitter: &mut ProgressEmitter,
 ) -> Result<Value, ArchiveError> {
+    let mut no_op = || {};
+    create_archive_with_preparation_hook(request, cancellation, emitter, &mut no_op)
+}
+
+fn create_archive_with_preparation_hook<F>(
+    request: &OperationRequest,
+    cancellation: &Cancellation,
+    emitter: &mut ProgressEmitter,
+    on_preparation_chunk: &mut F,
+) -> Result<Value, ArchiveError>
+where
+    F: FnMut(),
+{
     let format = FormatId::from_id(&request.format).ok_or(ArchiveError::UnsupportedFormat)?;
     let profile = CompressionProfile::from_id(&request.profile).ok_or(
         ArchiveError::InvalidRequest("unknown compression profile".into()),
@@ -1421,7 +1672,7 @@ fn create_archive(
             "Preparing source staging",
             true,
         );
-        materialize_sources(&input_root, &sources, cancellation)?;
+        materialize_sources_with_hook(&input_root, &sources, cancellation, on_preparation_chunk)?;
         emitter.emit(
             "create",
             "preparing",
@@ -1570,18 +1821,40 @@ fn inspect_archive(
     password: &str,
     cancellation: &Cancellation,
     emitter: &mut ProgressEmitter,
-) -> Result<Vec<String>, ArchiveError> {
-    let mut members = Vec::new();
+) -> Result<ArchiveInspection, ArchiveError> {
+    let mut inspection = ArchiveInspection::default();
     match provider {
         ProviderKind::Bsdtar => {
             let args = vec![OsString::from("-tf"), archive.as_os_str().to_os_string()];
-            let outcome = run_provider("bsdtar", None, &args, cancellation, |line| {
-                if !line.trim().is_empty() {
-                    members.push(line.to_string());
+            let mut inspection_error = None;
+            let outcome = run_provider_with_mode(
+                "bsdtar",
+                None,
+                &args,
+                cancellation,
+                ProviderStreamMode::InspectionLossless,
+                |stream, line| {
+                    if stream != ProviderStream::Stdout
+                        || line.trim().is_empty()
+                        || inspection_error.is_some()
+                    {
+                        return;
+                    }
+                    if let Err(error) = validate_member(line) {
+                        inspection_error = Some(ArchiveError::UnsafeMember(error));
+                        return;
+                    }
+                    inspection.member_count = inspection.member_count.saturating_add(1);
+                    if inspection.member_count > MAX_INSPECTED_MEMBERS {
+                        inspection_error = Some(ArchiveError::ProviderFailed(
+                            "archive inspection exceeded the member limit".into(),
+                        ));
+                        return;
+                    }
                     emitter.emit(
                         "extract",
                         "inspecting",
-                        members.len(),
+                        inspection.member_count,
                         None,
                         None,
                         None,
@@ -1591,8 +1864,8 @@ fn inspect_archive(
                         "Inspecting archive",
                         false,
                     );
-                }
-            })?;
+                },
+            )?;
             match outcome {
                 ProviderOutcome::Success => {}
                 ProviderOutcome::Cancelled => return Err(ArchiveError::Cancelled),
@@ -1600,16 +1873,26 @@ fn inspect_archive(
                     return Err(classify_provider_failure(&message, !password.is_empty()));
                 }
             }
-            for member in &members {
-                validate_member(member).map_err(ArchiveError::UnsafeMember)?;
+            if let Some(error) = inspection_error {
+                return Err(error);
             }
             let verbose_args = vec![OsString::from("-tvf"), archive.as_os_str().to_os_string()];
             let mut links = false;
-            let outcome = run_provider("bsdtar", None, &verbose_args, cancellation, |line| {
-                if line.starts_with('l') || line.starts_with('h') || line.contains(" -> ") {
-                    links = true;
-                }
-            })?;
+            let outcome = run_provider_with_mode(
+                "bsdtar",
+                None,
+                &verbose_args,
+                cancellation,
+                ProviderStreamMode::InspectionLossless,
+                |stream, line| {
+                    if stream == ProviderStream::Stdout
+                        && !line.trim().is_empty()
+                        && (line.starts_with('l') || line.starts_with('h') || line.contains(" -> "))
+                    {
+                        links = true;
+                    }
+                },
+            )?;
             if matches!(outcome, ProviderOutcome::Cancelled) {
                 return Err(ArchiveError::Cancelled);
             }
@@ -1630,11 +1913,23 @@ fn inspect_archive(
                 OsString::from(format!("-p{password}")),
             ];
             args.push(archive.as_os_str().to_os_string());
-            let mut listing = String::new();
-            let outcome = run_provider("7z", None, &args, cancellation, |line| {
-                listing.push_str(line);
-                listing.push('\n');
-            })?;
+            let mut seven_zip_inspector = SevenZipSltInspector::new(archive);
+            let mut inspection_error = None;
+            let outcome = run_provider_with_mode(
+                "7z",
+                None,
+                &args,
+                cancellation,
+                ProviderStreamMode::InspectionLossless,
+                |stream, line| {
+                    if stream != ProviderStream::Stdout || inspection_error.is_some() {
+                        return;
+                    }
+                    if let Err(error) = seven_zip_inspector.push_line(line) {
+                        inspection_error = Some(error);
+                    }
+                },
+            )?;
             match outcome {
                 ProviderOutcome::Success => {}
                 ProviderOutcome::Cancelled => return Err(ArchiveError::Cancelled),
@@ -1642,29 +1937,30 @@ fn inspect_archive(
                     return Err(classify_provider_failure(&message, !password.is_empty()));
                 }
             }
-            let archive_path = archive.to_string_lossy();
-            let records = parse_seven_zip_slt_records(&listing)?;
-            let mut encrypted = false;
-            for record in records {
-                if record.path == archive_path {
-                    continue;
-                }
-                validate_member(&record.path).map_err(ArchiveError::UnsafeMember)?;
-                if record.symbolic_link || record.hard_link {
-                    return Err(ArchiveError::UnsafeMember(
-                        "archives containing symbolic or hard links are not supported".into(),
-                    ));
-                }
-                encrypted |= record.encrypted;
-                members.push(record.path);
+            if let Some(error) = inspection_error {
+                return Err(error);
             }
-            if encrypted && password.is_empty() {
+            inspection = seven_zip_inspector.finish()?;
+            if inspection.encrypted && password.is_empty() {
                 return Err(ArchiveError::PasswordRequired);
             }
         }
         ProviderKind::Rar => return Err(ArchiveError::ProviderUnavailable),
     }
-    Ok(members)
+    Ok(inspection)
+}
+
+fn extraction_staging_parent(destination: &Path, mode: &str) -> Result<PathBuf, ArchiveError> {
+    match mode {
+        "new-directory" => Ok(destination
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()),
+        "into-directory" => Ok(destination.to_path_buf()),
+        _ => Err(ArchiveError::InvalidRequest(
+            "unknown extraction destination mode".into(),
+        )),
+    }
 }
 
 fn extract_archive(
@@ -1692,7 +1988,7 @@ fn extract_archive(
         "Inspecting archive",
         true,
     );
-    let members = inspect_archive(
+    let inspection = inspect_archive(
         &request.archive_path,
         provider,
         &request.password,
@@ -1700,7 +1996,6 @@ fn extract_archive(
         emitter,
     )?;
     let destination = request.destination.clone();
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     if request.destination_mode == "into-directory" {
         let metadata = fs::symlink_metadata(&destination).map_err(|error| {
             ArchiveError::InvalidRequest(format!("read extraction container: {error}"))
@@ -1715,7 +2010,8 @@ fn extract_archive(
             "unknown extraction destination mode".into(),
         ));
     }
-    fs::create_dir_all(parent).map_err(|error| {
+    let staging_parent = extraction_staging_parent(&destination, &request.destination_mode)?;
+    fs::create_dir_all(&staging_parent).map_err(|error| {
         ArchiveError::ProviderFailed(format!("create destination parent: {error}"))
     })?;
     if request.destination_mode == "new-directory"
@@ -1724,7 +2020,7 @@ fn extract_archive(
     {
         return Err(ArchiveError::DestinationConflict(destination));
     }
-    let mut stage = Stage::new(parent, "extract")?;
+    let mut stage = Stage::new(&staging_parent, "extract")?;
     let mut args = Vec::new();
     match provider {
         ProviderKind::Bsdtar => {
@@ -1754,7 +2050,7 @@ fn extract_archive(
         "extract",
         "extracting",
         0,
-        Some(members.len()),
+        Some(inspection.member_count),
         None,
         None,
         0.05,
@@ -1781,15 +2077,15 @@ fn extract_archive(
             if line.is_empty() {
                 return;
             }
-            done = (done + 1).min(members.len());
+            done = (done + 1).min(inspection.member_count);
             emitter.emit(
                 "extract",
                 "extracting",
                 done,
-                Some(members.len()),
+                Some(inspection.member_count),
                 None,
                 None,
-                0.05 + 0.85 * (done as f64 / members.len().max(1) as f64),
+                0.05 + 0.85 * (done as f64 / inspection.member_count.max(1) as f64),
                 Some(Path::new(line)),
                 Some(line),
                 "Extracting archive",
@@ -1814,8 +2110,8 @@ fn extract_archive(
     emitter.emit(
         "extract",
         "publishing",
-        members.len(),
-        Some(members.len()),
+        inspection.member_count,
+        Some(inspection.member_count),
         None,
         None,
         0.95,
@@ -1838,8 +2134,8 @@ fn extract_archive(
     emitter.emit(
         "extract",
         "publishing",
-        members.len(),
-        Some(members.len()),
+        inspection.member_count,
+        Some(inspection.member_count),
         None,
         None,
         1.0,
@@ -1853,8 +2149,8 @@ fn extract_archive(
         "state": "success",
         "destination": target,
         "phase": "publishing",
-        "doneCount": members.len(),
-        "totalCount": members.len(),
+        "doneCount": inspection.member_count,
+        "totalCount": inspection.member_count,
         "bytesDone": -1,
         "bytesTotal": -1,
         "progress": 1.0,
@@ -1879,6 +2175,38 @@ fn remove_owned_path(path: &Path, protected_root: Option<&Path>) -> Result<(), S
         fs::remove_dir_all(path).map_err(|error| format!("remove published path: {error}"))
     } else {
         fs::remove_file(path).map_err(|error| format!("remove published path: {error}"))
+    }
+}
+
+#[derive(Default)]
+struct PublicationFaults {
+    fail_publish_at: Option<usize>,
+    cancel_publish_at: Option<usize>,
+    fail_restore_at: Option<usize>,
+    publish_attempts: usize,
+    restore_attempts: usize,
+}
+
+impl PublicationFaults {
+    fn before_publish(&mut self) -> Result<(), ArchiveError> {
+        self.publish_attempts += 1;
+        if self.cancel_publish_at == Some(self.publish_attempts) {
+            return Err(ArchiveError::Cancelled);
+        }
+        if self.fail_publish_at == Some(self.publish_attempts) {
+            return Err(ArchiveError::ProviderFailed(
+                "injected publication failure".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn before_restore(&mut self) -> Result<(), String> {
+        self.restore_attempts += 1;
+        if self.fail_restore_at == Some(self.restore_attempts) {
+            return Err("injected restoration failure".into());
+        }
+        Ok(())
     }
 }
 
@@ -1937,7 +2265,7 @@ impl PublicationTransaction {
         self.committed = true;
     }
 
-    fn rollback(&mut self) -> Result<(), ArchiveError> {
+    fn rollback(&mut self, faults: &mut PublicationFaults) -> Result<(), ArchiveError> {
         let mut first_error = None;
         for path in self.published.drain(..).rev() {
             if let Err(error) = remove_owned_path(&path, self.protected_root.as_deref()) {
@@ -1948,6 +2276,10 @@ impl PublicationTransaction {
             if path_occupied(&original)
                 && let Err(error) = remove_owned_path(&original, self.protected_root.as_deref())
             {
+                first_error.get_or_insert(error);
+                continue;
+            }
+            if let Err(error) = faults.before_restore() {
                 first_error.get_or_insert(error);
                 continue;
             }
@@ -1964,7 +2296,18 @@ impl PublicationTransaction {
         }
         self.committed = true;
         match first_error {
-            Some(error) => Err(ArchiveError::ProviderFailed(error)),
+            Some(error) => {
+                let backup = self
+                    .backup
+                    .as_ref()
+                    .map(|stage| stage.path.display().to_string());
+                let recovery_location = backup
+                    .map(|path| format!("; recover conflicting data from {path}"))
+                    .unwrap_or_default();
+                Err(ArchiveError::RecoveryRequired(format!(
+                    "archive publication rollback was incomplete: {error}{recovery_location}"
+                )))
+            }
             None => Ok(()),
         }
     }
@@ -1973,7 +2316,13 @@ impl PublicationTransaction {
 impl Drop for PublicationTransaction {
     fn drop(&mut self) {
         if !self.committed {
-            let _ = self.rollback();
+            let mut faults = PublicationFaults::default();
+            if let Err(error) = self.rollback(&mut faults) {
+                eprintln!(
+                    "archive publication rollback failed during unwinding: {}",
+                    error.message()
+                );
+            }
         }
     }
 }
@@ -2026,10 +2375,12 @@ fn publish_entry(
     relative: &Path,
     transaction: &mut PublicationTransaction,
     cancellation: &Cancellation,
+    faults: &mut PublicationFaults,
 ) -> Result<(), ArchiveError> {
     if cancellation.is_cancelled() {
         return Err(ArchiveError::Cancelled);
     }
+    faults.before_publish()?;
     if !path_occupied(target) {
         fs::rename(incoming, target).map_err(|error| {
             ArchiveError::ProviderFailed(format!("publish extracted member: {error}"))
@@ -2069,6 +2420,7 @@ fn publish_entry(
                 &relative.join(name),
                 transaction,
                 cancellation,
+                faults,
             )?;
         }
         fs::remove_dir(incoming).map_err(|error| {
@@ -2099,6 +2451,35 @@ fn publish_extraction(
     policy: &str,
     cancellation: &Cancellation,
 ) -> Result<PathBuf, ArchiveError> {
+    let mut faults = PublicationFaults::default();
+    publish_extraction_with_faults(stage, destination, mode, policy, cancellation, &mut faults)
+}
+
+fn finish_publication(
+    transaction: &mut PublicationTransaction,
+    faults: &mut PublicationFaults,
+    result: Result<PathBuf, ArchiveError>,
+) -> Result<PathBuf, ArchiveError> {
+    match result {
+        Ok(target) => {
+            transaction.commit();
+            Ok(target)
+        }
+        Err(original_error) => match transaction.rollback(faults) {
+            Ok(()) => Err(original_error),
+            Err(recovery_error) => Err(recovery_error),
+        },
+    }
+}
+
+fn publish_extraction_with_faults(
+    stage: &mut Stage,
+    destination: &Path,
+    mode: &str,
+    policy: &str,
+    cancellation: &Cancellation,
+    faults: &mut PublicationFaults,
+) -> Result<PathBuf, ArchiveError> {
     if mode == "new-directory" {
         let target = if path_occupied(destination) {
             match policy {
@@ -2120,67 +2501,89 @@ fn publish_extraction(
         };
         let backup_parent = target.parent().unwrap_or_else(|| Path::new("."));
         let mut transaction = PublicationTransaction::new(None, backup_parent);
-        if path_occupied(&target) {
-            transaction.backup_existing(
-                &target,
-                target
-                    .file_name()
-                    .map(PathBuf::from)
-                    .as_deref()
-                    .unwrap_or_else(|| Path::new("target")),
-            )?;
-        }
-        if cancellation.is_cancelled() {
-            return Err(ArchiveError::Cancelled);
-        }
-        fs::rename(&stage.path, &target).map_err(|error| {
-            ArchiveError::ProviderFailed(format!("publish extracted archive: {error}"))
-        })?;
-        transaction.published.push(target.clone());
-        transaction.commit();
-        return Ok(target);
+        let result = (|| {
+            if path_occupied(&target) {
+                transaction.backup_existing(
+                    &target,
+                    target
+                        .file_name()
+                        .map(PathBuf::from)
+                        .as_deref()
+                        .unwrap_or_else(|| Path::new("target")),
+                )?;
+            }
+            if cancellation.is_cancelled() {
+                return Err(ArchiveError::Cancelled);
+            }
+            fs::rename(&stage.path, &target).map_err(|error| {
+                ArchiveError::ProviderFailed(format!("publish extracted archive: {error}"))
+            })?;
+            transaction.published.push(target.clone());
+            Ok(target)
+        })();
+        let publication = finish_publication(&mut transaction, faults, result);
+        stage.finish();
+        return publication;
     }
 
     let entries = staged_top_level_paths(&stage.path)?;
-    let backup_parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let backup_parent = destination;
     let mut transaction = PublicationTransaction::new(Some(destination), backup_parent);
-    if policy == "prompt" {
-        for entry in &entries {
+    let result = (|| {
+        if policy == "prompt" {
+            for entry in &entries {
+                let name = entry
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| {
+                        ArchiveError::UnsafeMember("staged member has no valid name".into())
+                    })?;
+                if path_occupied(&destination.join(name)) {
+                    return Err(ArchiveError::DestinationConflict(destination.join(name)));
+                }
+            }
+        } else if policy != "keep-both" && policy != "overwrite" {
+            return Err(ArchiveError::InvalidRequest(format!(
+                "unsupported extraction conflict policy: {policy}"
+            )));
+        }
+        let mut reserved = std::collections::HashSet::new();
+        for entry in entries {
             let name = entry
                 .file_name()
                 .and_then(|value| value.to_str())
                 .ok_or_else(|| {
                     ArchiveError::UnsafeMember("staged member has no valid name".into())
                 })?;
-            if path_occupied(&destination.join(name)) {
-                return Err(ArchiveError::DestinationConflict(destination.join(name)));
+            if name.starts_with(".astrea-extract-") {
+                return Err(ArchiveError::InvalidRequest(
+                    "archive member uses a private extraction name".into(),
+                ));
             }
+            let existing_target = destination.join(name);
+            let target = if policy == "keep-both" && path_occupied(&existing_target) {
+                unique_child_target(destination, name, &mut reserved)
+            } else {
+                reserved.insert(existing_target.clone());
+                existing_target
+            };
+            let relative = target
+                .strip_prefix(destination)
+                .unwrap_or_else(|_| Path::new(name));
+            publish_entry(
+                &entry,
+                &target,
+                relative,
+                &mut transaction,
+                cancellation,
+                faults,
+            )?;
         }
-    } else if policy != "keep-both" && policy != "overwrite" {
-        return Err(ArchiveError::InvalidRequest(format!(
-            "unsupported extraction conflict policy: {policy}"
-        )));
-    }
-    let mut reserved = std::collections::HashSet::new();
-    for entry in entries {
-        let name = entry
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| ArchiveError::UnsafeMember("staged member has no valid name".into()))?;
-        let existing_target = destination.join(name);
-        let target = if policy == "keep-both" && path_occupied(&existing_target) {
-            unique_child_target(destination, name, &mut reserved)
-        } else {
-            reserved.insert(existing_target.clone());
-            existing_target
-        };
-        let relative = target
-            .strip_prefix(destination)
-            .unwrap_or_else(|_| Path::new(name));
-        publish_entry(&entry, &target, relative, &mut transaction, cancellation)?;
-    }
-    transaction.commit();
-    Ok(destination.to_path_buf())
+        Ok(destination.to_path_buf())
+    })();
+    let publication = finish_publication(&mut transaction, faults, result);
+    stage.finish();
+    publication
 }
 
 fn validate_extracted_tree(root: &Path) -> Result<(), ArchiveError> {
@@ -2324,16 +2727,18 @@ fn choose_target(destination: &Path, policy: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveError, Cancellation, CompressionProfile, FormatId, OperationRequest,
-        ProgressEmitter, ProviderAvailability, ProviderKind, SourceInfo, Stage,
-        canonical_archive_path, capabilities_for, create_archive, create_arguments,
-        extract_archive, plan_create, run_provider,
+        ArchiveError, ArchiveInspection, Cancellation, CompressionProfile, FormatId,
+        OperationRequest, ProgressEmitter, ProviderAvailability, ProviderKind, ProviderStream,
+        ProviderStreamMode, PublicationFaults, SOURCE_COPY_CHUNK_BYTES, SourceInfo, Stage,
+        canonical_archive_path, capabilities_for, choose_archive_target, create_archive,
+        create_archive_with_preparation_hook, create_arguments, extract_archive,
+        extraction_staging_parent, plan_create, publish_extraction_with_faults, run_provider,
+        run_provider_with_mode,
     };
     use serde_json::{Value, json};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -2353,6 +2758,60 @@ mod tests {
         fs::write(root.join("notes/note.txt"), b"note").unwrap();
     }
 
+    fn slt_record(path: &str, encrypted: bool) -> String {
+        format!(
+            "Path = {path}\nEncrypted = {}\nAttributes = A\n\n",
+            if encrypted { "+" } else { "-" }
+        )
+    }
+
+    #[cfg(unix)]
+    fn inspect_slt_fixture(listing: &str) -> Result<ArchiveInspection, ArchiveError> {
+        let mut inspection = super::SevenZipSltInspector::new(Path::new("archive.7z"));
+        let mut callback_error = None;
+        let args = [
+            "-c".into(),
+            "printf '%s' \"$1\"".into(),
+            "fixture".into(),
+            listing.into(),
+        ];
+        let outcome = run_provider_with_mode(
+            "sh",
+            None,
+            &args,
+            &Cancellation { marker: None },
+            ProviderStreamMode::InspectionLossless,
+            |stream, line| {
+                if stream != ProviderStream::Stdout || callback_error.is_some() {
+                    return;
+                }
+                if let Err(error) = inspection.push_line(line) {
+                    callback_error = Some(error);
+                }
+            },
+        )?;
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        match outcome {
+            super::ProviderOutcome::Success => inspection.finish(),
+            super::ProviderOutcome::Cancelled => Err(ArchiveError::Cancelled),
+            super::ProviderOutcome::Failed(message) => Err(ArchiveError::ProviderFailed(message)),
+        }
+    }
+
+    fn publication_fixture(name: &str) -> (PathBuf, PathBuf, Stage) {
+        let root = test_root(name);
+        let destination = root.join("destination");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("first.txt"), b"original").unwrap();
+        fs::write(destination.join("unrelated.txt"), b"unrelated").unwrap();
+        let stage = Stage::new(&destination, "extract").unwrap();
+        fs::write(stage.path.join("first.txt"), b"incoming").unwrap();
+        fs::write(stage.path.join("second.txt"), b"new incoming").unwrap();
+        (root, destination, stage)
+    }
+
     #[test]
     fn rejects_absolute_and_parent_archive_members() {
         assert!(super::validate_member("/tmp/escape").is_err());
@@ -2365,6 +2824,204 @@ mod tests {
     #[test]
     fn accepts_normal_archive_members() {
         assert!(super::validate_member("folder/file.txt").is_ok());
+    }
+
+    #[test]
+    fn extraction_staging_parent_follows_destination_mode() {
+        let destination = Path::new("/run/media/user/USB");
+        assert_eq!(
+            extraction_staging_parent(destination, "new-directory").unwrap(),
+            PathBuf::from("/run/media/user")
+        );
+        assert_eq!(
+            extraction_staging_parent(destination, "into-directory").unwrap(),
+            destination
+        );
+    }
+
+    #[test]
+    fn protected_container_allows_private_child_cleanup_but_not_root_cleanup() {
+        let root = test_root("private-child-guard");
+        let private = root.join(".astrea-extract-request");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(private.join("partial.txt"), b"partial").unwrap();
+        super::remove_owned_path(&private, Some(&root)).unwrap();
+        assert!(root.is_dir());
+        assert!(!private.exists());
+        assert!(super::remove_owned_path(&root, Some(&root)).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_lossless_slt_stream_preserves_more_than_channel_capacity() {
+        let mut listing = slt_record("archive.7z", false);
+        for index in 0..512 {
+            listing.push_str(&slt_record(&format!("member-{index}.txt"), false));
+        }
+        let inspection = inspect_slt_fixture(&listing).unwrap();
+        assert_eq!(inspection.member_count, 512);
+        assert!(!inspection.encrypted);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_lossless_slt_stream_rejects_unsafe_middle_records() {
+        let unsafe_records = [
+            "Path = ../escape\nEncrypted = -\nAttributes = A\n\n",
+            "Path = /absolute\nEncrypted = -\nAttributes = A\n\n",
+            "Path = symbolic\nEncrypted = -\nSymbolic Link = target\nAttributes = L\n\n",
+            "Path = hard\nEncrypted = -\nHard Link = target\nAttributes = H\n\n",
+        ];
+        for unsafe_record in unsafe_records {
+            let mut listing = slt_record("archive.7z", false);
+            for index in 0..16 {
+                listing.push_str(&slt_record(&format!("before-{index}.txt"), false));
+            }
+            listing.push_str(unsafe_record);
+            for index in 0..16 {
+                listing.push_str(&slt_record(&format!("after-{index}.txt"), false));
+            }
+            let error = inspect_slt_fixture(&listing).expect_err("unsafe middle record must fail");
+            assert!(matches!(error, ArchiveError::UnsafeMember(_)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_lossless_slt_stream_keeps_encryption_independent_of_record_order() {
+        for listing in [
+            format!(
+                "{}{}{}",
+                slt_record("archive.7z", false),
+                slt_record("encrypted.txt", true),
+                slt_record("plain.txt", false)
+            ),
+            format!(
+                "{}{}{}",
+                slt_record("archive.7z", false),
+                slt_record("plain.txt", false),
+                slt_record("encrypted.txt", true)
+            ),
+        ] {
+            let inspection = inspect_slt_fixture(&listing).unwrap();
+            assert_eq!(inspection.member_count, 2);
+            assert!(inspection.encrypted);
+        }
+    }
+
+    #[test]
+    fn publication_failure_explicitly_rolls_back_and_cleans_backup() {
+        let (root, destination, mut stage) = publication_fixture("publication-rollback");
+        let mut faults = PublicationFaults {
+            fail_publish_at: Some(2),
+            ..PublicationFaults::default()
+        };
+        let error = publish_extraction_with_faults(
+            &mut stage,
+            &destination,
+            "into-directory",
+            "overwrite",
+            &Cancellation { marker: None },
+            &mut faults,
+        )
+        .expect_err("injected publication failure must roll back");
+        assert!(matches!(error, ArchiveError::ProviderFailed(_)));
+        assert_eq!(
+            fs::read(destination.join("first.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(destination.join("unrelated.txt")).unwrap(),
+            b"unrelated"
+        );
+        assert!(!destination.join("second.txt").exists());
+        assert!(!fs::read_dir(&destination).unwrap().flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".astrea-extract-")
+        }));
+        drop(stage);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_returns_recovery_location_and_preserves_backup() {
+        let (root, destination, mut stage) = publication_fixture("publication-recovery");
+        let mut faults = PublicationFaults {
+            fail_publish_at: Some(2),
+            fail_restore_at: Some(1),
+            ..PublicationFaults::default()
+        };
+        let error = publish_extraction_with_faults(
+            &mut stage,
+            &destination,
+            "into-directory",
+            "overwrite",
+            &Cancellation { marker: None },
+            &mut faults,
+        )
+        .expect_err("injected restore failure must require recovery");
+        let message = match error {
+            ArchiveError::RecoveryRequired(message) => message,
+            other => panic!("expected recovery-required error, got {other:?}"),
+        };
+        assert!(message.contains("rollback was incomplete"));
+        assert!(message.contains(".astrea-extract-backup-"));
+        let backup = fs::read_dir(&destination)
+            .unwrap()
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".astrea-extract-backup-")
+            })
+            .expect("failed rollback must preserve backup");
+        assert_eq!(
+            fs::read(backup.path().join("first.txt")).unwrap(),
+            b"original"
+        );
+        assert!(destination.is_dir());
+        drop(stage);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_after_publication_mutation_uses_explicit_rollback() {
+        let (root, destination, mut stage) = publication_fixture("publication-cancel");
+        let mut faults = PublicationFaults {
+            cancel_publish_at: Some(2),
+            ..PublicationFaults::default()
+        };
+        let error = publish_extraction_with_faults(
+            &mut stage,
+            &destination,
+            "into-directory",
+            "overwrite",
+            &Cancellation { marker: None },
+            &mut faults,
+        )
+        .expect_err("injected publication cancellation must roll back");
+        assert_eq!(error, ArchiveError::Cancelled);
+        assert_eq!(
+            fs::read(destination.join("first.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(destination.join("unrelated.txt")).unwrap(),
+            b"unrelated"
+        );
+        assert!(!destination.join("second.txt").exists());
+        assert!(!fs::read_dir(&destination).unwrap().flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".astrea-extract-")
+        }));
+        drop(stage);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2903,6 +3560,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn real_bsdtar_symbolic_link_is_rejected_before_extraction() {
+        if !super::discover_providers().bsdtar {
+            return;
+        }
+        let root = test_root("bsdtar-link");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("target.txt"), b"target").unwrap();
+        std::os::unix::fs::symlink("target.txt", source.join("link.txt")).unwrap();
+        let archive = root.join("link.tar");
+        let provider = std::process::Command::new("bsdtar")
+            .args([
+                "-cf",
+                archive.to_str().unwrap(),
+                "-C",
+                source.to_str().unwrap(),
+                "target.txt",
+                "link.txt",
+            ])
+            .output()
+            .unwrap();
+        assert!(provider.status.success());
+
+        let external = root.join("external.txt");
+        fs::write(&external, b"must remain untouched").unwrap();
+        let destination = root.join("destination");
+        let request: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive,
+            "destination": destination,
+            "destinationMode": "new-directory",
+            "conflictPolicy": "keep-both"
+        }))
+        .unwrap();
+        let error = extract_archive(
+            &request,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("bsdtar links must be rejected during inspection");
+        assert!(matches!(error, ArchiveError::UnsafeMember(_)));
+        assert!(!destination.exists());
+        assert_eq!(fs::read(external).unwrap(), b"must remain untouched");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn real_7z_password_states_are_structured_and_retryable() {
         if !super::discover_providers().seven_zip {
@@ -3341,6 +4046,29 @@ Path = encrypted-symbolic\nEncrypted = +\nSymbolic Link = target.txt\nAttributes
     }
 
     #[test]
+    fn keep_both_preserves_compound_archive_suffixes() {
+        let root = test_root("compound-keep-both");
+        let cases = [
+            ("Archive.tar.gz", "Archive (2).tar.gz"),
+            ("Archive.tar.xz", "Archive (2).tar.xz"),
+            ("Archive.tar.zst", "Archive (2).tar.zst"),
+            ("Archive.tar.bz2", "Archive (2).tar.bz2"),
+            ("Archive.zip", "Archive (2).zip"),
+            ("Archive.7z", "Archive (2).7z"),
+        ];
+        for (input, expected) in cases {
+            let existing = root.join(input);
+            fs::write(&existing, b"existing").unwrap();
+            assert_eq!(
+                choose_archive_target(&existing, "keep-both").unwrap(),
+                root.join(expected),
+                "{input}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn same_parent_seven_zip_creation_does_not_materialize_sources() {
         let root = test_root("same-parent-plan");
         let first = root.join("first.txt");
@@ -3389,31 +4117,10 @@ Path = encrypted-symbolic\nEncrypted = +\nSymbolic Link = target.txt\nAttributes
         let second = second_parent.join("other.txt");
         fs::File::create(&first)
             .unwrap()
-            .set_len(64 * 1024 * 1024)
+            .set_len(2 * SOURCE_COPY_CHUNK_BYTES as u64)
             .unwrap();
         fs::write(&second, b"other").unwrap();
         let marker = root.join("cancel.marker");
-        let watcher_parent = output_parent.clone();
-        let watcher_marker = marker.clone();
-        let watcher = std::thread::spawn(move || {
-            for _ in 0..10_000 {
-                let input_visible = fs::read_dir(&watcher_parent)
-                    .unwrap()
-                    .flatten()
-                    .any(|entry| {
-                        entry
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with(".astrea-archive-")
-                            && entry.path().join("input").is_dir()
-                    });
-                if input_visible {
-                    fs::write(watcher_marker, b"cancel").unwrap();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        });
         let request = OperationRequest {
             kind: "create".into(),
             sources: vec![first, second],
@@ -3425,18 +4132,24 @@ Path = encrypted-symbolic\nEncrypted = +\nSymbolic Link = target.txt\nAttributes
             password: String::new(),
             conflict_policy: "keep-both".into(),
         };
-        let result = create_archive(
+        let mut preparation_chunks = 0;
+        let marker_for_hook = marker.clone();
+        let mut on_preparation_chunk = || {
+            preparation_chunks += 1;
+            if preparation_chunks == 1 {
+                fs::write(&marker_for_hook, b"cancel").unwrap();
+            }
+        };
+        let result = create_archive_with_preparation_hook(
             &request,
             &Cancellation {
                 marker: Some(marker.clone()),
             },
             &mut ProgressEmitter::new(),
+            &mut on_preparation_chunk,
         );
-        watcher.join().unwrap();
-        assert!(
-            marker.exists(),
-            "preparation watcher did not observe the input clone"
-        );
+        assert_eq!(preparation_chunks, 1);
+        assert!(marker.exists());
         let error = result.expect_err("cancellation must be observed during preparation");
         assert_eq!(error, ArchiveError::Cancelled);
         assert!(!output_parent.join("Archive.zip").exists());

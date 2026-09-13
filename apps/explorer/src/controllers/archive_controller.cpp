@@ -439,6 +439,9 @@ void ArchiveController::handleFinished(
         return;
     }
     const BackendRequestId completedRequest = m_request;
+    const BackendRequestId logicalRequest = m_workflowRequest != 0
+        ? m_workflowRequest
+        : completedRequest;
     const QString completedOperation = result.operation.isEmpty() ? m_operationKind : result.operation;
     const bool success = result.state == QStringLiteral("success");
     if (completedOperation == QStringLiteral("capabilities")) {
@@ -489,8 +492,13 @@ void ArchiveController::handleFinished(
         || result.state == QStringLiteral("destination-conflict")) {
         return;
     }
+    if (completedOperation == QStringLiteral("create")
+        || completedOperation == QStringLiteral("extract")) {
+        m_workflow.password.clear();
+        m_workflowRequest = 0;
+    }
     emit operationFinished(
-        completedRequest,
+        logicalRequest,
         completedOperation,
         success,
         resultMap(result),

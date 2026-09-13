@@ -175,6 +175,7 @@ void ArchiveControllerTest::passwordContinuationUsesStructuredStates()
 {
     ArchiveFixture fixture;
     fixture.loadCapabilities();
+    QSignalSpy finishedSpy(&fixture.archive, &ArchiveController::operationFinished);
     fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/secret.zip"), QStringLiteral("secret"));
     ArchiveOperationResult required;
     required.operation = QStringLiteral("extract");
@@ -207,12 +208,16 @@ void ArchiveControllerTest::passwordContinuationUsesStructuredStates()
     QVERIFY(!fixture.archive.running());
     QCOMPARE(fixture.archive.destinationResult(), QStringLiteral("/tmp/secret"));
     QCOMPARE(fixture.archive.workflowState(), QStringLiteral("success"));
+    QCOMPARE(finishedSpy.count(), 1);
+    QCOMPARE(finishedSpy.constFirst().at(0).toULongLong(), BackendRequestId(2));
+    QCOMPARE(fixture.archive.request(), BackendRequestId(0));
 }
 
 void ArchiveControllerTest::conflictContinuationUsesImplementedPolicies()
 {
     ArchiveFixture fixture;
     fixture.loadCapabilities();
+    QSignalSpy finishedSpy(&fixture.archive, &ArchiveController::operationFinished);
     fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/archive.zip"), QStringLiteral("archive"));
     ArchiveOperationResult conflict;
     conflict.operation = QStringLiteral("extract");
@@ -233,6 +238,9 @@ void ArchiveControllerTest::conflictContinuationUsesImplementedPolicies()
     QVERIFY(!fixture.archive.conflictVisible());
     QVERIFY(!fixture.archive.running());
     QCOMPARE(fixture.archive.workflowState(), QStringLiteral("success"));
+    QCOMPARE(finishedSpy.count(), 1);
+    QCOMPARE(finishedSpy.constFirst().at(0).toULongLong(), BackendRequestId(2));
+    QCOMPARE(fixture.archive.request(), BackendRequestId(0));
 }
 
 void ArchiveControllerTest::waitingContinuationsDoNotFinishUntilResolved()
@@ -306,8 +314,10 @@ void ArchiveControllerTest::rejectsUnsafeArchiveNames()
 {
     ArchiveFixture fixture;
     fixture.loadCapabilities();
-    fixture.archive.startArchiveCreation(
-        {QStringLiteral("/tmp/source")}, QStringLiteral("../escape"), QStringLiteral("zip"), QStringLiteral("balanced"));
+    for (const QString &name : {QStringLiteral("../escape"), QStringLiteral("folder/name"), QStringLiteral("folder\\name")}) {
+        fixture.archive.startArchiveCreation(
+            {QStringLiteral("/tmp/source")}, name, QStringLiteral("zip"), QStringLiteral("balanced"));
+    }
     QCOMPARE(fixture.client.archiveOperationRequests().size(), 1);
 }
 
