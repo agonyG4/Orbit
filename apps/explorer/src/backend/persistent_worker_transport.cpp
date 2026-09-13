@@ -68,7 +68,9 @@ BackendRequestId PersistentWorkerTransport::start(const QStringList &arguments)
         handleTimeout(requestId);
     });
     m_pending.insert(requestId, pending);
-    pending.timeout->start(m_options.requestTimeoutMs);
+    if (m_options.requestTimeoutMs > 0) {
+        pending.timeout->start(m_options.requestTimeoutMs);
+    }
 
     if (!ensureWorker()) {
         handleWorkerError(QProcess::FailedToStart);

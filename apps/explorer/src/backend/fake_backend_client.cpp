@@ -49,6 +49,13 @@ BackendRequestId FakeRustBackendClient::fileOperation(const FileOperationRequest
     return nextRequestId();
 }
 
+BackendRequestId FakeRustBackendClient::archiveOperation(
+    const ArchiveOperationRequest &request)
+{
+    m_archiveOperationRequests.append(request);
+    return nextRequestId();
+}
+
 BackendRequestId FakeRustBackendClient::utility(const UtilityRequest &request)
 {
     const BackendRequestId requestId = nextRequestId();
@@ -103,6 +110,22 @@ void FakeRustBackendClient::completeFileOperation(
     emit fileOperationReady(requestId, result);
 }
 
+void FakeRustBackendClient::completeArchiveOperationProgress(
+    BackendRequestId requestId,
+    const ArchiveOperationProgress &progress)
+{
+    emit archiveOperationProgress(requestId, progress);
+}
+
+void FakeRustBackendClient::completeArchiveOperation(
+    BackendRequestId requestId,
+    const ArchiveOperationResult &result)
+{
+    ArchiveOperationResult completed = result;
+    completed.requestId = requestId;
+    emit archiveOperationReady(requestId, completed);
+}
+
 void FakeRustBackendClient::completeUtility(
     BackendRequestId requestId,
     const UtilityResult &result)
@@ -142,6 +165,12 @@ const QVector<QStringList> &FakeRustBackendClient::deviceRequests() const
 const QVector<FileOperationRequest> &FakeRustBackendClient::fileOperationRequests() const
 {
     return m_fileOperationRequests;
+}
+
+const QVector<ArchiveOperationRequest> &
+FakeRustBackendClient::archiveOperationRequests() const
+{
+    return m_archiveOperationRequests;
 }
 
 const QVector<UtilityRequest> &FakeRustBackendClient::utilityRequests() const

@@ -95,6 +95,8 @@ private slots:
     void decodesDevicesAndForwardsDeviceOperations();
     void decodesFileOperationProgressAndResult();
     void forwardsLiveFileOperationProgressBeforeTerminalResult();
+    void encodesArchiveRequestAndDecodesProgressAndResult();
+    void decodesStructuredArchiveContinuationStates();
     void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
     void forwardsTransportFailuresExactlyOnce();
@@ -426,6 +428,123 @@ void BackendClientTest::forwardsLiveFileOperationProgressBeforeTerminalResult()
     const FileOperationResult result = readySpy.takeFirst().at(1).value<FileOperationResult>();
     QCOMPARE(result.items.size(), 1);
     QCOMPARE(result.items.constFirst().status, QStringLiteral("moved"));
+}
+
+void BackendClientTest::encodesArchiveRequestAndDecodesProgressAndResult()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+
+    QSignalSpy progressSpy(&client, &IRustBackendClient::archiveOperationProgress);
+    QSignalSpy readySpy(&client, &IRustBackendClient::archiveOperationReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    ArchiveOperationRequest request;
+    request.kind = QStringLiteral("create");
+    request.sources = {QStringLiteral("/tmp/report.txt"), QStringLiteral("/tmp/photos")};
+    request.archivePath = QStringLiteral("/tmp/Archive.tar.zst");
+    request.format = QStringLiteral("tar.zst");
+    request.profile = QStringLiteral("balanced");
+    request.conflictPolicy = QStringLiteral("keep-both");
+
+    const BackendRequestId requestId = client.archiveOperation(request);
+    QCOMPARE(
+        transport.startedRequests.constLast().arguments.at(0),
+        QStringLiteral("archive-operation"));
+    QCOMPARE(
+        transport.startedRequests.constLast().arguments.at(1),
+        QStringLiteral("--json"));
+    const QJsonDocument encoded =
+        QJsonDocument::fromJson(transport.startedRequests.constLast().arguments.at(2).toUtf8());
+    QVERIFY(encoded.isObject());
+    QCOMPARE(encoded.object().value(QStringLiteral("kind")).toString(), QStringLiteral("create"));
+    QCOMPARE(encoded.object().value(QStringLiteral("sources")).toArray().size(), 2);
+    QCOMPARE(
+        encoded.object().value(QStringLiteral("format")).toString(),
+        QStringLiteral("tar.zst"));
+
+    transport.stream(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"progress\",\"operation\":\"create\",\"phase\":\"compressing\","
+            "\"doneCount\":3,\"totalCount\":10,\"bytesDone\":-1,\"bytesTotal\":-1,"
+            "\"progress\":0.3,\"percent\":30,\"currentPath\":\"/tmp/photos/a.jpg\","
+            "\"currentName\":\"a.jpg\",\"statusText\":\"Compressing\"}\n"));
+    QTRY_COMPARE(progressSpy.count(), 1);
+    QCOMPARE(readySpy.count(), 0);
+
+    transport.succeed(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"create\",\"state\":\"success\","
+            "\"destination\":\"/tmp/Archive.tar.zst\",\"phase\":\"publishing\","
+            "\"doneCount\":10,\"totalCount\":10,\"bytesDone\":-1,\"bytesTotal\":-1,"
+            "\"progress\":1,\"percent\":100,\"errorCode\":\"\",\"errorMessage\":\"\"}\n"));
+
+    QTRY_COMPARE(readySpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    const ArchiveOperationProgress progress =
+        progressSpy.takeFirst().at(1).value<ArchiveOperationProgress>();
+    QCOMPARE(progress.requestId, requestId);
+    QCOMPARE(progress.phase, QStringLiteral("compressing"));
+    QCOMPARE(progress.doneCount, 3);
+    QCOMPARE(progress.totalCount, 10);
+    QCOMPARE(progress.percent, 30);
+    QCOMPARE(progress.bytesTotal, qint64(-1));
+
+    const ArchiveOperationResult result =
+        readySpy.takeFirst().at(1).value<ArchiveOperationResult>();
+    QCOMPARE(result.requestId, requestId);
+    QCOMPARE(result.operation, QStringLiteral("create"));
+    QCOMPARE(result.state, QStringLiteral("success"));
+    QCOMPARE(result.destination, QStringLiteral("/tmp/Archive.tar.zst"));
+    QCOMPARE(result.doneCount, 10);
+    QCOMPARE(result.totalCount, 10);
+    QCOMPARE(result.percent, 100);
+}
+
+void BackendClientTest::decodesStructuredArchiveContinuationStates()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+    QSignalSpy readySpy(&client, &IRustBackendClient::archiveOperationReady);
+
+    ArchiveOperationRequest request;
+    request.kind = QStringLiteral("extract");
+    request.archivePath = QStringLiteral("/tmp/protected.zip");
+    request.destination = QStringLiteral("/tmp/protected");
+    request.conflictPolicy = QStringLiteral("keep-both");
+    const BackendRequestId passwordRequest = client.archiveOperation(request);
+
+    transport.succeed(
+        passwordRequest,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"extract\","
+            "\"state\":\"password-required\",\"destination\":\"/tmp/protected\","
+            "\"errorCode\":\"password-required\",\"errorMessage\":\"\"}\n"));
+    QTRY_COMPARE(readySpy.count(), 1);
+    ArchiveOperationResult result =
+        readySpy.takeFirst().at(1).value<ArchiveOperationResult>();
+    QCOMPARE(result.state, QStringLiteral("password-required"));
+    QCOMPARE(result.errorCode, QStringLiteral("password-required"));
+
+    const BackendRequestId conflictRequest = client.archiveOperation(request);
+    transport.succeed(
+        conflictRequest,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"extract\","
+            "\"state\":\"destination-conflict\",\"destination\":\"/tmp/protected\","
+            "\"errorCode\":\"destination-conflict\",\"errorMessage\":\"\"}\n"));
+    QTRY_COMPARE(readySpy.count(), 1);
+    result = readySpy.takeFirst().at(1).value<ArchiveOperationResult>();
+    QCOMPARE(result.state, QStringLiteral("destination-conflict"));
+    QCOMPARE(result.errorCode, QStringLiteral("destination-conflict"));
+
+    transport.succeed(
+        passwordRequest,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"extract\",\"state\":\"success\"}\n"));
+    QCOMPARE(readySpy.count(), 0);
 }
 
 void BackendClientTest::acceptsSynchronousTransportCompletion()

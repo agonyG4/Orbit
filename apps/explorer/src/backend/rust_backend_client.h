@@ -23,6 +23,7 @@ public:
     virtual BackendRequestId unmount(const QString &devicePath) = 0;
     virtual BackendRequestId remount(const QString &devicePath) = 0;
     virtual BackendRequestId fileOperation(const FileOperationRequest &request) = 0;
+    virtual BackendRequestId archiveOperation(const ArchiveOperationRequest &request) = 0;
     virtual BackendRequestId utility(const UtilityRequest &request) = 0;
 
 public slots:
@@ -47,6 +48,12 @@ signals:
     void fileOperationReady(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const Astrea::Explorer::Native::Backend::FileOperationResult &result);
+    void archiveOperationProgress(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::ArchiveOperationProgress &progress);
+    void archiveOperationReady(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId,
+        const Astrea::Explorer::Native::Backend::ArchiveOperationResult &result);
     void failed(const Astrea::Explorer::Native::Backend::BackendError &error);
     void utilityReady(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
@@ -67,6 +74,7 @@ public:
     BackendRequestId unmount(const QString &devicePath) override;
     BackendRequestId remount(const QString &devicePath) override;
     BackendRequestId fileOperation(const FileOperationRequest &request) override;
+    BackendRequestId archiveOperation(const ArchiveOperationRequest &request) override;
     BackendRequestId utility(const UtilityRequest &request) override;
 
 public slots:
@@ -80,6 +88,7 @@ private:
         Devices,
         DeviceOperation,
         FileOperation,
+        ArchiveOperation,
         Utility,
     };
 
@@ -92,6 +101,7 @@ private:
     QStringList listArguments(const ListRequest &request) const;
     QStringList searchArguments(const SearchRequest &request) const;
     QStringList fileOperationArguments(const FileOperationRequest &request) const;
+    QStringList archiveOperationArguments(const ArchiveOperationRequest &request) const;
     QStringList utilityArguments(const UtilityRequest &request) const;
     QVector<DirectoryEntry> decodeEntries(
         BackendRequestId requestId,
@@ -110,6 +120,16 @@ private:
         const QByteArray &payload,
         BackendError *error,
         QVector<FileOperationProgress> *progresses) const;
+    ArchiveOperationResult decodeArchiveOperation(
+        BackendRequestId requestId,
+        const QByteArray &payload,
+        BackendError *error,
+        QVector<ArchiveOperationProgress> *progresses) const;
+    bool decodeArchiveOperationProgress(
+        BackendRequestId requestId,
+        const QJsonObject &object,
+        ArchiveOperationProgress *progress,
+        BackendError *error) const;
     bool decodeFileOperationProgress(
         BackendRequestId requestId,
         const QJsonObject &object,

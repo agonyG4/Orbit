@@ -171,6 +171,64 @@ struct UtilityResult
     QString errorMessage;
 };
 
+struct ArchiveOperationRequest
+{
+    QString kind;
+    QStringList sources;
+    QString archivePath;
+    QString destination;
+    QString format;
+    QString profile;
+    QString password;
+    QString conflictPolicy {QStringLiteral("keep-both")};
+};
+
+struct ArchiveCapability
+{
+    QString id;
+    QString label;
+    QString extension;
+    bool createSupported = false;
+    bool extractSupported = false;
+    QStringList profiles;
+    bool passwordSupported = false;
+    QString provider;
+};
+
+struct ArchiveOperationProgress
+{
+    BackendRequestId requestId = 0;
+    QString operation;
+    QString phase;
+    int doneCount = 0;
+    int totalCount = 0;
+    qint64 bytesDone = -1;
+    qint64 bytesTotal = -1;
+    double progress = 0.0;
+    int percent = 0;
+    QString currentPath;
+    QString currentName;
+    QString statusText;
+};
+
+struct ArchiveOperationResult
+{
+    BackendRequestId requestId = 0;
+    QString operation;
+    QString state;
+    QString errorCode;
+    QString errorMessage;
+    QString destination;
+    QString phase;
+    int doneCount = 0;
+    int totalCount = 0;
+    qint64 bytesDone = -1;
+    qint64 bytesTotal = -1;
+    double progress = 0.0;
+    int percent = 0;
+    QVector<ArchiveCapability> capabilities;
+};
+
 } // namespace Astrea::Explorer::Native::Backend
 
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::BackendError)
@@ -187,3 +245,8 @@ Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::FileOperationItemR
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityResult)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveOperationRequest)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveCapability)
+Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::ArchiveCapability>)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveOperationProgress)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveOperationResult)

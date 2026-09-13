@@ -100,6 +100,25 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 return;
             }
 
+            if (kind == RequestKind::ArchiveOperation) {
+                BackendError error;
+                QVector<ArchiveOperationProgress> progresses;
+                const ArchiveOperationResult result = decodeArchiveOperation(
+                    requestId,
+                    payload,
+                    &error,
+                    &progresses);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        emit archiveOperationProgress(requestId, progresses.at(index));
+                    }
+                    emit archiveOperationReady(requestId, result);
+                }
+                return;
+            }
+
             if (kind == RequestKind::Utility) {
                 BackendError error;
                 const UtilityResult result = decodeUtility(requestId, payload, &error);
@@ -159,6 +178,23 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 }
             }
 
+            if (kind == RequestKind::ArchiveOperation && !transportError.stdoutData.isEmpty()) {
+                BackendError decodeError;
+                QVector<ArchiveOperationProgress> progresses;
+                const ArchiveOperationResult result = decodeArchiveOperation(
+                    requestId,
+                    transportError.stdoutData,
+                    &decodeError,
+                    &progresses);
+                if (decodeError.code.isEmpty()) {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        emit archiveOperationProgress(requestId, progresses.at(index));
+                    }
+                    emit archiveOperationReady(requestId, result);
+                    return;
+                }
+            }
+
             BackendError error;
             error.code = transportError.code;
             error.message = transportError.message;
@@ -173,7 +209,9 @@ void RustBackendClient::handleStreamed(
     const QByteArray &payload)
 {
     auto pending = m_pendingRequests.find(requestId);
-    if (pending == m_pendingRequests.end() || pending->kind != RequestKind::FileOperation) {
+    if (pending == m_pendingRequests.end()
+        || (pending->kind != RequestKind::FileOperation
+            && pending->kind != RequestKind::ArchiveOperation)) {
         return;
     }
 
@@ -188,14 +226,26 @@ void RustBackendClient::handleStreamed(
     }
 
     BackendError error;
-    FileOperationProgress progress;
-    if (!decodeFileOperationProgress(requestId, document.object(), &progress, &error)) {
+    if (pending->kind == RequestKind::FileOperation) {
+        FileOperationProgress progress;
+        if (!decodeFileOperationProgress(requestId, document.object(), &progress, &error)) {
+            m_pendingRequests.erase(pending);
+            emit failed(error);
+            return;
+        }
+        ++pending->streamedProgressCount;
+        emit fileOperationProgress(requestId, progress);
+        return;
+    }
+
+    ArchiveOperationProgress progress;
+    if (!decodeArchiveOperationProgress(requestId, document.object(), &progress, &error)) {
         m_pendingRequests.erase(pending);
         emit failed(error);
         return;
     }
     ++pending->streamedProgressCount;
-    emit fileOperationProgress(requestId, progress);
+    emit archiveOperationProgress(requestId, progress);
 }
 
 BackendRequestId RustBackendClient::list(const ListRequest &request)
@@ -247,6 +297,13 @@ BackendRequestId RustBackendClient::fileOperation(const FileOperationRequest &re
 {
     const BackendRequestId requestId = m_transport->start(fileOperationArguments(request));
     m_pendingRequests.insert(requestId, PendingRequest {RequestKind::FileOperation});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::archiveOperation(const ArchiveOperationRequest &request)
+{
+    const BackendRequestId requestId = m_transport->start(archiveOperationArguments(request));
+    m_pendingRequests.insert(requestId, {RequestKind::ArchiveOperation, 0});
     return requestId;
 }
 
@@ -323,6 +380,26 @@ QStringList RustBackendClient::utilityArguments(const UtilityRequest &request) c
     QStringList arguments {QStringLiteral("utility"), request.operation};
     arguments.append(request.arguments);
     return arguments;
+}
+
+QStringList RustBackendClient::archiveOperationArguments(
+    const ArchiveOperationRequest &request) const
+{
+    QJsonObject object {
+        {QStringLiteral("kind"), request.kind},
+        {QStringLiteral("sources"), QJsonArray::fromStringList(request.sources)},
+        {QStringLiteral("archivePath"), request.archivePath},
+        {QStringLiteral("destination"), request.destination},
+        {QStringLiteral("format"), request.format},
+        {QStringLiteral("profile"), request.profile},
+        {QStringLiteral("password"), request.password},
+        {QStringLiteral("conflictPolicy"), request.conflictPolicy},
+    };
+    return {
+        QStringLiteral("archive-operation"),
+        QStringLiteral("--json"),
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)),
+    };
 }
 
 QVector<DirectoryEntry> RustBackendClient::decodeEntries(
@@ -524,6 +601,53 @@ bool RustBackendClient::decodeFileOperationProgress(
     return true;
 }
 
+bool RustBackendClient::decodeArchiveOperationProgress(
+    BackendRequestId requestId,
+    const QJsonObject &object,
+    ArchiveOperationProgress *progress,
+    BackendError *error) const
+{
+    const QJsonValue done = object.value(QStringLiteral("doneCount"));
+    const QJsonValue total = object.value(QStringLiteral("totalCount"));
+    const QJsonValue progressValue = object.value(QStringLiteral("progress"));
+    const QJsonValue percent = object.value(QStringLiteral("percent"));
+    if (!object.value(QStringLiteral("event")).isString()
+        || !object.value(QStringLiteral("operation")).isString()
+        || !object.value(QStringLiteral("phase")).isString()
+        || !done.isDouble()
+        || !total.isDouble()
+        || !progressValue.isDouble()
+        || !percent.isDouble()) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("archive operation progress fields have incompatible types"));
+        }
+        return false;
+    }
+
+    if (progress == nullptr) {
+        return true;
+    }
+    progress->requestId = requestId;
+    progress->operation = object.value(QStringLiteral("operation")).toString();
+    progress->phase = object.value(QStringLiteral("phase")).toString();
+    progress->doneCount = done.toInt();
+    progress->totalCount = total.toInt();
+    progress->bytesDone = object.value(QStringLiteral("bytesDone")).isDouble()
+        ? object.value(QStringLiteral("bytesDone")).toInteger()
+        : -1;
+    progress->bytesTotal = object.value(QStringLiteral("bytesTotal")).isDouble()
+        ? object.value(QStringLiteral("bytesTotal")).toInteger()
+        : -1;
+    progress->progress = progressValue.toDouble();
+    progress->percent = percent.toInt();
+    progress->currentPath = object.value(QStringLiteral("currentPath")).toString();
+    progress->currentName = object.value(QStringLiteral("currentName")).toString();
+    progress->statusText = object.value(QStringLiteral("statusText")).toString();
+    return true;
+}
+
 FileOperationResult RustBackendClient::decodeFileOperation(
     BackendRequestId requestId,
     const QByteArray &payload,
@@ -623,6 +747,109 @@ FileOperationResult RustBackendClient::decodeFileOperation(
             *error = makeDecodeError(
                 requestId,
                 QStringLiteral("file operation did not produce a terminal event"));
+        }
+        return {};
+    }
+    return result;
+}
+
+ArchiveOperationResult RustBackendClient::decodeArchiveOperation(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error,
+    QVector<ArchiveOperationProgress> *progresses) const
+{
+    ArchiveOperationResult result;
+    result.requestId = requestId;
+    bool terminal = false;
+    const QList<QByteArray> lines = payload.split('\n');
+    for (const QByteArray &line : lines) {
+        if (line.trimmed().isEmpty()) {
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    parseError.error == QJsonParseError::NoError
+                        ? QStringLiteral("archive operation event must be a JSON object")
+                        : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+            }
+            return {};
+        }
+
+        const QJsonObject object = document.object();
+        const QString event = object.value(QStringLiteral("event")).toString();
+        if (event == QStringLiteral("progress")) {
+            ArchiveOperationProgress progress;
+            if (!decodeArchiveOperationProgress(requestId, object, &progress, error)) {
+                return {};
+            }
+            if (progresses != nullptr) {
+                progresses->append(progress);
+            }
+            continue;
+        }
+
+        if (event == QStringLiteral("result")) {
+            result.operation = object.value(QStringLiteral("operation")).toString();
+            result.state = object.value(QStringLiteral("state")).toString();
+            result.errorCode = object.value(QStringLiteral("errorCode")).toString();
+            result.errorMessage = object.value(QStringLiteral("errorMessage")).toString();
+            result.destination = object.value(QStringLiteral("destination")).toString();
+            result.phase = object.value(QStringLiteral("phase")).toString();
+            result.doneCount = object.value(QStringLiteral("doneCount")).toInt();
+            result.totalCount = object.value(QStringLiteral("totalCount")).toInt();
+            result.bytesDone = object.value(QStringLiteral("bytesDone")).isDouble()
+                ? object.value(QStringLiteral("bytesDone")).toInteger()
+                : -1;
+            result.bytesTotal = object.value(QStringLiteral("bytesTotal")).isDouble()
+                ? object.value(QStringLiteral("bytesTotal")).toInteger()
+                : -1;
+            result.progress = object.value(QStringLiteral("progress")).toDouble();
+            result.percent = object.value(QStringLiteral("percent")).toInt();
+            result.capabilities.clear();
+            for (const QJsonValue &value :
+                 object.value(QStringLiteral("capabilities")).toArray()) {
+                const QJsonObject capability = value.toObject();
+                ArchiveCapability item;
+                item.id = capability.value(QStringLiteral("id")).toString();
+                item.label = capability.value(QStringLiteral("label")).toString();
+                item.extension = capability.value(QStringLiteral("extension")).toString();
+                item.createSupported = capability.value(QStringLiteral("createSupported")).toBool();
+                item.extractSupported = capability.value(QStringLiteral("extractSupported")).toBool();
+                item.passwordSupported = capability.value(QStringLiteral("passwordSupported")).toBool();
+                item.provider = capability.value(QStringLiteral("provider")).toString();
+                for (const QJsonValue &profile :
+                     capability.value(QStringLiteral("profiles")).toArray()) {
+                    if (profile.isString()) {
+                        item.profiles.append(profile.toString());
+                    }
+                }
+                result.capabilities.append(item);
+            }
+            terminal = true;
+            continue;
+        }
+
+        if (event != QStringLiteral("start")) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    QStringLiteral("unknown archive operation event '%1'").arg(event));
+            }
+            return {};
+        }
+    }
+
+    if (!terminal) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("archive operation did not produce a terminal event"));
         }
         return {};
     }

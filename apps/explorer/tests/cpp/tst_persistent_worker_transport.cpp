@@ -45,6 +45,7 @@ private slots:
     void reportsStartFailureAsynchronously();
     void cancelsAnInFlightRequest();
     void streamsOutputBeforeTerminalCompletion();
+    void noTimeoutRequestSurvivesNormalBoundaryAndStillCancels();
 };
 
 void PersistentWorkerTransportTest::queuesRequestsUntilWorkerIsReady()
@@ -162,6 +163,37 @@ void PersistentWorkerTransportTest::streamsOutputBeforeTerminalCompletion()
     QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 1500);
     QCOMPARE(completedSpy.at(0).at(0).value<BackendRequestId>(), requestId);
     QCOMPARE(completedSpy.at(0).at(1).toByteArray(), QByteArrayLiteral("first\nsecond\n"));
+}
+
+void PersistentWorkerTransportTest::noTimeoutRequestSurvivesNormalBoundaryAndStillCancels()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString worker = makeWorker(
+        directory,
+        QStringLiteral(
+            "import json,sys,time\n"
+            "for line in sys.stdin:\n"
+            "    request=json.loads(line)\n"
+            "    time.sleep(1)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'payload':'late'}), flush=True)\n"));
+    QVERIFY(!worker.isEmpty());
+
+    PersistentWorkerTransportOptions options;
+    options.backendProgram = worker;
+    options.requestTimeoutMs = 0;
+    PersistentWorkerTransport transport(options);
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+
+    const BackendRequestId requestId = transport.start({QStringLiteral("archive-operation")});
+    QTest::qWait(400);
+    QCOMPARE(failedSpy.count(), 0);
+
+    transport.cancel(requestId);
+    QTRY_COMPARE_WITH_TIMEOUT(failedSpy.count(), 1, 1500);
+    const BackendTransportError error = errorFrom(failedSpy);
+    QCOMPARE(error.requestId, requestId);
+    QCOMPARE(error.code, QStringLiteral("cancelled"));
 }
 
 QTEST_MAIN(PersistentWorkerTransportTest)
