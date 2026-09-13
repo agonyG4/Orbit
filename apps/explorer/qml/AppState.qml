@@ -96,6 +96,14 @@ QtObject {
     property alias archiveConflictVisible: fileOpsObj.archiveConflictVisible
     property alias archiveConflictDestination: fileOpsObj.archiveConflictDestination
     property alias archiveConflictName: fileOpsObj.archiveConflictName
+    property alias archiveWorkflowOccupied: fileOpsObj.archiveWorkflowOccupied
+    property alias archiveOperationKind: fileOpsObj.archiveOperationKind
+    property alias archivePhase: fileOpsObj.archivePhase
+    property alias archiveCurrentPath: fileOpsObj.archiveCurrentPath
+    property alias archiveCurrentName: fileOpsObj.archiveCurrentName
+    property alias archiveBytesDone: fileOpsObj.archiveBytesDone
+    property alias archiveBytesTotal: fileOpsObj.archiveBytesTotal
+    property alias archiveCapabilities: fileOpsObj.archiveCapabilities
     property alias fileOperationRunning: fileOpsObj.fileOperationRunning
     property alias fileOperationProgress: fileOpsObj.fileOperationProgress
     property alias fileOperationPercent: fileOpsObj.fileOperationPercent
@@ -377,10 +385,16 @@ QtObject {
     function restoreSelected() { fileOps.restoreSelected() }
     function emptyTrash() { fileOps.emptyTrash() }
     function startArchiveExtraction(archivePath, folderName) { fileOps.startArchiveExtraction(archivePath, folderName) }
+    function startArchiveExtractionTo(archivePath, destination) {
+        fileOps.startArchiveExtractionTo(archivePath, destination)
+    }
     function submitArchivePassword(password) { fileOps.submitArchivePassword(password) }
     function cancelArchivePassword() { fileOps.cancelArchivePassword() }
     function submitArchiveConflict(policy) { fileOps.submitArchiveConflict(policy) }
     function cancelArchiveConflict() { fileOps.cancelArchiveConflict() }
+    function cancelArchiveOperation() { fileOps.cancelArchiveOperation() }
+    function startArchiveCreation(sources, archiveName, format, profile) { fileOps.startArchiveCreation(sources, archiveName, format, profile) }
+    function canExtractArchive(path) { return fileOps.canExtractArchive(path) }
     function startFolderCompression(folderPath, format) { fileOps.startFolderCompression(folderPath, format) }
     function isAppImageFileName(fileName) { return String(fileName || "").toLowerCase().endsWith(".appimage") }
     function isWallpaperImageFileName(fileName) { return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tif|tiff|webp)$/i.test(String(fileName || "")) }

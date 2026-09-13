@@ -11,6 +11,7 @@
 #include "models/directory_model.h"
 #include "models/sidebar_favorites_model.h"
 #include "services/directory_watch_service.h"
+#include "services/archive_operation_service.h"
 #include "services/filesystem_service.h"
 #include "services/file_uri_list.h"
 #include "services/recent_store.h"
@@ -423,6 +424,14 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"archiveExtractionDoneCount", "int", false},
         {"archiveExtractionTotalCount", "int", false},
         {"archiveExtractionRemainingText", "QString", false},
+        {"archiveOperationKind", "QString", false},
+        {"archivePhase", "QString", false},
+        {"archiveCurrentPath", "QString", false},
+        {"archiveCurrentName", "QString", false},
+        {"archiveBytesDone", "qlonglong", false},
+        {"archiveBytesTotal", "qlonglong", false},
+        {"archiveCapabilities", "QVariantList", false},
+        {"archiveWorkflowOccupied", "bool", false},
         {"archivePasswordPromptVisible", "bool", false},
         {"archivePasswordError", "QString", false},
         {"archiveConflictVisible", "bool", false},
@@ -502,10 +511,14 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"restoreSelected()", "void"},
         {"emptyTrash()", "void"},
         {"startArchiveExtraction(QString,QString)", "void"},
+        {"startArchiveExtractionTo(QString,QString)", "void"},
         {"submitArchivePassword(QString)", "void"},
         {"cancelArchivePassword()", "void"},
         {"submitArchiveConflict(QString)", "void"},
         {"cancelArchiveConflict()", "void"},
+        {"cancelArchiveOperation()", "void"},
+        {"startArchiveCreation(QStringList,QString,QString,QString)", "void"},
+        {"canExtractArchive(QString)", "bool"},
         {"startFolderCompression(QString,QString)", "void"},
         {"installAppImage(QString)", "void"},
         {"setAsWallpaper(QString)", "void"},
@@ -770,24 +783,28 @@ void AppStateFacadeTest::routesRecentOperationsToNativeBoundary()
 void AppStateFacadeTest::projectsArchiveCompletionThroughFilesystemActionFinished()
 {
     FacadeFixture fixture;
-    FilesystemService filesystem(&fixture.client);
-    ArchiveController archive(&filesystem, &fixture.navigation);
+    ArchiveOperationService archiveService(&fixture.client);
+    ArchiveController archive(&archiveService, &fixture.navigation);
     AppStateFacade facade(facadeDependencies(
-        fixture, nullptr, nullptr, &archive, nullptr, nullptr, nullptr, &filesystem));
+        fixture, nullptr, nullptr, &archive));
     QSignalSpy actionSpy(&facade, &AppStateFacade::filesystemActionFinished);
 
     facade.startArchiveExtraction(QStringLiteral("/tmp/first.zip"), QStringLiteral("first"));
-    QCOMPARE(fixture.client.utilityRequests().size(), 1);
-    UtilityResult completed;
-    completed.operation = QStringLiteral("archive-extract");
-    completed.ok = true;
-    completed.data.insert(QStringLiteral("destination"), QStringLiteral("/tmp/actual-first"));
-    fixture.client.completeUtility(1, completed);
+    QCOMPARE(fixture.client.archiveOperationRequests().size(), 1);
+    ArchiveOperationResult completed;
+    completed.operation = QStringLiteral("extract");
+    completed.state = QStringLiteral("success");
+    completed.destination = QStringLiteral("/tmp/actual-first");
+    completed.progress = 1.0;
+    completed.percent = 100;
+    completed.doneCount = 1;
+    completed.totalCount = 1;
+    fixture.client.completeArchiveOperation(1, completed);
 
     QTRY_COMPARE(actionSpy.count(), 1);
     const QList<QVariant> arguments = actionSpy.constFirst();
     QCOMPARE(arguments.at(0).toULongLong(), quint64(1));
-    QCOMPARE(arguments.at(1).toString(), QStringLiteral("archive-extract"));
+    QCOMPARE(arguments.at(1).toString(), QStringLiteral("extract"));
     QCOMPARE(arguments.at(2).toBool(), true);
     QCOMPARE(
         arguments.at(3).toMap().value(QStringLiteral("destination")).toString(),
@@ -822,10 +839,10 @@ void AppStateFacadeTest::retainsSelectionWhenDeleteFails()
 void AppStateFacadeTest::resetsArchivePresentationStateAcrossOperations()
 {
     FacadeFixture fixture;
-    FilesystemService filesystem(&fixture.client);
-    ArchiveController archive(&filesystem, &fixture.navigation);
+    ArchiveOperationService archiveService(&fixture.client);
+    ArchiveController archive(&archiveService, &fixture.navigation);
     AppStateFacade facade(facadeDependencies(
-        fixture, nullptr, nullptr, &archive, nullptr, nullptr, nullptr, &filesystem));
+        fixture, nullptr, nullptr, &archive));
 
     facade.startArchiveExtraction(
         QStringLiteral("/fixture/archive.tar"), QStringLiteral("Extracted"));
@@ -835,16 +852,18 @@ void AppStateFacadeTest::resetsArchivePresentationStateAcrossOperations()
     QCOMPARE(facade.archiveExtractionDoneCount(), 0);
     QCOMPARE(facade.archiveExtractionTotalCount(), 0);
     QVERIFY(facade.archiveExtractionDestination().endsWith(QStringLiteral("/Extracted")));
-    QCOMPARE(fixture.client.utilityRequests().size(), 1);
-    QCOMPARE(
-        fixture.client.utilityRequests().constLast().operation,
-        QStringLiteral("archive-extract"));
+    QCOMPARE(fixture.client.archiveOperationRequests().size(), 1);
+    QCOMPARE(fixture.client.archiveOperationRequests().constLast().kind, QStringLiteral("extract"));
 
-    UtilityResult extracted;
-    extracted.operation = QStringLiteral("archive-extract");
-    extracted.ok = true;
-    extracted.data.insert(QStringLiteral("destination"), QStringLiteral("/fixture/Extracted-1"));
-    fixture.client.completeUtility(1, extracted);
+    ArchiveOperationResult extracted;
+    extracted.operation = QStringLiteral("extract");
+    extracted.state = QStringLiteral("success");
+    extracted.destination = QStringLiteral("/fixture/Extracted-1");
+    extracted.progress = 1.0;
+    extracted.percent = 100;
+    extracted.doneCount = 1;
+    extracted.totalCount = 1;
+    fixture.client.completeArchiveOperation(1, extracted);
     QTRY_COMPARE(facade.archiveExtractionRunning(), false);
     QCOMPARE(facade.archiveExtractionPercent(), 100);
     QCOMPARE(facade.archiveExtractionProgress(), 1.0);
@@ -860,18 +879,14 @@ void AppStateFacadeTest::resetsArchivePresentationStateAcrossOperations()
     QCOMPARE(facade.archiveExtractionTotalCount(), 0);
     QVERIFY(facade.archiveExtractionDestination().endsWith(QStringLiteral("/folder.zip")));
     QCOMPARE(facade.archiveExtractionError(), QString());
-    QCOMPARE(fixture.client.utilityRequests().size(), 2);
-    QCOMPARE(
-        fixture.client.utilityRequests().constLast().operation,
-        QStringLiteral("archive-compress"));
+    QCOMPARE(fixture.client.archiveOperationRequests().size(), 2);
+    QCOMPARE(fixture.client.archiveOperationRequests().constLast().kind, QStringLiteral("create"));
 
-    UtilityResult compressed;
-    compressed.operation = QStringLiteral("archive-compress");
-    compressed.ok = false;
+    ArchiveOperationResult compressed;
+    compressed.operation = QStringLiteral("create");
+    compressed.state = QStringLiteral("provider-failed");
     compressed.errorMessage = QStringLiteral("archive failed");
-    // Successful extraction navigates to the result and consumes request id 2;
-    // compression therefore owns the next utility request.
-    fixture.client.completeUtility(3, compressed);
+    fixture.client.completeArchiveOperation(3, compressed);
     QTRY_COMPARE(facade.archiveExtractionRunning(), false);
     QCOMPARE(facade.archiveExtractionError(), QStringLiteral("archive failed"));
     QCOMPARE(facade.archiveExtractionTotalCount(), 0);

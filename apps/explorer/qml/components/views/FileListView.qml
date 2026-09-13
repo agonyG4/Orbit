@@ -224,11 +224,25 @@ Item {
     }
 
     // ── Shared UI helpers ─────────────────────────────────────────────────
-    CommonComponents.FileContextMenu {
+    Item {
         id: contextMenu
         anchors.fill: parent
-        clipboardProxy: clipboardProxy
-        menuOwner: "file-list"
+
+        function openAt(x, y, path, isDir, url) {
+            if (contextMenuLoader.item)
+                contextMenuLoader.item.openAt(x, y, path, isDir, url)
+        }
+
+        Loader {
+            id: contextMenuLoader
+            anchors.fill: parent
+            active: !AppState.dialogActive
+            sourceComponent: CommonComponents.FileContextMenu
+            onLoaded: {
+                item.clipboardProxy = clipboardProxy
+                item.menuOwner = "file-list"
+            }
+        }
     }
 
     TextEdit {

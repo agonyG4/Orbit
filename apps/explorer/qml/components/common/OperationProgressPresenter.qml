@@ -90,17 +90,11 @@ Item {
             title = kind === "archive" ? "Extracting..." : "Copying..."
         detail = _snapshotValue(snapshot, "fileName", "")
         destination = _basename(_snapshotValue(snapshot, "destination", ""))
-        progress = kind === "archive"
-            ? 0 : Number(_snapshotValue(snapshot, "progress", 0))
-        percent = kind === "archive"
-            ? 0 : Number(_snapshotValue(snapshot, "percent", 0))
-        completedItems = kind === "archive"
-            ? 0 : Number(_snapshotValue(snapshot, "doneCount", 0))
-        totalItems = kind === "archive"
-            ? 0 : Number(_snapshotValue(snapshot, "totalCount", 0))
-        remainingText = kind === "archive"
-            ? (_snapshotValue(snapshot, "remainingText", "") || "Aguardando...")
-            : ""
+        progress = Number(_snapshotValue(snapshot, "progress", 0))
+        percent = Number(_snapshotValue(snapshot, "percent", 0))
+        completedItems = Number(_snapshotValue(snapshot, "doneCount", 0))
+        totalItems = Number(_snapshotValue(snapshot, "totalCount", 0))
+        remainingText = _snapshotValue(snapshot, "remainingText", "")
         error = _snapshotValue(snapshot, "error", "")
         failed = false
     }
@@ -136,24 +130,10 @@ Item {
         remainingText = ""
         error = _snapshotValue(snapshot, "error", "")
 
-        if (kind === "archive") {
-            if (state === "success") {
-                progress = 1
-                percent = 100
-                completedItems = 1
-                totalItems = 1
-            } else {
-                progress = 0
-                percent = 0
-                completedItems = 0
-                totalItems = 0
-            }
-        } else {
-            progress = Number(_snapshotValue(snapshot, "progress", 0))
-            percent = Number(_snapshotValue(snapshot, "percent", 0))
-            completedItems = Number(_snapshotValue(snapshot, "doneCount", 0))
-            totalItems = Number(_snapshotValue(snapshot, "totalCount", 0))
-        }
+        progress = Number(_snapshotValue(snapshot, "progress", 0))
+        percent = Number(_snapshotValue(snapshot, "percent", 0))
+        completedItems = Number(_snapshotValue(snapshot, "doneCount", 0))
+        totalItems = Number(_snapshotValue(snapshot, "totalCount", 0))
 
         if (state === "success") {
             title = "Completed"

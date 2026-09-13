@@ -37,6 +37,7 @@
 #include "runtime/astrea_icon_image_provider.h"
 #include "runtime/explorer_runtime_paths.h"
 #include "services/clipboard_service.h"
+#include "services/archive_operation_service.h"
 #include "services/directory_watch_service.h"
 #include "services/desktop_application_catalog.h"
 #include "services/file_operation_service.h"
@@ -190,6 +191,10 @@ int ExplorerApplication::run(int argc, char **argv)
     }
     PersistentWorkerTransport transport(transportOptions, &application);
     RustBackendClient backendClient(&transport, &application);
+    PersistentWorkerTransportOptions archiveTransportOptions = transportOptions;
+    archiveTransportOptions.requestTimeoutMs = 0;
+    PersistentWorkerTransport archiveTransport(archiveTransportOptions, &application);
+    RustBackendClient archiveBackendClient(&archiveTransport, &application);
     DirectoryModel directoryModel(&application);
     DirectoryWatchService directoryWatcher(&application);
     SettingsService settings(
@@ -204,6 +209,7 @@ int ExplorerApplication::run(int argc, char **argv)
     mimeApps.setCatalog(&applicationCatalog);
     FileOperationService fileOperationService(&backendClient, &application);
     FilesystemService filesystemService(&backendClient, &application);
+    ArchiveOperationService archiveOperationService(&archiveBackendClient, &application);
     FileOperationsController fileOperations(
         &fileOperationService,
         &clipboard,
@@ -227,7 +233,8 @@ int ExplorerApplication::run(int argc, char **argv)
     explorerSettingsController.bindNavigation(&navigation);
     explorerSettingsController.bindDeviceController(&devices);
     SidebarFavoritesController sidebarFavorites(&explorerSettingsController, &application);
-    ArchiveController archive(&filesystemService, &navigation, &application);
+    ArchiveController archive(&archiveOperationService, &navigation, &application);
+    archive.refreshCapabilities();
     RecentSourcePaths recentSources;
     recentSources.finderPath = QDir(QDir::homePath()).filePath(
         QStringLiteral(".local/state/Astrea/finder-recents.json"));

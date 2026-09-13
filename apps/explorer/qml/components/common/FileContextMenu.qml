@@ -8,7 +8,7 @@ import Astrea.I18n 1.0 as AstreaI18n
 Item {
     id: menuRoot
     anchors.fill: parent
-    visible: menuFrame.menuOpen || creatingFolder || renamingItem
+    visible: menuFrame.menuOpen || creatingFolder || renamingItem || compressionDialogOpen
     z: 999
 
     property string itemPath: ""
@@ -18,33 +18,32 @@ Item {
     property string menuOwner: "file-context"
     property bool creatingFolder: false
     property bool renamingItem: false
-    property bool compressionSubmenuOpen: false
-    property bool rarAvailable: false
-    property real compressionSubmenuX: 0
-    property real compressionSubmenuY: 0
+    property bool compressionDialogOpen: false
+    property var compressionSources: []
+    property string compressionArchiveName: ""
+    property string compressionFormat: ""
+    property string compressionProfile: "balanced"
+    property bool compressionNameEdited: false
+    property string pendingExtractionPath: ""
     property string pendingFolderName: ""
     property string pendingRenameName: ""
-    property int rarRequestId: 0
     property int createFolderRequestId: 0
     property int renameRequestId: 0
     readonly property bool isBackgroundTarget: itemPath === AppState.currentPath && itemIsDir
-    readonly property bool isArchiveTarget: !itemIsDir && /\.(zip|tar|tgz|tar\.gz|tar\.bz2|tbz2|tar\.xz|txz|7z|rar)$/i.test(itemPath)
-    readonly property bool archiveOperationAvailable: !AppState.archiveExtractionRunning
+    readonly property bool isArchiveTarget: !itemIsDir && AppState.canExtractArchive(itemPath)
+    readonly property bool archiveOperationAvailable: !AppState.archiveWorkflowOccupied
     readonly property bool isAppImageTarget: !itemIsDir && AppState.isAppImageFileName(itemPath)
     readonly property bool isWallpaperImageTarget: !itemIsDir && !isBackgroundTarget && !AppState.inTrashView && AppState.isWallpaperImageFileName(itemPath)
-    readonly property bool canCompressTarget: itemIsDir && !isBackgroundTarget && !AppState.inTrashView
+    readonly property bool canCompressTarget: !isBackgroundTarget && !AppState.inTrashView
     readonly property bool canToggleSidebarFavorite: itemIsDir && !isBackgroundTarget && !AppState.inTrashView && AppState.canPinSidebarFavorite(itemPath)
-    readonly property var compressionFormats: [
-        { "label": "ZIP", "format": "zip" },
-        { "label": "RAR", "format": "rar" },
-        { "label": "TAR", "format": "tar" },
-        { "label": "TAR.GZ", "format": "tar.gz" },
-        { "label": "TAR.XZ", "format": "tar.xz" }
-    ]
+    readonly property var createCapabilities: AppState.archiveCapabilities.filter(function(capability) {
+        return capability.createSupported === true
+    })
+    readonly property bool createArchiveAvailable: archiveOperationAvailable && createCapabilities.length > 0
 
     function dismissTransientUi() {
         menuFrame.closeMenu()
-        compressionSubmenuOpen = false
+        compressionDialogOpen = false
         creatingFolder = false
         renamingItem = false
     }
@@ -54,7 +53,7 @@ Item {
         itemPath = path
         itemIsDir = isDir
         itemUrl = url
-        compressionSubmenuOpen = false
+        compressionDialogOpen = false
         menuFrame.openAt(x, y)
     }
 
@@ -76,8 +75,6 @@ Item {
                 menuRoot.closeMenu()
         }
     }
-
-    Component.onCompleted: rarRequestId = AppState.checkExecutable("rar")
 
     function runOpen() {
         closeMenu()
@@ -143,29 +140,41 @@ Item {
         AppState.startArchiveExtraction(itemPath, extractionFolderName())
     }
 
-    function openCompressionSubmenu(anchorItem) {
-        if (!canCompressTarget || !archiveOperationAvailable)
+    function runExtractTo() {
+        if (!isArchiveTarget || !archiveOperationAvailable)
             return
-        compressionCloseTimer.stop()
-        var submenuWidth = compressionSubmenu.width
-        var submenuHeight = compressionFormats.length * 32 + 8
-        var rightPoint = anchorItem.mapToItem(menuRoot, anchorItem.width - 4, 0)
-        var leftPoint = anchorItem.mapToItem(menuRoot, -submenuWidth + 4, 0)
-        var prefersRight = rightPoint.x + submenuWidth <= menuRoot.width - 10
-        compressionSubmenuX = Math.max(10, Math.min(prefersRight ? rightPoint.x : leftPoint.x, menuRoot.width - submenuWidth - 10))
-        compressionSubmenuY = Math.max(10, Math.min(rightPoint.y - 4, menuRoot.height - submenuHeight - 10))
-        compressionSubmenuOpen = true
-    }
-
-    function scheduleCompressionSubmenuClose() {
-        compressionCloseTimer.restart()
-    }
-
-    function runCompress(format) {
-        if (!canCompressTarget || !archiveOperationAvailable)
-            return
+        pendingExtractionPath = itemPath
         closeMenu()
-        AppState.startFolderCompression(itemPath, format)
+        extractionFolderDialog.startFolder = AppState.currentPath || AppState.homePath
+        extractionFolderDialog.openDialog()
+    }
+
+    function stripArchiveExtension(name) {
+        return String(name || "").replace(/\.(tar\.gz|tar\.xz|tar\.zst|tar\.bz2|tgz|txz|tzst|tbz2|zip|7z|tar|rar)$/i, "")
+    }
+
+    function openCompressionDialog() {
+        if (!canCompressTarget || !archiveOperationAvailable || createCapabilities.length === 0)
+            return
+        compressionSources = AppState.isPathSelected(itemPath) && AppState.selectedPaths.length > 0
+            ? AppState.selectedPaths.slice()
+            : [itemPath]
+        compressionNameEdited = false
+        compressionArchiveName = compressionSources.length === 1
+            ? stripArchiveExtension(compressionSources[0].split("/").pop())
+            : "Archive"
+        compressionFormat = createCapabilities[0].id
+        compressionProfile = "balanced"
+        closeMenu()
+        compressionDialogOpen = true
+        Qt.callLater(function() { compressionNameField.forceActiveFocus(); compressionNameField.selectAll() })
+    }
+
+    function runCompress() {
+        if (!canCompressTarget || !archiveOperationAvailable || compressionSources.length === 0)
+            return
+        compressionDialogOpen = false
+        AppState.startArchiveCreation(compressionSources, compressionArchiveName, compressionFormat, compressionProfile)
     }
 
     function runInstallAppImage() {
@@ -279,22 +288,28 @@ Item {
         Common.ContextMenuAction {
             id: compressAction
             label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.compactar"]) || "Compress")
-            actionEnabled: menuRoot.archiveOperationAvailable
-            hasSubmenu: true
+            actionEnabled: menuRoot.createArchiveAvailable
+            hasSubmenu: false
             visible: menuRoot.canCompressTarget
-            onHoveredChanged: {
-                if (hovered)
-                    menuRoot.openCompressionSubmenu(compressAction)
-                else
-                    menuRoot.scheduleCompressionSubmenuClose()
-            }
-            onTriggered: menuRoot.openCompressionSubmenu(compressAction)
+            onTriggered: menuRoot.openCompressionDialog()
         }
         Common.ContextMenuAction {
-            label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.extrair"]) || "Extract")
+            label: "Extract Here"
             actionEnabled: menuRoot.archiveOperationAvailable
             visible: menuRoot.isArchiveTarget
             onTriggered: menuRoot.runExtract()
+        }
+        Common.ContextMenuAction {
+            label: "Extract to \"" + menuRoot.extractionFolderName() + "/\""
+            actionEnabled: menuRoot.archiveOperationAvailable
+            visible: menuRoot.isArchiveTarget
+            onTriggered: menuRoot.runExtract()
+        }
+        Common.ContextMenuAction {
+            label: "Extract…"
+            actionEnabled: menuRoot.archiveOperationAvailable
+            visible: menuRoot.isArchiveTarget
+            onTriggered: menuRoot.runExtractTo()
         }
         Common.ContextMenuAction {
             label: ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.common.file_context_menu.label.install"]) || "Install")
@@ -329,68 +344,160 @@ Item {
         }
     }
 
-    Timer {
-        id: compressionCloseTimer
-        interval: 180
-        repeat: false
-        onTriggered: {
-            if (!compressionSubmenuHover.hovered && !compressAction.hovered)
-                menuRoot.compressionSubmenuOpen = false
+    Popup {
+        id: compressionDialog
+        anchors.centerIn: parent
+        width: 430
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        visible: menuRoot.compressionDialogOpen
+
+        background: Rectangle {
+            radius: 14
+            color: Theme.panel
+            border.color: Theme.border
+            border.width: 1
+        }
+
+        contentItem: Column {
+            spacing: 12
+            padding: 16
+
+            Text {
+                text: "Compress…"
+                color: Theme.text
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                width: parent.width
+                text: menuRoot.compressionSources.length + " source(s): " + menuRoot.compressionSources.map(function(path) { return path.split("/").pop() }).join(", ")
+                color: Theme.textSec
+                elide: Text.ElideMiddle
+            }
+
+            TextField {
+                id: compressionNameField
+                width: parent.width
+                text: menuRoot.compressionArchiveName
+                color: Theme.text
+                placeholderText: "Archive name"
+                selectByMouse: true
+                onTextChanged: {
+                    if (menuRoot.compressionDialogOpen)
+                        menuRoot.compressionArchiveName = text
+                }
+                background: Rectangle {
+                    radius: 8
+                    color: Qt.rgba(1, 1, 1, 0.06)
+                    border.color: compressionNameField.activeFocus ? Theme.accent : Theme.border
+                    border.width: 1
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 8
+                Text { text: "Format"; color: Theme.textSec; width: 100; anchors.verticalCenter: parent.verticalCenter }
+                ComboBox {
+                    id: compressionFormatBox
+                    width: parent.width - 108
+                    model: menuRoot.createCapabilities
+                    textRole: "label"
+                    onActivated: {
+                        if (index >= 0 && index < menuRoot.createCapabilities.length)
+                            menuRoot.compressionFormat = menuRoot.createCapabilities[index].id
+                    }
+                }
+            }
+
+            Row {
+                width: parent.width
+                visible: menuRoot.createCapabilities.length > 0
+                    && menuRoot.createCapabilities.some(function(capability) {
+                        return capability.id === menuRoot.compressionFormat && capability.profiles.length > 0
+                    })
+                spacing: 8
+                Text { text: "Compression"; color: Theme.textSec; width: 100; anchors.verticalCenter: parent.verticalCenter }
+                ComboBox {
+                    id: compressionProfileBox
+                    width: parent.width - 108
+                    model: ["fast", "balanced", "maximum"]
+                    currentIndex: model.indexOf(menuRoot.compressionProfile)
+                    onActivated: menuRoot.compressionProfile = currentText
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: {
+                    var capability = menuRoot.createCapabilities.filter(function(item) { return item.id === menuRoot.compressionFormat })[0]
+                    return capability ? "Output: " + menuRoot.compressionArchiveName + "." + capability.extension : ""
+                }
+                color: Theme.textTer
+                elide: Text.ElideMiddle
+            }
+
+            Row {
+                spacing: 8
+                DialogButton {
+                    label: "Cancel"
+                    onClicked: menuRoot.compressionDialogOpen = false
+                }
+                DialogButton {
+                    label: "Compress"
+                    emphasized: true
+                    onClicked: menuRoot.runCompress()
+                }
+            }
+        }
+
+        onVisibleChanged: {
+            if (visible) {
+                compressionFormatBox.currentIndex = Math.max(0, menuRoot.createCapabilities.findIndex(function(item) { return item.id === menuRoot.compressionFormat }))
+                compressionProfileBox.currentIndex = Math.max(0, compressionProfileBox.model.indexOf(menuRoot.compressionProfile))
+            }
         }
     }
 
-    Rectangle {
-        id: compressionSubmenu
-        visible: menuFrame.menuOpen && menuRoot.compressionSubmenuOpen
-        x: menuRoot.compressionSubmenuX
-        y: menuRoot.compressionSubmenuY
-        width: 144
-        height: compressionColumn.implicitHeight + 8
-        radius: 10
-        color: "#1e1e20"
-        border.width: 1
-        border.color: "#3a3a3c"
-        z: menuFrame.z + 1
-
-        HoverHandler {
-            id: compressionSubmenuHover
-            onHoveredChanged: {
-                if (hovered)
-                    compressionCloseTimer.stop()
-                else
-                    menuRoot.scheduleCompressionSubmenuClose()
-            }
+    FileDialog {
+        id: extractionFolderDialog
+        mode: "select_folder"
+        dialogTitle: "Extract archive to…"
+        onFileChosen: function(path) {
+            if (path !== "" && menuRoot.pendingExtractionPath !== "")
+                AppState.startArchiveExtractionTo(menuRoot.pendingExtractionPath, path)
+            menuRoot.pendingExtractionPath = ""
         }
+    }
 
-        Column {
-            id: compressionColumn
-            anchors {
-                left: parent.left
-                right: parent.right
-                top: parent.top
-                margins: 4
-            }
-            spacing: 0
-
-            Repeater {
-                model: menuRoot.compressionFormats
-
-                Common.ContextMenuAction {
-                    label: modelData.label
-                    actionEnabled: menuRoot.archiveOperationAvailable && (modelData.format !== "rar" || menuRoot.rarAvailable)
-                    onTriggered: menuRoot.runCompress(modelData.format)
-                }
-            }
+    component DialogButton: Button {
+        property string label: ""
+        property bool emphasized: false
+        property bool danger: false
+        text: label
+        implicitHeight: 34
+        leftPadding: 14
+        rightPadding: 14
+        contentItem: Text {
+            text: parent.label
+            color: parent.danger ? "#ffb3b3" : (parent.emphasized ? Theme.accent : Theme.text)
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+        background: Rectangle {
+            radius: 8
+            color: parent.emphasized ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.18) : Qt.rgba(1, 1, 1, 0.06)
+            border.color: parent.emphasized ? Theme.accent : Theme.border
+            border.width: 1
         }
     }
 
     Connections {
         target: AppState
         function onFilesystemActionFinished(requestId, operation, ok, data, error) {
-            if (operation === "which" && requestId === menuRoot.rarRequestId) {
-                menuRoot.rarAvailable = ok && data && data.found === true
-                return
-            }
             if (operation === "create-folder" && requestId === menuRoot.createFolderRequestId) {
                 menuRoot.creatingFolder = false
                 if (ok)

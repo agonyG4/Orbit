@@ -237,20 +237,41 @@ class ExplorerArchiveAdmissionTests(unittest.TestCase):
         )
 
         self.assertIn("readonly property bool archiveOperationAvailable", menu)
-        self.assertIn("!AppState.archiveExtractionRunning", menu)
+        self.assertIn("readonly property bool createArchiveAvailable", menu)
         self.assertIn("if (!isArchiveTarget || !archiveOperationAvailable)", menu)
-        self.assertIn("if (!canCompressTarget || !archiveOperationAvailable)", menu)
-        self.assertIn("actionEnabled: menuRoot.archiveOperationAvailable", menu)
-        self.assertIn(
-            "actionEnabled: menuRoot.archiveOperationAvailable && (modelData.format !== \"rar\" || menuRoot.rarAvailable)",
-            menu,
-        )
+        self.assertIn("if (!canCompressTarget || !archiveOperationAvailable || createCapabilities.length === 0)", menu)
+        self.assertIn("actionEnabled: menuRoot.createArchiveAvailable", menu)
+        self.assertIn("readonly property var createCapabilities", menu)
+        self.assertIn("AppState.archiveCapabilities.filter", menu)
+        self.assertNotIn("rarAvailable", menu)
+        self.assertNotIn("compressionFormats", menu)
+        self.assertNotIn("checkExecutable(\"rar\")", menu)
         self.assertIn("bool AppStateFacade::archiveWorkflowOccupied() const", facade)
         self.assertIn(
             "return m_running || m_passwordPrompt || m_conflict;",
             archive,
         )
         self.assertIn("if (archiveWorkflowOccupied() || m_archive == nullptr", facade)
+
+    def test_archive_menu_uses_capabilities_profiles_and_real_extract_actions(self):
+        menu = (APP_ROOT / "components/common/FileContextMenu.qml").read_text(encoding="utf-8")
+        controller = (EXPLORER_ROOT / "src/controllers/archive_controller.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('text: "Compress…"', menu)
+        self.assertIn("compressionArchiveName", menu)
+        self.assertIn("compressionFormat", menu)
+        self.assertIn("compressionProfile", menu)
+        self.assertIn('return capability.id === menuRoot.compressionFormat && capability.profiles.length > 0', menu)
+        self.assertIn('label: "Extract Here"', menu)
+        self.assertIn('label: "Extract to \\"" + menuRoot.extractionFolderName()', menu)
+        self.assertIn('label: "Extract…"', menu)
+        self.assertIn('mode: "select_folder"', menu)
+        self.assertIn("AppState.startArchiveExtractionTo", menu)
+        self.assertNotIn('label: "Merge"', menu)
+        self.assertIn('lower.endsWith(QStringLiteral(".tzst"))', controller)
+        self.assertIn('AppState.startArchiveCreation(compressionSources', menu)
 
     def test_dormant_archive_continuation_dialogs_follow_native_state(self):
         main_qml = (APP_ROOT / "Main.qml").read_text(encoding="utf-8")

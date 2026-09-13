@@ -31,11 +31,10 @@ fn run() -> Result<(), String> {
         Some("thumbnail-batch") => thumbnails::run_batch(&args[2..]),
         Some("install-appimage") => appimage::run(&args[2..]),
         Some("file-op") => file_ops::run(&args[2..]),
-        Some("archive-extract") => archive::run_extract(&args[2..]),
-        Some("archive-compress") => archive::run_compress(&args[2..]),
+        Some("archive-operation") => archive::run_operation(&args[2..]),
         Some("utility") => utility::run(&args[2..]),
         Some("serve") => worker::run(),
         _ if args.len() >= 6 => entries::run_list(&args[1..]),
-        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|thumbnail-batch|install-appimage|file-op|utility|serve ...".into()),
+        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|thumbnail-batch|install-appimage|file-op|archive-operation|utility|serve ...".into()),
     }
 }

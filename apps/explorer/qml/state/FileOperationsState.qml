@@ -31,7 +31,7 @@ QtObject {
     function currentArchiveOperationSnapshot() {
         var source = bridge || ops
         return {
-            running: source.archiveExtractionRunning,
+            running: source.archiveExtractionRunning && source.archiveOperationKind !== "capabilities",
             progress: source.archiveExtractionProgress,
             percent: source.archiveExtractionPercent,
             fileName: source.archiveExtractionFileName,
@@ -40,7 +40,13 @@ QtObject {
             destination: source.archiveExtractionDestination,
             doneCount: source.archiveExtractionDoneCount,
             totalCount: source.archiveExtractionTotalCount,
-            remainingText: source.archiveExtractionRemainingText
+            remainingText: source.archiveExtractionRemainingText,
+            operation: source.archiveOperationKind,
+            phase: source.archivePhase,
+            currentPath: source.archiveCurrentPath,
+            currentName: source.archiveCurrentName,
+            bytesDone: source.archiveBytesDone,
+            bytesTotal: source.archiveBytesTotal
         }
     }
 
@@ -73,12 +79,20 @@ QtObject {
     property int archiveExtractionDoneCount: bridge ? bridge.archiveExtractionDoneCount : 0
     property int archiveExtractionTotalCount: bridge ? bridge.archiveExtractionTotalCount : 0
     property string archiveExtractionRemainingText: bridge ? bridge.archiveExtractionRemainingText : ""
+    property string archiveOperationKind: bridge ? bridge.archiveOperationKind : ""
+    property string archivePhase: bridge ? bridge.archivePhase : ""
+    property string archiveCurrentPath: bridge ? bridge.archiveCurrentPath : ""
+    property string archiveCurrentName: bridge ? bridge.archiveCurrentName : ""
+    property real archiveBytesDone: bridge ? bridge.archiveBytesDone : -1
+    property real archiveBytesTotal: bridge ? bridge.archiveBytesTotal : -1
+    property var archiveCapabilities: bridge ? bridge.archiveCapabilities : []
     property bool archivePasswordPromptVisible: bridge ? bridge.archivePasswordPromptVisible : false
     property string archivePassword: ""
     property string archivePasswordError: bridge ? bridge.archivePasswordError : ""
     property bool archiveConflictVisible: bridge ? bridge.archiveConflictVisible : false
     property string archiveConflictDestination: bridge ? bridge.archiveConflictDestination : ""
     property string archiveConflictName: bridge ? bridge.archiveConflictName : ""
+    property bool archiveWorkflowOccupied: bridge ? bridge.archiveWorkflowOccupied : false
     property bool fileOperationRunning: bridge ? bridge.fileOperationRunning : false
     property real fileOperationProgress: bridge ? bridge.fileOperationProgress : 0
     property int fileOperationPercent: bridge ? bridge.fileOperationPercent : 0
@@ -112,10 +126,18 @@ QtObject {
     function restoreSelected() { if (bridge) bridge.restoreSelected() }
     function emptyTrash() { if (bridge) bridge.emptyTrash() }
     function startArchiveExtraction(path, folder) { if (bridge) bridge.startArchiveExtraction(path, folder) }
+    function startArchiveExtractionTo(path, destination) {
+        if (bridge) bridge.startArchiveExtractionTo(path, destination)
+    }
     function submitArchivePassword(password) { if (bridge) bridge.submitArchivePassword(password) }
     function cancelArchivePassword() { if (bridge) bridge.cancelArchivePassword() }
     function submitArchiveConflict(policy) { if (bridge) bridge.submitArchiveConflict(policy) }
     function cancelArchiveConflict() { if (bridge) bridge.cancelArchiveConflict() }
+    function cancelArchiveOperation() { if (bridge) bridge.cancelArchiveOperation() }
+    function startArchiveCreation(sources, archiveName, format, profile) {
+        if (bridge) bridge.startArchiveCreation(sources, archiveName, format, profile)
+    }
+    function canExtractArchive(path) { return bridge ? bridge.canExtractArchive(path) : false }
     function startFolderCompression(path, format) { if (bridge) bridge.startFolderCompression(path, format) }
     function installAppImage(path) { if (bridge) bridge.installAppImage(path) }
     function setAsWallpaper(path) { if (bridge) bridge.setAsWallpaper(path) }

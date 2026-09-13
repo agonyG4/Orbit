@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 gio = "0.21"
+libc = "0.2"
 md5 = "0.7"
 png = "0.18"
 rayon = "1.10"

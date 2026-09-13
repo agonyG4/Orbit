@@ -211,6 +211,7 @@ name = "explorer_backend"
 version = "0.1.0"
 dependencies = [
  "gio",
+ "libc",
  "md5",
  "png",
  "rayon",

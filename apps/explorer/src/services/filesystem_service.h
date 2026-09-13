@@ -29,15 +29,6 @@ public:
     Backend::BackendRequestId properties(const QString &path);
     Backend::BackendRequestId createDesktopShortcut(const QString &path);
     Backend::BackendRequestId networkMountProbe(const QString &rootPath);
-    Backend::BackendRequestId archiveExtract(
-        const QString &archivePath,
-        const QString &destination,
-        const QString &password,
-        const QString &conflictPolicy);
-    Backend::BackendRequestId archiveCompress(
-        const QString &sourcePath,
-        const QString &archivePath,
-        const QString &format);
     Backend::BackendRequestId installAppImage(const QString &path);
     Backend::BackendRequestId networkMount(const QString &address);
     Backend::BackendRequestId trash(

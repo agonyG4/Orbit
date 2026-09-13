@@ -83,25 +83,6 @@ BackendRequestId FilesystemService::networkMountProbe(const QString &rootPath)
     return request(QStringLiteral("network-mount-probe"), {rootPath});
 }
 
-BackendRequestId FilesystemService::archiveExtract(
-    const QString &archivePath,
-    const QString &destination,
-    const QString &password,
-    const QString &conflictPolicy)
-{
-    return request(
-        QStringLiteral("archive-extract"),
-        {archivePath, destination, password, conflictPolicy});
-}
-
-BackendRequestId FilesystemService::archiveCompress(
-    const QString &sourcePath,
-    const QString &archivePath,
-    const QString &format)
-{
-    return request(QStringLiteral("archive-compress"), {sourcePath, archivePath, format});
-}
-
 BackendRequestId FilesystemService::installAppImage(const QString &path)
 {
     return request(QStringLiteral("install-appimage"), {path});

@@ -101,6 +101,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     }
     if (m_archive != nullptr) {
         connect(m_archive, &ArchiveController::stateChanged, this, &AppStateFacade::archiveStateChanged);
+        connect(m_archive, &ArchiveController::capabilitiesChanged, this, &AppStateFacade::archiveCapabilitiesChanged);
         connect(
             m_archive,
             &ArchiveController::operationFinished,
@@ -250,11 +251,6 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
             &Services::FilesystemService::operationFinished,
             this,
             [this](const UtilityResult &result) {
-                if (m_archive != nullptr
-                    && (result.operation == QStringLiteral("archive-extract")
-                        || result.operation == QStringLiteral("archive-compress"))) {
-                    return;
-                }
                 if (result.operation == QStringLiteral("install-appimage")) {
                     m_appImageInstallRunning = false;
                     emit archiveStateChanged();
@@ -828,6 +824,34 @@ QString AppStateFacade::archiveExtractionRemainingText() const
 {
     return m_archive == nullptr ? QString() : m_archive->remainingText();
 }
+QString AppStateFacade::archiveOperationKind() const
+{
+    return m_archive == nullptr ? QString() : m_archive->operationKind();
+}
+QString AppStateFacade::archivePhase() const
+{
+    return m_archive == nullptr ? QString() : m_archive->phase();
+}
+QString AppStateFacade::archiveCurrentPath() const
+{
+    return m_archive == nullptr ? QString() : m_archive->currentPath();
+}
+QString AppStateFacade::archiveCurrentName() const
+{
+    return m_archive == nullptr ? QString() : m_archive->currentName();
+}
+qint64 AppStateFacade::archiveBytesDone() const
+{
+    return m_archive == nullptr ? -1 : m_archive->bytesDone();
+}
+qint64 AppStateFacade::archiveBytesTotal() const
+{
+    return m_archive == nullptr ? -1 : m_archive->bytesTotal();
+}
+QVariantList AppStateFacade::archiveCapabilities() const
+{
+    return m_archive == nullptr ? QVariantList{} : m_archive->capabilities();
+}
 bool AppStateFacade::archivePasswordPromptVisible() const
 {
     return m_archive != nullptr && m_archive->passwordPromptVisible();
@@ -1264,6 +1288,16 @@ void AppStateFacade::startArchiveExtraction(const QString &path, const QString &
     m_archive->startArchiveExtraction(path, folderName);
 }
 
+void AppStateFacade::startArchiveExtractionTo(
+    const QString &path,
+    const QString &destination)
+{
+    if (archiveWorkflowOccupied() || m_archive == nullptr) {
+        return;
+    }
+    m_archive->startArchiveExtractionTo(path, destination);
+}
+
 void AppStateFacade::submitArchivePassword(const QString &password)
 {
     if (m_archive != nullptr) {
@@ -1290,6 +1324,27 @@ void AppStateFacade::cancelArchiveConflict()
     if (m_archive != nullptr) {
         m_archive->cancelArchiveConflict();
     }
+}
+void AppStateFacade::cancelArchiveOperation()
+{
+    if (m_archive != nullptr) {
+        m_archive->cancelArchiveOperation();
+    }
+}
+void AppStateFacade::startArchiveCreation(
+    const QStringList &sources,
+    const QString &archiveName,
+    const QString &format,
+    const QString &profile)
+{
+    if (archiveWorkflowOccupied() || m_archive == nullptr) {
+        return;
+    }
+    m_archive->startArchiveCreation(sources, archiveName, format, profile);
+}
+bool AppStateFacade::canExtractArchive(const QString &path) const
+{
+    return m_archive != nullptr && m_archive->canExtractArchive(path);
 }
 void AppStateFacade::startFolderCompression(const QString &path, const QString &format)
 {

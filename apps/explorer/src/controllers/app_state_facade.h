@@ -150,11 +150,19 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(int archiveExtractionDoneCount READ archiveExtractionDoneCount NOTIFY archiveStateChanged)
     Q_PROPERTY(int archiveExtractionTotalCount READ archiveExtractionTotalCount NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveExtractionRemainingText READ archiveExtractionRemainingText NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveOperationKind READ archiveOperationKind NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archivePhase READ archivePhase NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveCurrentPath READ archiveCurrentPath NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveCurrentName READ archiveCurrentName NOTIFY archiveStateChanged)
+    Q_PROPERTY(qint64 archiveBytesDone READ archiveBytesDone NOTIFY archiveStateChanged)
+    Q_PROPERTY(qint64 archiveBytesTotal READ archiveBytesTotal NOTIFY archiveStateChanged)
+    Q_PROPERTY(QVariantList archiveCapabilities READ archiveCapabilities NOTIFY archiveCapabilitiesChanged)
     Q_PROPERTY(bool archivePasswordPromptVisible READ archivePasswordPromptVisible NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archivePasswordError READ archivePasswordError NOTIFY archiveStateChanged)
     Q_PROPERTY(bool archiveConflictVisible READ archiveConflictVisible NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveConflictDestination READ archiveConflictDestination NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveConflictName READ archiveConflictName NOTIFY archiveStateChanged)
+    Q_PROPERTY(bool archiveWorkflowOccupied READ archiveWorkflowOccupied NOTIFY archiveStateChanged)
     Q_PROPERTY(bool appImageInstallRunning READ appImageInstallRunning NOTIFY archiveStateChanged)
     Q_PROPERTY(bool wallpaperApplyRunning READ wallpaperApplyRunning NOTIFY wallpaperStateChanged)
 
@@ -257,6 +265,13 @@ public:
     int archiveExtractionDoneCount() const;
     int archiveExtractionTotalCount() const;
     QString archiveExtractionRemainingText() const;
+    QString archiveOperationKind() const;
+    QString archivePhase() const;
+    QString archiveCurrentPath() const;
+    QString archiveCurrentName() const;
+    qint64 archiveBytesDone() const;
+    qint64 archiveBytesTotal() const;
+    QVariantList archiveCapabilities() const;
     bool archivePasswordPromptVisible() const;
     QString archivePasswordError() const;
     bool archiveConflictVisible() const;
@@ -360,10 +375,20 @@ public:
     Q_INVOKABLE void restoreSelected();
     Q_INVOKABLE void emptyTrash();
     Q_INVOKABLE void startArchiveExtraction(const QString &path, const QString &folderName);
+    Q_INVOKABLE void startArchiveExtractionTo(
+        const QString &path,
+        const QString &destination);
     Q_INVOKABLE void submitArchivePassword(const QString &password);
     Q_INVOKABLE void cancelArchivePassword();
     Q_INVOKABLE void submitArchiveConflict(const QString &policy);
     Q_INVOKABLE void cancelArchiveConflict();
+    Q_INVOKABLE void cancelArchiveOperation();
+    Q_INVOKABLE void startArchiveCreation(
+        const QStringList &sources,
+        const QString &archiveName,
+        const QString &format,
+        const QString &profile);
+    Q_INVOKABLE bool canExtractArchive(const QString &path) const;
     Q_INVOKABLE void startFolderCompression(const QString &path, const QString &format);
     Q_INVOKABLE void installAppImage(const QString &path);
     Q_INVOKABLE void setAsWallpaper(const QString &path);
@@ -496,6 +521,7 @@ signals:
     void pasteConflictStateChanged();
     void deviceStateChanged();
     void archiveStateChanged();
+    void archiveCapabilitiesChanged();
     void wallpaperStateChanged();
     void iconThemeChanged();
     void filesystemActionFinished(

@@ -496,6 +496,17 @@ ApplicationWindow {
                         trackColor: Theme.hover
                         fillColor: Theme.text
                         errorColor: "#ff8b8b"
+
+                        Button {
+                            visible: operationProgressPresenter.activeKind === "archive"
+                                && AppState.archiveExtractionRunning
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 8
+                            text: "Cancel"
+                            flat: true
+                            onClicked: AppState.cancelArchiveOperation()
+                        }
                     }
                 }
 
@@ -765,7 +776,7 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 color: Theme.textSec
                 font.pixelSize: 12
-                text: "Ja existe uma pasta chamada " + AppState.archiveConflictName + ". Voce pode mesclar o conteudo, substituir a pasta atual ou manter ambos."
+                text: "Ja existe um destino chamado " + AppState.archiveConflictName + ". Escolha manter ambos ou substituir o destino atual."
             }
 
             Rectangle {
@@ -800,12 +811,6 @@ ApplicationWindow {
                 DialogButton {
                     label: "Manter ambos"
                     onClicked: AppState.submitArchiveConflict("keep-both")
-                }
-
-                DialogButton {
-                    label: "Mesclar"
-                    emphasized: true
-                    onClicked: AppState.submitArchiveConflict("merge")
                 }
 
                 DialogButton {

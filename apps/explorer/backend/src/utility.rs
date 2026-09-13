@@ -25,8 +25,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "thumbnail-batch" => crate::thumbnails::batch(&args[1..]),
         "file-visual-metadata" => crate::file_visual_metadata::run(&args[1..]),
         "install-appimage" => install_appimage(args),
-        "archive-extract" => crate::archive::extract(&args[1..]),
-        "archive-compress" => crate::archive::compress(&args[1..]),
         "trash" => trash(args),
         "restore-trash" => restore_trash(args),
         "empty-trash" => empty_trash(args),
