@@ -17,6 +17,13 @@ public:
     ~BackendTransport() override;
 
     virtual BackendRequestId start(const QStringList &arguments) = 0;
+    virtual BackendRequestId start(
+        const QStringList &arguments,
+        const QByteArray &stdinPayload)
+    {
+        Q_UNUSED(stdinPayload)
+        return start(arguments);
+    }
     virtual void cancel(BackendRequestId requestId) = 0;
 
 signals:

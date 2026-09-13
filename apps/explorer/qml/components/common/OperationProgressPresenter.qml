@@ -105,6 +105,17 @@ Item {
 
     function _terminalSemanticState(kind, snapshot) {
         var state = _lower(_snapshotValue(snapshot, "state", ""))
+        if (kind === "archive") {
+            if (state === "cancelled" || state === "canceled")
+                return "cancelled"
+            if (state === "failed")
+                return "failed"
+            if (state === "success")
+                return "success"
+            if (state === "waiting-password" || state === "waiting-conflict")
+                return "waiting"
+            return "failed"
+        }
         var status = _lower(_snapshotValue(snapshot, "status", ""))
         var error = String(_snapshotValue(snapshot, "error", "") || "")
         if (state === "cancelled" || state === "canceled"
@@ -143,6 +154,9 @@ Item {
             failed = true
         } else if (state === "cancelled") {
             title = "Cancelled"
+            failed = false
+        } else if (state === "waiting") {
+            title = _snapshotValue(snapshot, "status", "Waiting for input")
             failed = false
         } else {
             title = "Failed"

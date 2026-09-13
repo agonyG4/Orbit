@@ -55,6 +55,7 @@ QString ArchiveController::remainingText() const
 }
 
 QString ArchiveController::operationKind() const { return m_operationKind; }
+QString ArchiveController::workflowState() const { return m_workflowState; }
 
 QVariantList ArchiveController::capabilities() const
 {
@@ -67,8 +68,10 @@ QVariantList ArchiveController::capabilities() const
         value.insert(QStringLiteral("createSupported"), capability.createSupported);
         value.insert(QStringLiteral("extractSupported"), capability.extractSupported);
         value.insert(QStringLiteral("profiles"), capability.profiles);
-        value.insert(QStringLiteral("passwordSupported"), capability.passwordSupported);
-        value.insert(QStringLiteral("provider"), capability.provider);
+        value.insert(QStringLiteral("createProvider"), capability.createProvider);
+        value.insert(QStringLiteral("extractProvider"), capability.extractProvider);
+        value.insert(QStringLiteral("createPasswordSupported"), capability.createPasswordSupported);
+        value.insert(QStringLiteral("extractPasswordSupported"), capability.extractPasswordSupported);
         result.append(value);
     }
     return result;
@@ -132,6 +135,31 @@ bool ArchiveController::canExtractArchive(const QString &path) const
     return false;
 }
 
+QString ArchiveController::canonicalArchiveStem(const QString &name)
+{
+    const QString fileName = QFileInfo(name).fileName();
+    static const QStringList suffixes {
+        QStringLiteral(".tar.zst"),
+        QStringLiteral(".tar.bz2"),
+        QStringLiteral(".tar.xz"),
+        QStringLiteral(".tar.gz"),
+        QStringLiteral(".tzst"),
+        QStringLiteral(".tbz2"),
+        QStringLiteral(".txz"),
+        QStringLiteral(".tgz"),
+        QStringLiteral(".7z"),
+        QStringLiteral(".zip"),
+        QStringLiteral(".tar"),
+        QStringLiteral(".rar"),
+    };
+    for (const QString &suffix : suffixes) {
+        if (fileName.endsWith(suffix, Qt::CaseInsensitive)) {
+            return fileName.left(fileName.size() - suffix.size());
+        }
+    }
+    return fileName;
+}
+
 void ArchiveController::resetForStart(const QString &operation, const QString &fileName)
 {
     m_operationKind = operation;
@@ -156,6 +184,8 @@ void ArchiveController::resetForStart(const QString &operation, const QString &f
     m_currentPath.clear();
     m_currentName.clear();
     m_running = true;
+    m_workflowState = QStringLiteral("running");
+    m_workflowRequest = 0;
 }
 
 BackendRequestId ArchiveController::startRequest(const ArchiveOperationRequest &request)
@@ -165,6 +195,11 @@ BackendRequestId ArchiveController::startRequest(const ArchiveOperationRequest &
     const BackendRequestId requestId = m_service->start(request);
     if (requestId != 0) {
         m_request = requestId;
+        if ((request.kind == QStringLiteral("create")
+             || request.kind == QStringLiteral("extract"))
+            && m_workflowRequest == 0) {
+            m_workflowRequest = requestId;
+        }
     }
     return requestId;
 }
@@ -174,14 +209,17 @@ void ArchiveController::startArchiveExtraction(const QString &path, const QStrin
     if (path.isEmpty()) {
         return;
     }
-    const QString defaultName = QFileInfo(path).completeBaseName();
+    const QString defaultName = canonicalArchiveStem(path);
     const QString currentPath = m_navigation == nullptr ? QString() : m_navigation->currentPath();
     const QString destination = QDir(currentPath).filePath(
         folderName.isEmpty() ? defaultName : folderName);
-    startArchiveExtractionTo(path, destination);
+    startArchiveExtractionRequest(path, destination, QStringLiteral("new-directory"));
 }
 
-void ArchiveController::startArchiveExtractionTo(const QString &path, const QString &destination)
+void ArchiveController::startArchiveExtractionRequest(
+    const QString &path,
+    const QString &destination,
+    const QString &destinationMode)
 {
     if (workflowOccupied() || path.isEmpty() || destination.isEmpty()
         || (!m_capabilities.isEmpty() && !canExtractArchive(path))) {
@@ -192,14 +230,48 @@ void ArchiveController::startArchiveExtractionTo(const QString &path, const QStr
     request.archivePath = path;
     request.destination = destination;
     request.conflictPolicy = QStringLiteral("prompt");
+    request.destinationMode = destinationMode;
     m_path = path;
     m_destination = destination;
     resetForStart(QStringLiteral("extract"), QFileInfo(path).fileName());
     publishState();
     if (startRequest(request) == 0) {
         m_running = false;
+        m_workflowState = QStringLiteral("failed");
         publishState();
     }
+}
+
+void ArchiveController::startArchiveExtractionHere(
+    const QString &path,
+    const QString &destination)
+{
+    if (workflowOccupied() || path.isEmpty() || destination.isEmpty()
+        || (!m_capabilities.isEmpty() && !canExtractArchive(path))) {
+        return;
+    }
+    ArchiveOperationRequest request;
+    request.kind = QStringLiteral("extract");
+    request.archivePath = path;
+    request.destination = destination;
+    request.conflictPolicy = QStringLiteral("prompt");
+    request.destinationMode = QStringLiteral("into-directory");
+    m_path = path;
+    m_destination = destination;
+    resetForStart(QStringLiteral("extract"), QFileInfo(path).fileName());
+    publishState();
+    if (startRequest(request) == 0) {
+        m_running = false;
+        m_workflowState = QStringLiteral("failed");
+        publishState();
+    }
+}
+
+void ArchiveController::startArchiveExtractionTo(
+    const QString &path,
+    const QString &destination)
+{
+    startArchiveExtractionRequest(path, destination, QStringLiteral("into-directory"));
 }
 
 void ArchiveController::startArchiveCreation(
@@ -214,6 +286,10 @@ void ArchiveController::startArchiveCreation(
     const QString baseName = archiveName.trimmed().isEmpty()
         ? (sources.size() == 1 ? QFileInfo(sources.constFirst()).fileName() : QStringLiteral("Archive"))
         : archiveName.trimmed();
+    if (baseName == QStringLiteral(".") || baseName == QStringLiteral("..")
+        || baseName.contains(QChar('/')) || baseName.contains(QChar('\\'))) {
+        return;
+    }
     const QString currentPath = m_navigation == nullptr ? QString() : m_navigation->currentPath();
     const QString destination = QDir(currentPath).filePath(baseName + extensionForFormat(format));
     ArchiveOperationRequest request;
@@ -223,12 +299,14 @@ void ArchiveController::startArchiveCreation(
     request.format = format;
     request.profile = profile.isEmpty() ? QStringLiteral("balanced") : profile;
     request.conflictPolicy = QStringLiteral("keep-both");
+    request.destinationMode = QStringLiteral("new-directory");
     m_path = sources.constFirst();
     m_destination = destination;
     resetForStart(QStringLiteral("create"), baseName);
     publishState();
     if (startRequest(request) == 0) {
         m_running = false;
+        m_workflowState = QStringLiteral("failed");
         publishState();
     }
 }
@@ -246,12 +324,14 @@ void ArchiveController::startPasswordContinuation(const QString &password)
     m_bytesDone = -1;
     m_bytesTotal = -1;
     m_running = true;
+    m_workflowState = QStringLiteral("running");
     m_passwordPrompt = false;
     m_status = QStringLiteral("Extracting...");
     publishState();
     if (startRequest(m_workflow) == 0) {
         m_running = false;
         m_passwordPrompt = true;
+        m_workflowState = QStringLiteral("waiting-password");
         publishState();
     }
 }
@@ -269,8 +349,7 @@ void ArchiveController::cancelArchivePassword()
     if (!m_passwordPrompt) {
         return;
     }
-    m_passwordPrompt = false;
-    publishState();
+    finishWaitingWorkflowAsCancelled();
 }
 
 void ArchiveController::submitArchiveConflict(const QString &policy)
@@ -289,8 +368,31 @@ void ArchiveController::cancelArchiveConflict()
     if (!m_conflict) {
         return;
     }
+    finishWaitingWorkflowAsCancelled();
+}
+
+void ArchiveController::finishWaitingWorkflowAsCancelled()
+{
+    const BackendRequestId completedRequest = m_workflowRequest != 0
+        ? m_workflowRequest
+        : m_request;
+    m_passwordPrompt = false;
     m_conflict = false;
+    m_workflow.password.clear();
+    m_request = 0;
+    m_workflowRequest = 0;
+    m_workflowState = QStringLiteral("cancelled");
+    m_status = QStringLiteral("Cancelled");
+    m_error.clear();
     publishState();
+    QVariantMap data;
+    data.insert(QStringLiteral("state"), QStringLiteral("cancelled"));
+    emit operationFinished(
+        completedRequest,
+        QStringLiteral("extract"),
+        false,
+        data,
+        QString());
 }
 
 void ArchiveController::cancelArchiveOperation()
@@ -354,6 +456,7 @@ void ArchiveController::handleFinished(
     m_status = success ? QStringLiteral("Completed") : QStringLiteral("Failed");
     if (result.state == QStringLiteral("password-required")
         || result.state == QStringLiteral("bad-password")) {
+        m_workflowState = QStringLiteral("waiting-password");
         m_passwordPrompt = true;
         m_passwordError = result.state == QStringLiteral("bad-password")
             ? QStringLiteral("The password is incorrect.")
@@ -364,15 +467,28 @@ void ArchiveController::handleFinished(
         m_conflictDestination = result.destination.isEmpty() ? m_destination : result.destination;
         m_conflictName = QFileInfo(m_conflictDestination).fileName();
         m_status = QStringLiteral("Choose how to resolve the destination conflict");
+        m_workflowState = QStringLiteral("waiting-conflict");
+    } else if (result.state == QStringLiteral("cancelled")) {
+        m_workflowState = QStringLiteral("cancelled");
+        m_error.clear();
+        m_status = QStringLiteral("Cancelled");
     } else if (success) {
+        m_workflowState = QStringLiteral("success");
         m_destinationResult = result.destination;
         if (completedOperation == QStringLiteral("extract") && !m_destinationResult.isEmpty()
             && m_navigation != nullptr) {
             m_navigation->navigateTo(m_destinationResult);
         }
+    } else {
+        m_workflowState = QStringLiteral("failed");
     }
     m_request = 0;
     publishState();
+    if (result.state == QStringLiteral("password-required")
+        || result.state == QStringLiteral("bad-password")
+        || result.state == QStringLiteral("destination-conflict")) {
+        return;
+    }
     emit operationFinished(
         completedRequest,
         completedOperation,

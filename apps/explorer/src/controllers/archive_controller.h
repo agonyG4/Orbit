@@ -44,6 +44,7 @@ public:
     QString currentName() const;
     QString remainingText() const;
     QString operationKind() const;
+    QString workflowState() const;
     QVariantList capabilities() const;
     bool passwordPromptVisible() const;
     QString passwordError() const;
@@ -57,8 +58,10 @@ public:
 
     void refreshCapabilities();
     bool canExtractArchive(const QString &path) const;
+    static QString canonicalArchiveStem(const QString &name);
 
     void startArchiveExtraction(const QString &path, const QString &folderName);
+    void startArchiveExtractionHere(const QString &path, const QString &destination);
     void startArchiveExtractionTo(const QString &path, const QString &destination);
     void startArchiveCreation(
         const QStringList &sources,
@@ -95,6 +98,11 @@ private slots:
 
 private:
     void resetForStart(const QString &operation, const QString &fileName);
+    void startArchiveExtractionRequest(
+        const QString &path,
+        const QString &destination,
+        const QString &destinationMode);
+    void finishWaitingWorkflowAsCancelled();
     BackendRequestId startRequest(const ArchiveOperationRequest &request);
     void startPasswordContinuation(const QString &password);
     void publishState();
@@ -108,6 +116,7 @@ private:
     BackendRequestId m_request = 0;
     ArchiveOperationRequest m_workflow;
     QString m_operationKind;
+    QString m_workflowState {QStringLiteral("idle")};
     QString m_path;
     QString m_destination;
     QString m_conflictPolicy {QStringLiteral("keep-both")};
@@ -132,6 +141,7 @@ private:
     QString m_conflictName;
     QVector<ArchiveCapability> m_capabilities;
     int m_stateRevision = 0;
+    BackendRequestId m_workflowRequest = 0;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

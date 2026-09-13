@@ -30,8 +30,10 @@ QtObject {
 
     function currentArchiveOperationSnapshot() {
         var source = bridge || ops
+        var state = source.archiveWorkflowState || "idle"
         return {
-            running: source.archiveExtractionRunning && source.archiveOperationKind !== "capabilities",
+            running: source.archiveOperationKind !== "capabilities"
+                && (source.archiveExtractionRunning || state === "waiting-password" || state === "waiting-conflict"),
             progress: source.archiveExtractionProgress,
             percent: source.archiveExtractionPercent,
             fileName: source.archiveExtractionFileName,
@@ -42,6 +44,7 @@ QtObject {
             totalCount: source.archiveExtractionTotalCount,
             remainingText: source.archiveExtractionRemainingText,
             operation: source.archiveOperationKind,
+            state: state,
             phase: source.archivePhase,
             currentPath: source.archiveCurrentPath,
             currentName: source.archiveCurrentName,
@@ -80,6 +83,7 @@ QtObject {
     property int archiveExtractionTotalCount: bridge ? bridge.archiveExtractionTotalCount : 0
     property string archiveExtractionRemainingText: bridge ? bridge.archiveExtractionRemainingText : ""
     property string archiveOperationKind: bridge ? bridge.archiveOperationKind : ""
+    property string archiveWorkflowState: bridge ? bridge.archiveWorkflowState : "idle"
     property string archivePhase: bridge ? bridge.archivePhase : ""
     property string archiveCurrentPath: bridge ? bridge.archiveCurrentPath : ""
     property string archiveCurrentName: bridge ? bridge.archiveCurrentName : ""
@@ -126,6 +130,9 @@ QtObject {
     function restoreSelected() { if (bridge) bridge.restoreSelected() }
     function emptyTrash() { if (bridge) bridge.emptyTrash() }
     function startArchiveExtraction(path, folder) { if (bridge) bridge.startArchiveExtraction(path, folder) }
+    function startArchiveExtractionHere(path, destination) {
+        if (bridge) bridge.startArchiveExtractionHere(path, destination)
+    }
     function startArchiveExtractionTo(path, destination) {
         if (bridge) bridge.startArchiveExtractionTo(path, destination)
     }

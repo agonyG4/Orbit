@@ -27,7 +27,8 @@ ArchiveCapability capability(
     result.createSupported = create;
     result.extractSupported = extract;
     result.profiles = profiles;
-    result.provider = QStringLiteral("test-provider");
+    result.createProvider = QStringLiteral("test-provider");
+    result.extractProvider = QStringLiteral("test-provider");
     return result;
 }
 
@@ -40,9 +41,15 @@ class ArchiveControllerTest final : public QObject
 private slots:
     void capabilityCatalogDrivesArchiveDetection();
     void createsMixedSourcesAndConsumesRealProgress();
+    void extractionActionsUseDistinctDestinationModes();
     void serializesJobsAndCancelsByRequestIdentity();
     void passwordContinuationUsesStructuredStates();
     void conflictContinuationUsesImplementedPolicies();
+    void waitingContinuationsDoNotFinishUntilResolved();
+    void cancellingWaitingContinuationFinishesAsCancelled();
+    void activeCancellationUsesCancelledWorkflowState();
+    void rejectsUnsafeArchiveNames();
+    void canonicalArchiveStemSupportsCompoundFormats();
     void staleResultsDoNotMutateTheWorkflow();
 };
 
@@ -125,6 +132,32 @@ void ArchiveControllerTest::createsMixedSourcesAndConsumesRealProgress()
     QCOMPARE(fixture.archive.currentName(), QStringLiteral("report.txt"));
 }
 
+void ArchiveControllerTest::extractionActionsUseDistinctDestinationModes()
+{
+    ArchiveFixture fixture;
+    fixture.loadCapabilities();
+
+    fixture.archive.startArchiveExtraction(
+        QStringLiteral("/tmp/archive.tar.zst"), QStringLiteral("archive"));
+    QCOMPARE(fixture.client.archiveOperationRequests().constLast().destinationMode,
+        QStringLiteral("new-directory"));
+    ArchiveOperationResult cancelled;
+    cancelled.operation = QStringLiteral("extract");
+    cancelled.state = QStringLiteral("cancelled");
+    fixture.client.completeArchiveOperation(2, cancelled);
+
+    fixture.archive.startArchiveExtractionHere(
+        QStringLiteral("/tmp/archive.tar.zst"), QStringLiteral("/tmp/current"));
+    QCOMPARE(fixture.client.archiveOperationRequests().constLast().destinationMode,
+        QStringLiteral("into-directory"));
+    fixture.client.completeArchiveOperation(3, cancelled);
+
+    fixture.archive.startArchiveExtractionTo(
+        QStringLiteral("/tmp/archive.tar.zst"), QStringLiteral("/tmp/selected"));
+    QCOMPARE(fixture.client.archiveOperationRequests().constLast().destinationMode,
+        QStringLiteral("into-directory"));
+}
+
 void ArchiveControllerTest::serializesJobsAndCancelsByRequestIdentity()
 {
     ArchiveFixture fixture;
@@ -149,6 +182,7 @@ void ArchiveControllerTest::passwordContinuationUsesStructuredStates()
     fixture.client.completeArchiveOperation(2, required);
     QVERIFY(fixture.archive.passwordPromptVisible());
     QVERIFY(!fixture.archive.running());
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("waiting-password"));
 
     fixture.archive.submitArchivePassword(QStringLiteral("wrong"));
     QCOMPARE(fixture.client.archiveOperationRequests().constLast().password, QStringLiteral("wrong"));
@@ -157,6 +191,7 @@ void ArchiveControllerTest::passwordContinuationUsesStructuredStates()
     bad.state = QStringLiteral("bad-password");
     fixture.client.completeArchiveOperation(3, bad);
     QVERIFY(fixture.archive.passwordPromptVisible());
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("waiting-password"));
     QVERIFY(!fixture.archive.passwordError().isEmpty());
 
     fixture.archive.submitArchivePassword(QStringLiteral("correct"));
@@ -171,6 +206,7 @@ void ArchiveControllerTest::passwordContinuationUsesStructuredStates()
     QVERIFY(!fixture.archive.passwordPromptVisible());
     QVERIFY(!fixture.archive.running());
     QCOMPARE(fixture.archive.destinationResult(), QStringLiteral("/tmp/secret"));
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("success"));
 }
 
 void ArchiveControllerTest::conflictContinuationUsesImplementedPolicies()
@@ -185,6 +221,7 @@ void ArchiveControllerTest::conflictContinuationUsesImplementedPolicies()
     fixture.client.completeArchiveOperation(2, conflict);
     QVERIFY(fixture.archive.conflictVisible());
     QCOMPARE(fixture.archive.conflictDestination(), QStringLiteral("/tmp/archive"));
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("waiting-conflict"));
 
     fixture.archive.submitArchiveConflict(QStringLiteral("overwrite"));
     QCOMPARE(fixture.client.archiveOperationRequests().constLast().conflictPolicy, QStringLiteral("overwrite"));
@@ -195,6 +232,98 @@ void ArchiveControllerTest::conflictContinuationUsesImplementedPolicies()
     fixture.client.completeArchiveOperation(3, success);
     QVERIFY(!fixture.archive.conflictVisible());
     QVERIFY(!fixture.archive.running());
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("success"));
+}
+
+void ArchiveControllerTest::waitingContinuationsDoNotFinishUntilResolved()
+{
+    ArchiveFixture fixture;
+    fixture.loadCapabilities();
+    QSignalSpy finishedSpy(&fixture.archive, &ArchiveController::operationFinished);
+
+    fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/secret.zip"), QStringLiteral("secret"));
+    ArchiveOperationResult required;
+    required.operation = QStringLiteral("extract");
+    required.state = QStringLiteral("password-required");
+    fixture.client.completeArchiveOperation(2, required);
+    QCOMPARE(finishedSpy.count(), 0);
+
+    fixture.archive.submitArchivePassword(QStringLiteral("secret"));
+    ArchiveOperationResult conflict;
+    conflict.operation = QStringLiteral("extract");
+    conflict.state = QStringLiteral("destination-conflict");
+    fixture.client.completeArchiveOperation(3, conflict);
+    QCOMPARE(finishedSpy.count(), 0);
+}
+
+void ArchiveControllerTest::cancellingWaitingContinuationFinishesAsCancelled()
+{
+    ArchiveFixture fixture;
+    fixture.loadCapabilities();
+    QSignalSpy finishedSpy(&fixture.archive, &ArchiveController::operationFinished);
+
+    fixture.archive.startArchiveExtraction(QStringLiteral("/tmp/secret.zip"), QStringLiteral("secret"));
+    ArchiveOperationResult required;
+    required.operation = QStringLiteral("extract");
+    required.state = QStringLiteral("password-required");
+    fixture.client.completeArchiveOperation(2, required);
+    fixture.archive.cancelArchivePassword();
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("cancelled"));
+    QVERIFY(!fixture.archive.passwordPromptVisible());
+    QCOMPARE(finishedSpy.count(), 1);
+    QCOMPARE(finishedSpy.constFirst().at(2).toBool(), false);
+
+    ArchiveFixture conflictFixture;
+    conflictFixture.loadCapabilities();
+    QSignalSpy conflictFinished(&conflictFixture.archive, &ArchiveController::operationFinished);
+    conflictFixture.archive.startArchiveExtraction(QStringLiteral("/tmp/archive.zip"), QStringLiteral("archive"));
+    ArchiveOperationResult conflict;
+    conflict.operation = QStringLiteral("extract");
+    conflict.state = QStringLiteral("destination-conflict");
+    conflictFixture.client.completeArchiveOperation(2, conflict);
+    conflictFixture.archive.cancelArchiveConflict();
+    QCOMPARE(conflictFixture.archive.workflowState(), QStringLiteral("cancelled"));
+    QCOMPARE(conflictFinished.count(), 1);
+}
+
+void ArchiveControllerTest::activeCancellationUsesCancelledWorkflowState()
+{
+    ArchiveFixture fixture;
+    fixture.loadCapabilities();
+    fixture.archive.startArchiveCreation(
+        {QStringLiteral("/tmp/a")}, QStringLiteral("a"), QStringLiteral("zip"), QStringLiteral("balanced"));
+    fixture.archive.cancelArchiveOperation();
+    ArchiveOperationResult cancelled;
+    cancelled.operation = QStringLiteral("create");
+    cancelled.state = QStringLiteral("cancelled");
+    fixture.client.completeArchiveOperation(2, cancelled);
+    QCOMPARE(fixture.archive.workflowState(), QStringLiteral("cancelled"));
+    QCOMPARE(fixture.archive.status(), QStringLiteral("Cancelled"));
+    QVERIFY(fixture.archive.error().isEmpty());
+}
+
+void ArchiveControllerTest::rejectsUnsafeArchiveNames()
+{
+    ArchiveFixture fixture;
+    fixture.loadCapabilities();
+    fixture.archive.startArchiveCreation(
+        {QStringLiteral("/tmp/source")}, QStringLiteral("../escape"), QStringLiteral("zip"), QStringLiteral("balanced"));
+    QCOMPARE(fixture.client.archiveOperationRequests().size(), 1);
+}
+
+void ArchiveControllerTest::canonicalArchiveStemSupportsCompoundFormats()
+{
+    const QStringList names {
+        QStringLiteral("Archive.zip"), QStringLiteral("Archive.7z"),
+        QStringLiteral("Archive.rar"), QStringLiteral("Archive.tar"),
+        QStringLiteral("Archive.tar.gz"), QStringLiteral("Archive.tgz"),
+        QStringLiteral("Archive.tar.bz2"), QStringLiteral("Archive.tbz2"),
+        QStringLiteral("Archive.tar.xz"), QStringLiteral("Archive.txz"),
+        QStringLiteral("Archive.tar.zst"), QStringLiteral("Archive.tzst"),
+    };
+    for (const QString &name : names) {
+        QCOMPARE(ArchiveController::canonicalArchiveStem(name), QStringLiteral("Archive"));
+    }
 }
 
 void ArchiveControllerTest::staleResultsDoNotMutateTheWorkflow()

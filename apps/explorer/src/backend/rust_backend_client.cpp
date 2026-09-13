@@ -302,7 +302,9 @@ BackendRequestId RustBackendClient::fileOperation(const FileOperationRequest &re
 
 BackendRequestId RustBackendClient::archiveOperation(const ArchiveOperationRequest &request)
 {
-    const BackendRequestId requestId = m_transport->start(archiveOperationArguments(request));
+    const BackendRequestId requestId = m_transport->start(
+        archiveOperationArguments(request),
+        request.password.toUtf8());
     m_pendingRequests.insert(requestId, {RequestKind::ArchiveOperation, 0});
     return requestId;
 }
@@ -390,9 +392,9 @@ QStringList RustBackendClient::archiveOperationArguments(
         {QStringLiteral("sources"), QJsonArray::fromStringList(request.sources)},
         {QStringLiteral("archivePath"), request.archivePath},
         {QStringLiteral("destination"), request.destination},
+        {QStringLiteral("destinationMode"), request.destinationMode},
         {QStringLiteral("format"), request.format},
         {QStringLiteral("profile"), request.profile},
-        {QStringLiteral("password"), request.password},
         {QStringLiteral("conflictPolicy"), request.conflictPolicy},
     };
     return {
@@ -821,8 +823,12 @@ ArchiveOperationResult RustBackendClient::decodeArchiveOperation(
                 item.extension = capability.value(QStringLiteral("extension")).toString();
                 item.createSupported = capability.value(QStringLiteral("createSupported")).toBool();
                 item.extractSupported = capability.value(QStringLiteral("extractSupported")).toBool();
-                item.passwordSupported = capability.value(QStringLiteral("passwordSupported")).toBool();
-                item.provider = capability.value(QStringLiteral("provider")).toString();
+                item.createProvider = capability.value(QStringLiteral("createProvider")).toString();
+                item.extractProvider = capability.value(QStringLiteral("extractProvider")).toString();
+                item.createPasswordSupported = capability.value(
+                    QStringLiteral("createPasswordSupported")).toBool();
+                item.extractPasswordSupported = capability.value(
+                    QStringLiteral("extractPasswordSupported")).toBool();
                 for (const QJsonValue &profile :
                      capability.value(QStringLiteral("profiles")).toArray()) {
                     if (profile.isString()) {

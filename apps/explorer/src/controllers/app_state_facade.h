@@ -151,6 +151,7 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(int archiveExtractionTotalCount READ archiveExtractionTotalCount NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveExtractionRemainingText READ archiveExtractionRemainingText NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveOperationKind READ archiveOperationKind NOTIFY archiveStateChanged)
+    Q_PROPERTY(QString archiveWorkflowState READ archiveWorkflowState NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archivePhase READ archivePhase NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveCurrentPath READ archiveCurrentPath NOTIFY archiveStateChanged)
     Q_PROPERTY(QString archiveCurrentName READ archiveCurrentName NOTIFY archiveStateChanged)
@@ -266,6 +267,7 @@ public:
     int archiveExtractionTotalCount() const;
     QString archiveExtractionRemainingText() const;
     QString archiveOperationKind() const;
+    QString archiveWorkflowState() const;
     QString archivePhase() const;
     QString archiveCurrentPath() const;
     QString archiveCurrentName() const;
@@ -375,6 +377,10 @@ public:
     Q_INVOKABLE void restoreSelected();
     Q_INVOKABLE void emptyTrash();
     Q_INVOKABLE void startArchiveExtraction(const QString &path, const QString &folderName);
+    Q_INVOKABLE QString canonicalArchiveStem(const QString &name) const;
+    Q_INVOKABLE void startArchiveExtractionHere(
+        const QString &path,
+        const QString &destination);
     Q_INVOKABLE void startArchiveExtractionTo(
         const QString &path,
         const QString &destination);

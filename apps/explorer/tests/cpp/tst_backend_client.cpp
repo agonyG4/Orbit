@@ -25,12 +25,20 @@ public:
     {
         BackendRequestId id {};
         QStringList arguments;
+        QByteArray stdinPayload;
     };
 
     BackendRequestId start(const QStringList &arguments) override
     {
+        return start(arguments, {});
+    }
+
+    BackendRequestId start(
+        const QStringList &arguments,
+        const QByteArray &stdinPayload) override
+    {
         const BackendRequestId id = allocateRequestId();
-        startedRequests.append({id, arguments});
+        startedRequests.append({id, arguments, stdinPayload});
         return id;
     }
 
@@ -96,6 +104,7 @@ private slots:
     void decodesFileOperationProgressAndResult();
     void forwardsLiveFileOperationProgressBeforeTerminalResult();
     void encodesArchiveRequestAndDecodesProgressAndResult();
+    void transportsArchivePasswordOutsideOperationArguments();
     void decodesStructuredArchiveContinuationStates();
     void acceptsSynchronousTransportCompletion();
     void ignoresDuplicateTerminalEvents();
@@ -501,6 +510,29 @@ void BackendClientTest::encodesArchiveRequestAndDecodesProgressAndResult()
     QCOMPARE(result.doneCount, 10);
     QCOMPARE(result.totalCount, 10);
     QCOMPARE(result.percent, 100);
+}
+
+void BackendClientTest::transportsArchivePasswordOutsideOperationArguments()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+
+    ArchiveOperationRequest request;
+    request.kind = QStringLiteral("extract");
+    request.archivePath = QStringLiteral("/tmp/protected.7z");
+    request.destination = QStringLiteral("/tmp/extracted");
+    request.password = QStringLiteral("correct horse battery staple");
+
+    const BackendRequestId requestId = client.archiveOperation(request);
+    Q_UNUSED(requestId)
+    const InMemoryTransport::StartedRequest started = transport.startedRequests.constLast();
+    const QJsonDocument encoded =
+        QJsonDocument::fromJson(started.arguments.constLast().toUtf8());
+    QVERIFY(encoded.isObject());
+    QVERIFY(!encoded.object().contains(QStringLiteral("password")));
+    QVERIFY(!started.arguments.constLast().contains(QStringLiteral("correct horse")));
+    QVERIFY(!started.arguments.constLast().contains(QStringLiteral("password")));
+    QCOMPARE(started.stdinPayload, request.password.toUtf8());
 }
 
 void BackendClientTest::decodesStructuredArchiveContinuationStates()

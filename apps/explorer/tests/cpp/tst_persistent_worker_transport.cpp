@@ -46,6 +46,7 @@ private slots:
     void cancelsAnInFlightRequest();
     void streamsOutputBeforeTerminalCompletion();
     void noTimeoutRequestSurvivesNormalBoundaryAndStillCancels();
+    void sendsBoundedStdinPayloadWithoutChangingArguments();
 };
 
 void PersistentWorkerTransportTest::queuesRequestsUntilWorkerIsReady()
@@ -194,6 +195,33 @@ void PersistentWorkerTransportTest::noTimeoutRequestSurvivesNormalBoundaryAndSti
     const BackendTransportError error = errorFrom(failedSpy);
     QCOMPARE(error.requestId, requestId);
     QCOMPARE(error.code, QStringLiteral("cancelled"));
+}
+
+void PersistentWorkerTransportTest::sendsBoundedStdinPayloadWithoutChangingArguments()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString worker = makeWorker(
+        directory,
+        QStringLiteral(
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            "    request=json.loads(line)\n"
+            "    ok=request['arguments'] == ['archive-operation'] and request.get('stdinPayload') == 'secret'\n"
+            "    print(json.dumps({'id':request['id'],'ok':ok,'payload':'checked'}), flush=True)\n"));
+    QVERIFY(!worker.isEmpty());
+
+    PersistentWorkerTransportOptions options;
+    options.backendProgram = worker;
+    options.requestTimeoutMs = 1000;
+    PersistentWorkerTransport transport(options);
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+
+    const BackendRequestId requestId = transport.start(
+        {QStringLiteral("archive-operation")}, QByteArrayLiteral("secret"));
+    QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 1500);
+    QCOMPARE(completedSpy.at(0).at(0).value<BackendRequestId>(), requestId);
+    QCOMPARE(completedSpy.at(0).at(1).toByteArray(), QByteArrayLiteral("checked"));
 }
 
 QTEST_MAIN(PersistentWorkerTransportTest)

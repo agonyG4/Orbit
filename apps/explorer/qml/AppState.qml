@@ -98,6 +98,7 @@ QtObject {
     property alias archiveConflictName: fileOpsObj.archiveConflictName
     property alias archiveWorkflowOccupied: fileOpsObj.archiveWorkflowOccupied
     property alias archiveOperationKind: fileOpsObj.archiveOperationKind
+    property alias archiveWorkflowState: fileOpsObj.archiveWorkflowState
     property alias archivePhase: fileOpsObj.archivePhase
     property alias archiveCurrentPath: fileOpsObj.archiveCurrentPath
     property alias archiveCurrentName: fileOpsObj.archiveCurrentName
@@ -385,6 +386,9 @@ QtObject {
     function restoreSelected() { fileOps.restoreSelected() }
     function emptyTrash() { fileOps.emptyTrash() }
     function startArchiveExtraction(archivePath, folderName) { fileOps.startArchiveExtraction(archivePath, folderName) }
+    function startArchiveExtractionHere(archivePath, destination) {
+        fileOps.startArchiveExtractionHere(archivePath, destination)
+    }
     function startArchiveExtractionTo(archivePath, destination) {
         fileOps.startArchiveExtractionTo(archivePath, destination)
     }
@@ -394,6 +398,7 @@ QtObject {
     function cancelArchiveConflict() { fileOps.cancelArchiveConflict() }
     function cancelArchiveOperation() { fileOps.cancelArchiveOperation() }
     function startArchiveCreation(sources, archiveName, format, profile) { fileOps.startArchiveCreation(sources, archiveName, format, profile) }
+    function canonicalArchiveStem(name) { return nativeAppState.canonicalArchiveStem(name) }
     function canExtractArchive(path) { return fileOps.canExtractArchive(path) }
     function startFolderCompression(folderPath, format) { fileOps.startFolderCompression(folderPath, format) }
     function isAppImageFileName(fileName) { return String(fileName || "").toLowerCase().endsWith(".appimage") }

@@ -828,6 +828,10 @@ QString AppStateFacade::archiveOperationKind() const
 {
     return m_archive == nullptr ? QString() : m_archive->operationKind();
 }
+QString AppStateFacade::archiveWorkflowState() const
+{
+    return m_archive == nullptr ? QStringLiteral("idle") : m_archive->workflowState();
+}
 QString AppStateFacade::archivePhase() const
 {
     return m_archive == nullptr ? QString() : m_archive->phase();
@@ -1288,6 +1292,11 @@ void AppStateFacade::startArchiveExtraction(const QString &path, const QString &
     m_archive->startArchiveExtraction(path, folderName);
 }
 
+QString AppStateFacade::canonicalArchiveStem(const QString &name) const
+{
+    return ArchiveController::canonicalArchiveStem(name);
+}
+
 void AppStateFacade::startArchiveExtractionTo(
     const QString &path,
     const QString &destination)
@@ -1296,6 +1305,16 @@ void AppStateFacade::startArchiveExtractionTo(
         return;
     }
     m_archive->startArchiveExtractionTo(path, destination);
+}
+
+void AppStateFacade::startArchiveExtractionHere(
+    const QString &path,
+    const QString &destination)
+{
+    if (archiveWorkflowOccupied() || m_archive == nullptr) {
+        return;
+    }
+    m_archive->startArchiveExtractionHere(path, destination);
 }
 
 void AppStateFacade::submitArchivePassword(const QString &password)

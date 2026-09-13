@@ -515,6 +515,7 @@ void AppStateCompatibilityTest::appStatePublishesArchiveOperationSnapshots()
     QCOMPARE(started.value(QStringLiteral("doneCount")).toInt(), 0);
     QCOMPARE(started.value(QStringLiteral("totalCount")).toInt(), 0);
     QCOMPARE(started.value(QStringLiteral("status")).toString(), QStringLiteral("Extracting..."));
+    QCOMPARE(started.value(QStringLiteral("state")).toString(), QStringLiteral("running"));
     QCOMPARE(
         started.value(QStringLiteral("destination")).toString(),
         facade.archiveExtractionDestination());
@@ -536,6 +537,7 @@ void AppStateCompatibilityTest::appStatePublishesArchiveOperationSnapshots()
     QCOMPARE(completed.value(QStringLiteral("doneCount")).toInt(), 1);
     QCOMPARE(completed.value(QStringLiteral("totalCount")).toInt(), 1);
     QCOMPARE(completed.value(QStringLiteral("error")).toString(), QString());
+    QCOMPARE(completed.value(QStringLiteral("state")).toString(), QStringLiteral("success"));
     QCOMPARE(
         completed.value(QStringLiteral("destination")).toString(),
         QStringLiteral("/tmp/actual-expanded"));

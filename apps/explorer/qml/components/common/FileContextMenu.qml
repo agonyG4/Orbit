@@ -122,18 +122,17 @@ Item {
     }
 
     function extractionFolderName() {
-        var name = itemPath.split("/").pop()
-        return name
-            .replace(/\.tar\.gz$/i, "")
-            .replace(/\.tgz$/i, "")
-            .replace(/\.tar\.bz2$/i, "")
-            .replace(/\.tbz2$/i, "")
-            .replace(/\.tar\.xz$/i, "")
-            .replace(/\.txz$/i, "")
-            .replace(/\.(zip|tar|7z|rar)$/i, "")
+        return AppState.canonicalArchiveStem(itemPath)
     }
 
-    function runExtract() {
+    function runExtractHere() {
+        if (!isArchiveTarget || !archiveOperationAvailable)
+            return
+        closeMenu()
+        AppState.startArchiveExtractionHere(itemPath, AppState.currentPath)
+    }
+
+    function runExtractToNamedFolder() {
         if (!isArchiveTarget || !archiveOperationAvailable)
             return
         closeMenu()
@@ -150,7 +149,17 @@ Item {
     }
 
     function stripArchiveExtension(name) {
-        return String(name || "").replace(/\.(tar\.gz|tar\.xz|tar\.zst|tar\.bz2|tgz|txz|tzst|tbz2|zip|7z|tar|rar)$/i, "")
+        return AppState.canonicalArchiveStem(String(name || ""))
+    }
+
+    function validArchiveName(name) {
+        var value = String(name || "").trim()
+        return value !== ""
+            && value !== "."
+            && value !== ".."
+            && value.indexOf("/") < 0
+            && value.indexOf("\\") < 0
+            && value !== "/"
     }
 
     function openCompressionDialog() {
@@ -172,6 +181,8 @@ Item {
 
     function runCompress() {
         if (!canCompressTarget || !archiveOperationAvailable || compressionSources.length === 0)
+            return
+        if (!validArchiveName(compressionArchiveName))
             return
         compressionDialogOpen = false
         AppState.startArchiveCreation(compressionSources, compressionArchiveName, compressionFormat, compressionProfile)
@@ -297,13 +308,13 @@ Item {
             label: "Extract Here"
             actionEnabled: menuRoot.archiveOperationAvailable
             visible: menuRoot.isArchiveTarget
-            onTriggered: menuRoot.runExtract()
+            onTriggered: menuRoot.runExtractHere()
         }
         Common.ContextMenuAction {
             label: "Extract to \"" + menuRoot.extractionFolderName() + "/\""
             actionEnabled: menuRoot.archiveOperationAvailable
             visible: menuRoot.isArchiveTarget
-            onTriggered: menuRoot.runExtract()
+            onTriggered: menuRoot.runExtractToNamedFolder()
         }
         Common.ContextMenuAction {
             label: "Extract…"
@@ -424,7 +435,12 @@ Item {
                 ComboBox {
                     id: compressionProfileBox
                     width: parent.width - 108
-                    model: ["fast", "balanced", "maximum"]
+                    model: {
+                        var capability = menuRoot.createCapabilities.filter(function(item) {
+                            return item.id === menuRoot.compressionFormat
+                        })[0]
+                        return capability ? capability.profiles : []
+                    }
                     currentIndex: model.indexOf(menuRoot.compressionProfile)
                     onActivated: menuRoot.compressionProfile = currentText
                 }

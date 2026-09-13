@@ -18,7 +18,7 @@ QByteArray presenterFixture(const QString &presenterUrl)
                "    QtObject {\n"
                "        id: ops\n"
                "        property var fileSnapshot: ({ running: false, progress: 0, percent: 0, fileName: '', status: '', error: '', destination: '', doneCount: 0, totalCount: 0, mode: 'copy', state: '', items: [] })\n"
-               "        property var archiveSnapshot: ({ running: false, progress: 0, percent: 0, fileName: '', status: '', error: '', destination: '', doneCount: 0, totalCount: 0, remainingText: '' })\n"
+               "        property var archiveSnapshot: ({ running: false, progress: 0, percent: 0, fileName: '', status: '', error: '', destination: '', doneCount: 0, totalCount: 0, remainingText: '', state: 'idle' })\n"
                "        signal fileOperationChanged(var snapshot)\n"
                "        signal archiveOperationChanged(var snapshot)\n"
                "        function currentFileOperationSnapshot() { return fileSnapshot }\n"
@@ -31,7 +31,7 @@ QByteArray presenterFixture(const QString &presenterUrl)
                "        return { running: running, progress: progress, percent: percent, fileName: 'source.txt', status: status, error: error || '', destination: '/tmp/destination', doneCount: doneCount, totalCount: totalCount, mode: 'copy', state: state, items: [] }\n"
                "    }\n"
                "    function archiveSnapshot(running, status, state, error, progress, percent, doneCount, totalCount) {\n"
-               "        return { running: running, progress: progress === undefined ? 0 : progress, percent: percent === undefined ? 0 : percent, fileName: 'bundle.tar', status: status, error: error || '', destination: '/tmp/bundle', doneCount: doneCount === undefined ? 0 : doneCount, totalCount: totalCount === undefined ? 0 : totalCount, remainingText: totalCount ? doneCount + ' / ' + totalCount : '' }\n"
+               "        return { running: running, progress: progress === undefined ? 0 : progress, percent: percent === undefined ? 0 : percent, fileName: 'bundle.tar', status: status, error: error || '', destination: '/tmp/bundle', doneCount: doneCount === undefined ? 0 : doneCount, totalCount: totalCount === undefined ? 0 : totalCount, remainingText: totalCount ? doneCount + ' / ' + totalCount : '', state: state }\n"
                "    }\n"
                "    function startFile() { ops.publishFile(fileSnapshot(true, 'Copying...', 0.0, 0, 0, 1, 'running', '')) }\n"
                "    function setFileProgress(value) { ops.publishFile(fileSnapshot(true, 'Copying...', value / 100, value, value >= 100 ? 1 : 0, 1, 'running', '')) }\n"
@@ -40,6 +40,7 @@ QByteArray presenterFixture(const QString &presenterUrl)
                "    function finishPartialFile() { ops.publishFile(fileSnapshot(false, 'Completed with errors', 0.5, 50, 1, 2, 'partial-success', 'one item failed')) }\n"
                "    function finishCancelledFile() { ops.publishFile(fileSnapshot(false, 'Cancelled', 0, 0, 0, 1, 'cancelled', '')) }\n"
                "    function startArchive() { ops.publishArchive(archiveSnapshot(true, 'Extracting...', 'running', '')) }\n"
+               "    function waitForArchivePassword() { ops.publishArchive(archiveSnapshot(true, 'Password required', 'waiting-password', '')) }\n"
                "    function finishArchive() { ops.publishArchive(archiveSnapshot(false, 'Completed', 'success', '', 1, 100, 3, 3)) }\n"
                "    Loader {\n"
                "        id: loader\n"
@@ -85,6 +86,7 @@ private slots:
     void partialSuccessUsesLongerHold();
     void cancelledUsesCancelledPresentation();
     void archiveRunningIsIndeterminate();
+    void archiveWaitingStateIsNotTerminalFailure();
     void liveOperationPreemptsOldTerminalState();
     void archiveTerminalPresentationDoesNotBlockNewArchive();
     void liveProgressUpdatesWhileSemanticStateRemainsRunning();
@@ -217,6 +219,26 @@ void OperationProgressPresenterTest::archiveRunningIsIndeterminate()
     QCOMPARE(presenter->property("totalItems").toInt(), 0);
     QCOMPARE(presenter->property("percent").toInt(), 0);
     QCOMPARE(presenter->property("indeterminate").toBool(), true);
+    delete root;
+}
+
+void OperationProgressPresenterTest::archiveWaitingStateIsNotTerminalFailure()
+{
+    QQmlEngine engine;
+    QString error;
+    QObject *root = createRoot(&engine, presenterPath(), &error);
+    QVERIFY2(root != nullptr, qPrintable(error));
+    QObject *presenter = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        (presenter = root->property("presenter").value<QObject *>()) != nullptr,
+        1000);
+
+    QVERIFY(QMetaObject::invokeMethod(root, "waitForArchivePassword"));
+    QTRY_VERIFY_WITH_TIMEOUT(presenter->property("cardVisible").toBool(), 500);
+    QCOMPARE(presenter->property("phase").toString(), QStringLiteral("running"));
+    QVERIFY(presenter->property("title").toString() != QStringLiteral("Completed"));
+    QVERIFY(presenter->property("title").toString() != QStringLiteral("Failed"));
+    QCOMPARE(presenter->property("failed").toBool(), false);
     delete root;
 }
 

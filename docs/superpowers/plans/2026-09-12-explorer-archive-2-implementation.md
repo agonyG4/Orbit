@@ -281,4 +281,3 @@ Files:
     rtk git status --short --branch
     rtk git diff --stat
     rtk git log -12 --oneline
-

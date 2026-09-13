@@ -101,4 +101,3 @@ Final verification reuses `build/debug` and includes focused Rust/C++/QML tests,
 - No Preview Pipeline, icon, ModelAdapter, drag MIME, or MacTahoe changes.
 - No large Rust codec dependency graph; external mature providers remain behind Rust adapters.
 - No batch extraction requirement for multiple selected archives in this closure.
-

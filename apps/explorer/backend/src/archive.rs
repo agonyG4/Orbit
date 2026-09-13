@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +41,10 @@ pub struct ProviderAvailability {
     pub seven_zip: bool,
     pub rar: bool,
     pub bsdtar_zstd: bool,
+    pub bsdtar_xz_threads: bool,
+    pub bsdtar_zstd_threads: bool,
+    pub seven_zip_tar_family: bool,
+    pub seven_zip_rar: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,6 +53,8 @@ pub struct CreatePlan {
     pub provider: ProviderKind,
     pub canonical_extension: &'static str,
     pub profiles: &'static [CompressionProfile],
+    pub xz_threads: bool,
+    pub zstd_threads: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,8 +65,10 @@ pub struct Capability {
     pub create_supported: bool,
     pub extract_supported: bool,
     pub profiles: Vec<CompressionProfile>,
-    pub password_supported: bool,
-    pub provider: ProviderKind,
+    pub create_provider: Option<ProviderKind>,
+    pub extract_provider: Option<ProviderKind>,
+    pub create_password_supported: bool,
+    pub extract_password_supported: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -89,7 +97,7 @@ impl ArchiveError {
             Self::DestinationConflict(_) => "destination-conflict",
             Self::UnsafeMember(_) => "unsafe-member",
             Self::ProviderFailed(_) => "provider-failed",
-            Self::InvalidRequest(_) => "invalid-source",
+            Self::InvalidRequest(_) => "invalid-request",
         }
     }
 
@@ -163,11 +171,20 @@ fn discover_providers() -> ProviderAvailability {
     let seven_zip = provider_responds("7z", "--help");
     let rar = provider_responds("rar", "-h") && probe_rar_creation();
     let bsdtar_zstd = bsdtar && provider_help_contains("bsdtar", "zstd");
+    let bsdtar_xz_threads = bsdtar && probe_bsdtar_codec_threads("xz", "--xz");
+    let bsdtar_zstd_threads = bsdtar_zstd && probe_bsdtar_codec_threads("zstd", "--zstd");
+    let seven_zip_tar_family =
+        seven_zip && probe_seven_zip_formats(&["tar", "gzip", "bzip2", "xz", "zstd"]);
+    let seven_zip_rar = seven_zip && probe_seven_zip_formats(&["rar"]);
     ProviderAvailability {
         bsdtar,
         seven_zip,
         rar,
         bsdtar_zstd,
+        bsdtar_xz_threads,
+        bsdtar_zstd_threads,
+        seven_zip_tar_family,
+        seven_zip_rar,
     }
 }
 
@@ -198,6 +215,58 @@ fn probe_rar_creation() -> bool {
     false
 }
 
+fn probe_bsdtar_codec_threads(codec: &str, switch: &str) -> bool {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        ".astrea-bsdtar-probe-{}-{stamp}",
+        std::process::id()
+    ));
+    if fs::create_dir(&root).is_err() {
+        return false;
+    }
+    let source = root.join("sample");
+    let output = root.join("probe.tar");
+    let supported = fs::write(&source, b"probe").is_ok()
+        && Command::new("bsdtar")
+            .args([
+                "-cf",
+                output.to_string_lossy().as_ref(),
+                "--format=ustar",
+                switch,
+                &format!("--options={codec}:compression-level=1,threads=0"),
+                "-C",
+                root.to_string_lossy().as_ref(),
+                "sample",
+            ])
+            .env("LC_ALL", "C")
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+    let _ = fs::remove_dir_all(root);
+    supported
+}
+
+fn probe_seven_zip_formats(formats: &[&str]) -> bool {
+    let Ok(output) = Command::new("7z")
+        .args(["i", "-t7z"])
+        .env("LC_ALL", "C")
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    formats.iter().all(|format| {
+        text.lines()
+            .any(|line| line.split_whitespace().any(|word| word == *format))
+    })
+}
+
 const ALL_PROFILES: &[CompressionProfile] = &[
     CompressionProfile::Fast,
     CompressionProfile::Balanced,
@@ -211,8 +280,8 @@ pub fn plan_create(
     providers: ProviderAvailability,
 ) -> Result<CreatePlan, ArchiveError> {
     let (provider, extension, profiles) = match format {
-        FormatId::Zip if providers.bsdtar => (ProviderKind::Bsdtar, "zip", ALL_PROFILES),
         FormatId::Zip if providers.seven_zip => (ProviderKind::SevenZip, "zip", ALL_PROFILES),
+        FormatId::Zip if providers.bsdtar => (ProviderKind::Bsdtar, "zip", NO_PROFILES),
         FormatId::SevenZip if providers.seven_zip => (ProviderKind::SevenZip, "7z", ALL_PROFILES),
         FormatId::Tar if providers.bsdtar => (ProviderKind::Bsdtar, "tar", NO_PROFILES),
         FormatId::TarGz if providers.bsdtar => (ProviderKind::Bsdtar, "tar.gz", ALL_PROFILES),
@@ -229,11 +298,19 @@ pub fn plan_create(
         }
     };
 
+    let xz_threads = provider == ProviderKind::Bsdtar
+        && format == FormatId::TarXz
+        && providers.bsdtar_xz_threads;
+    let zstd_threads = provider == ProviderKind::Bsdtar
+        && format == FormatId::TarZst
+        && providers.bsdtar_zstd_threads;
     Ok(CreatePlan {
         format,
         provider,
         canonical_extension: extension,
         profiles,
+        xz_threads,
+        zstd_threads,
     })
 }
 
@@ -245,8 +322,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
                    create_supported: bool,
                    extract_supported: bool,
                    profiles: &[CompressionProfile],
-                   password_supported: bool,
-                   provider: ProviderKind| {
+                   create_provider: Option<ProviderKind>,
+                   extract_provider: Option<ProviderKind>,
+                   create_password_supported: bool,
+                   extract_password_supported: bool| {
         capabilities.push(Capability {
             id: id.to_string(),
             label: label.to_string(),
@@ -254,25 +333,40 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             create_supported,
             extract_supported,
             profiles: profiles.to_vec(),
-            password_supported,
-            provider,
+            create_provider,
+            extract_provider,
+            create_password_supported,
+            extract_password_supported,
         });
     };
 
     if providers.bsdtar || providers.seven_zip {
+        let create_provider = if providers.seven_zip {
+            Some(ProviderKind::SevenZip)
+        } else {
+            Some(ProviderKind::Bsdtar)
+        };
+        let extract_provider = if providers.seven_zip {
+            Some(ProviderKind::SevenZip)
+        } else {
+            Some(ProviderKind::Bsdtar)
+        };
+        let profiles = if providers.seven_zip {
+            ALL_PROFILES
+        } else {
+            NO_PROFILES
+        };
         add(
             "zip",
             "ZIP",
             "zip",
-            providers.bsdtar || providers.seven_zip,
             true,
-            ALL_PROFILES,
+            true,
+            profiles,
+            create_provider,
+            extract_provider,
             false,
-            if providers.bsdtar {
-                ProviderKind::Bsdtar
-            } else {
-                ProviderKind::SevenZip
-            },
+            providers.seven_zip,
         );
     }
     if providers.seven_zip {
@@ -283,8 +377,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             true,
             true,
             ALL_PROFILES,
+            Some(ProviderKind::SevenZip),
+            Some(ProviderKind::SevenZip),
             false,
-            ProviderKind::SevenZip,
+            true,
         );
     }
     if providers.bsdtar {
@@ -295,8 +391,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             true,
             true,
             NO_PROFILES,
+            Some(ProviderKind::Bsdtar),
+            Some(ProviderKind::Bsdtar),
             false,
-            ProviderKind::Bsdtar,
+            false,
         );
         add(
             "tar.gz",
@@ -305,8 +403,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             true,
             true,
             ALL_PROFILES,
+            Some(ProviderKind::Bsdtar),
+            Some(ProviderKind::Bsdtar),
             false,
-            ProviderKind::Bsdtar,
+            false,
         );
         add(
             "tar.xz",
@@ -315,8 +415,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             true,
             true,
             ALL_PROFILES,
+            Some(ProviderKind::Bsdtar),
+            Some(ProviderKind::Bsdtar),
             false,
-            ProviderKind::Bsdtar,
+            false,
         );
         if providers.bsdtar_zstd {
             add(
@@ -326,8 +428,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
                 true,
                 true,
                 ALL_PROFILES,
+                Some(ProviderKind::Bsdtar),
+                Some(ProviderKind::Bsdtar),
                 false,
-                ProviderKind::Bsdtar,
+                false,
             );
         }
         add(
@@ -337,26 +441,34 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             false,
             true,
             NO_PROFILES,
+            None,
+            Some(ProviderKind::Bsdtar),
             false,
-            ProviderKind::Bsdtar,
+            false,
         );
-        if providers.rar || providers.seven_zip {
+    } else if providers.seven_zip && providers.seven_zip_tar_family {
+        for (id, label) in [
+            ("tar", "TAR"),
+            ("tar.gz", "TAR.GZ"),
+            ("tar.bz2", "TAR.BZ2"),
+            ("tar.xz", "TAR.XZ"),
+            ("tar.zst", "TAR.ZST"),
+        ] {
             add(
-                "rar",
-                "RAR",
-                "rar",
-                providers.rar,
+                id,
+                label,
+                id,
+                false,
                 true,
                 NO_PROFILES,
-                providers.seven_zip,
-                if providers.rar {
-                    ProviderKind::Rar
-                } else {
-                    ProviderKind::SevenZip
-                },
+                None,
+                Some(ProviderKind::SevenZip),
+                false,
+                true,
             );
         }
-    } else if providers.seven_zip {
+    }
+    if providers.seven_zip && providers.seven_zip_rar {
         add(
             "rar",
             "RAR",
@@ -364,8 +476,10 @@ pub fn capabilities_for(providers: ProviderAvailability) -> Vec<Capability> {
             false,
             true,
             NO_PROFILES,
+            None,
+            Some(ProviderKind::SevenZip),
+            false,
             true,
-            ProviderKind::SevenZip,
         );
     }
 
@@ -381,13 +495,15 @@ struct OperationRequest {
     archive_path: PathBuf,
     #[serde(default)]
     destination: PathBuf,
+    #[serde(rename = "destinationMode", default = "default_destination_mode")]
+    destination_mode: String,
     #[serde(default)]
     format: String,
     #[serde(default = "default_profile")]
     profile: String,
     #[serde(default)]
     password: String,
-    #[serde(default = "default_conflict_policy")]
+    #[serde(rename = "conflictPolicy", default = "default_conflict_policy")]
     conflict_policy: String,
 }
 
@@ -397,6 +513,10 @@ fn default_profile() -> String {
 
 fn default_conflict_policy() -> String {
     "keep-both".into()
+}
+
+fn default_destination_mode() -> String {
+    "new-directory".into()
 }
 
 struct Cancellation {
@@ -543,6 +663,103 @@ struct SourceInfo {
     basename: OsString,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedSourcePlan {
+    cwd: PathBuf,
+    sources: Vec<String>,
+    materialize: bool,
+}
+
+fn plan_source_preparation(
+    plan: &CreatePlan,
+    sources: &[SourceInfo],
+) -> Result<PreparedSourcePlan, ArchiveError> {
+    if plan.provider != ProviderKind::SevenZip {
+        return Ok(PreparedSourcePlan {
+            cwd: PathBuf::new(),
+            sources: sources
+                .iter()
+                .map(|source| source.basename.to_string_lossy().into_owned())
+                .collect(),
+            materialize: false,
+        });
+    }
+    let Some(first_parent) = sources
+        .first()
+        .and_then(|source| source.path.parent())
+        .map(Path::to_path_buf)
+    else {
+        return Err(ArchiveError::InvalidSource(
+            "archive source has no working parent".into(),
+        ));
+    };
+    let same_parent = sources.iter().all(|source| {
+        source
+            .path
+            .parent()
+            .is_some_and(|parent| parent == first_parent)
+    });
+    Ok(PreparedSourcePlan {
+        cwd: if same_parent {
+            first_parent
+        } else {
+            PathBuf::new()
+        },
+        sources: sources
+            .iter()
+            .map(|source| source.basename.to_string_lossy().into_owned())
+            .collect(),
+        materialize: !same_parent,
+    })
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct SevenZipMemberRecord {
+    path: String,
+    encrypted: bool,
+    symbolic_link: bool,
+    hard_link: bool,
+    attributes: String,
+}
+
+fn parse_seven_zip_slt_records(input: &str) -> Result<Vec<SevenZipMemberRecord>, ArchiveError> {
+    let mut records = Vec::new();
+    for block in input.split("\n\n") {
+        let mut record = SevenZipMemberRecord::default();
+        let mut has_field = false;
+        for line in block.lines() {
+            let Some((key, value)) = line.split_once(" = ") else {
+                continue;
+            };
+            has_field = true;
+            let value = value.trim();
+            match key {
+                "Path" => record.path = value.to_string(),
+                "Encrypted" => {
+                    record.encrypted = value == "+" || value.eq_ignore_ascii_case("true")
+                }
+                "Symbolic Link" => record.symbolic_link = !value.is_empty() && value != "-",
+                "Hard Link" => record.hard_link = !value.is_empty() && value != "-",
+                "Attributes" => record.attributes = value.to_string(),
+                _ => {}
+            }
+        }
+        if !has_field || record.path.is_empty() {
+            continue;
+        }
+        let attributes = record.attributes.to_ascii_uppercase();
+        record.symbolic_link |= attributes.contains('L');
+        record.hard_link |= attributes.contains('H');
+        records.push(record);
+    }
+    if records.is_empty() && !input.trim().is_empty() {
+        return Err(ArchiveError::ProviderFailed(
+            "7z listing did not contain member records".into(),
+        ));
+    }
+    Ok(records)
+}
+
 fn scan_sources(
     paths: &[PathBuf],
     cancellation: &Cancellation,
@@ -643,23 +860,29 @@ fn canonical_archive_path(path: &Path, extension: &str) -> Result<PathBuf, Archi
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ArchiveError::InvalidRequest("archive output has no filename".into()))?;
-    let known_extensions = [
-        ".tar.zst", ".tar.xz", ".tar.gz", ".tar.bz2", ".tzst", ".txz", ".tgz", ".tbz2", ".7z",
-        ".zip", ".tar", ".rar",
-    ];
-    let base = known_extensions
-        .iter()
-        .find_map(|suffix| {
-            name.strip_suffix(suffix)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| name.to_string());
+    let base = canonical_archive_stem(name);
     Ok(parent.join(format!("{base}.{extension}")))
 }
 
+const ARCHIVE_SUFFIXES: &[&str] = &[
+    ".tar.zst", ".tar.bz2", ".tar.xz", ".tar.gz", ".tzst", ".tbz2", ".txz", ".tgz", ".7z", ".zip",
+    ".tar", ".rar",
+];
+
+fn archive_suffix(name: &str) -> Option<&str> {
+    ARCHIVE_SUFFIXES.iter().copied().find(|suffix| {
+        name.len() > suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    })
+}
+
+fn canonical_archive_stem(name: &str) -> String {
+    archive_suffix(name)
+        .map(|suffix| name[..name.len() - suffix.len()].to_string())
+        .unwrap_or_else(|| name.to_string())
+}
+
 fn choose_archive_target(path: &Path, policy: &str) -> Result<PathBuf, ArchiveError> {
-    if !path.exists() || policy == "overwrite" {
+    if !path_occupied(path) || policy == "overwrite" {
         return Ok(path.to_path_buf());
     }
     if policy == "prompt" {
@@ -670,22 +893,27 @@ fn choose_archive_target(path: &Path, policy: &str) -> Result<PathBuf, ArchiveEr
             "unsupported conflict policy: {policy}"
         )));
     }
-    let stem = path
-        .file_stem()
+    let name = path
+        .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("Archive");
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
+    let stem = canonical_archive_stem(name);
+    let suffix = archive_suffix(name)
+        .map(str::to_string)
+        .or_else(|| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(|value| format!(".{value}"))
+        })
+        .unwrap_or_default();
     for index in 2..10000 {
-        let filename = if extension.is_empty() {
+        let filename = if suffix.is_empty() {
             format!("{stem} ({index})")
         } else {
-            format!("{stem} ({index}).{extension}")
+            format!("{stem} ({index}){suffix}")
         };
         let candidate = path.with_file_name(filename);
-        if !candidate.exists() {
+        if !path_occupied(&candidate) {
             return Ok(candidate);
         }
     }
@@ -718,16 +946,18 @@ fn create_arguments(
                 FormatId::TarXz => {
                     args.push(OsString::from("--format=ustar"));
                     args.push(OsString::from("--xz"));
+                    let threading = if plan.xz_threads { ",threads=0" } else { "" };
                     args.push(OsString::from(format!(
-                        "--options=xz:compression-level={}",
+                        "--options=xz:compression-level={}{threading}",
                         xz_profile_level(profile)
                     )));
                 }
                 FormatId::TarZst => {
                     args.push(OsString::from("--format=ustar"));
                     args.push(OsString::from("--zstd"));
+                    let threading = if plan.zstd_threads { ",threads=0" } else { "" };
                     args.push(OsString::from(format!(
-                        "--options=zstd:compression-level={}",
+                        "--options=zstd:compression-level={}{threading}",
                         zstd_profile_level(profile)
                     )));
                 }
@@ -830,8 +1060,7 @@ fn copy_source_without_links(
         )));
     }
     if metadata.is_file() {
-        fs::copy(source, destination)
-            .map_err(|error| ArchiveError::ProviderFailed(format!("stage source: {error}")))?;
+        copy_file_with_cancellation(source, destination, cancellation)?;
         return Ok(());
     }
     fs::create_dir_all(destination).map_err(|error| {
@@ -854,6 +1083,51 @@ fn copy_source_without_links(
             .file_name()
             .ok_or_else(|| ArchiveError::InvalidSource("source member has no basename".into()))?;
         copy_source_without_links(&entry, &destination.join(name), cancellation)?;
+    }
+    Ok(())
+}
+
+const SOURCE_COPY_CHUNK_BYTES: usize = 1024 * 1024;
+
+fn copy_file_with_cancellation(
+    source: &Path,
+    destination: &Path,
+    cancellation: &Cancellation,
+) -> Result<(), ArchiveError> {
+    let mut input = fs::File::open(source)
+        .map_err(|error| ArchiveError::InvalidSource(format!("open source: {error}")))?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            ArchiveError::ProviderFailed(format!("create staged source parent: {error}"))
+        })?;
+    }
+    let mut output = fs::File::create(destination)
+        .map_err(|error| ArchiveError::ProviderFailed(format!("stage source: {error}")))?;
+    let mut buffer = vec![0_u8; SOURCE_COPY_CHUNK_BYTES];
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(ArchiveError::Cancelled);
+        }
+        let count = input
+            .read(&mut buffer)
+            .map_err(|error| ArchiveError::ProviderFailed(format!("read source: {error}")))?;
+        if count == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| ArchiveError::ProviderFailed(format!("stage source: {error}")))?;
+    }
+    let metadata = fs::metadata(source)
+        .map_err(|error| ArchiveError::InvalidSource(format!("read source metadata: {error}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            destination,
+            fs::Permissions::from_mode(metadata.permissions().mode() & 0o7777),
+        )
+        .map_err(|error| ArchiveError::ProviderFailed(format!("preserve source mode: {error}")))?;
     }
     Ok(())
 }
@@ -1131,21 +1405,44 @@ fn create_archive(
         "Sources scanned",
         true,
     );
-    let (cwd, args, materialized_root) = if plan.provider == ProviderKind::SevenZip {
+    let preparation = plan_source_preparation(&plan, &sources)?;
+    let cwd = if preparation.materialize {
         let input_root = stage.path.join("input");
-        materialize_sources(&input_root, &sources, cancellation)?;
-        (
-            Some(input_root),
-            create_arguments(&plan, profile, &payload, &sources),
-            true,
-        )
-    } else {
-        (
+        emitter.emit(
+            "create",
+            "preparing",
+            0,
+            Some(total_count),
+            Some(0),
+            Some(total_bytes),
+            0.25,
             None,
-            create_arguments(&plan, profile, &payload, &sources),
-            false,
-        )
+            None,
+            "Preparing source staging",
+            true,
+        );
+        materialize_sources(&input_root, &sources, cancellation)?;
+        emitter.emit(
+            "create",
+            "preparing",
+            total_count,
+            Some(total_count),
+            Some(total_bytes),
+            Some(total_bytes),
+            0.30,
+            None,
+            None,
+            "Sources prepared",
+            true,
+        );
+        Some(input_root)
+    } else if preparation.cwd.as_os_str().is_empty() {
+        None
+    } else {
+        Some(preparation.cwd.clone())
     };
+    let compressing_start = if preparation.materialize { 0.30 } else { 0.25 };
+    let args = create_arguments(&plan, profile, &payload, &sources);
     let mut done = 0usize;
     let outcome = run_provider(
         match plan.provider {
@@ -1174,7 +1471,8 @@ fn create_archive(
                 Some(total_count),
                 None,
                 None,
-                0.25 + 0.65 * (done as f64 / total_count.max(1) as f64),
+                compressing_start
+                    + (0.90 - compressing_start) * (done as f64 / total_count.max(1) as f64),
                 Some(Path::new(line)),
                 current_name,
                 "Compressing archive",
@@ -1182,7 +1480,6 @@ fn create_archive(
             );
         },
     )?;
-    let _ = materialized_root;
     match outcome {
         ProviderOutcome::Success => {}
         ProviderOutcome::Cancelled => return Err(ArchiveError::Cancelled),
@@ -1241,21 +1538,27 @@ fn create_archive(
 fn extraction_provider(archive: &Path, password: &str) -> Result<ProviderKind, ArchiveError> {
     let providers = discover_providers();
     let name = archive.to_string_lossy().to_ascii_lowercase();
-    let seven_zip_archive = name.ends_with(".7z") || name.ends_with(".rar");
-    if seven_zip_archive {
-        return if providers.seven_zip {
+    let zip_archive = name.ends_with(".zip");
+    let seven_zip_archive = name.ends_with(".7z");
+    let rar_archive = name.ends_with(".rar");
+    let tar_zst_archive = name.ends_with(".tar.zst") || name.ends_with(".tzst");
+    if seven_zip_archive || rar_archive {
+        return if providers.seven_zip && (!rar_archive || providers.seven_zip_rar) {
             Ok(ProviderKind::SevenZip)
         } else {
             Err(ArchiveError::ProviderUnavailable)
         };
     }
+    if zip_archive && providers.seven_zip {
+        return Ok(ProviderKind::SevenZip);
+    }
     if !password.is_empty() && providers.seven_zip {
         return Ok(ProviderKind::SevenZip);
     }
-    if providers.bsdtar {
+    if providers.bsdtar && (!tar_zst_archive || providers.bsdtar_zstd) {
         return Ok(ProviderKind::Bsdtar);
     }
-    if providers.seven_zip {
+    if providers.seven_zip && providers.seven_zip_tar_family {
         return Ok(ProviderKind::SevenZip);
     }
     Err(ArchiveError::ProviderUnavailable)
@@ -1327,32 +1630,36 @@ fn inspect_archive(
                 OsString::from(format!("-p{password}")),
             ];
             args.push(archive.as_os_str().to_os_string());
-            let mut encrypted = false;
+            let mut listing = String::new();
             let outcome = run_provider("7z", None, &args, cancellation, |line| {
-                if let Some(path) = line.strip_prefix("Path = ") {
-                    if !path.is_empty() && path != archive.to_string_lossy() {
-                        members.push(path.to_string());
-                    }
-                }
-                if line.starts_with("Encrypted = +") {
-                    encrypted = true;
-                }
-                if line.starts_with("Attributes = ") && line.contains('L') {
-                    encrypted = true;
-                }
+                listing.push_str(line);
+                listing.push('\n');
             })?;
             match outcome {
-                ProviderOutcome::Success if encrypted && password.is_empty() => {
-                    return Err(ArchiveError::PasswordRequired);
-                }
                 ProviderOutcome::Success => {}
                 ProviderOutcome::Cancelled => return Err(ArchiveError::Cancelled),
                 ProviderOutcome::Failed(message) => {
                     return Err(classify_provider_failure(&message, !password.is_empty()));
                 }
             }
-            for member in &members {
-                validate_member(member).map_err(ArchiveError::UnsafeMember)?;
+            let archive_path = archive.to_string_lossy();
+            let records = parse_seven_zip_slt_records(&listing)?;
+            let mut encrypted = false;
+            for record in records {
+                if record.path == archive_path {
+                    continue;
+                }
+                validate_member(&record.path).map_err(ArchiveError::UnsafeMember)?;
+                if record.symbolic_link || record.hard_link {
+                    return Err(ArchiveError::UnsafeMember(
+                        "archives containing symbolic or hard links are not supported".into(),
+                    ));
+                }
+                encrypted |= record.encrypted;
+                members.push(record.path);
+            }
+            if encrypted && password.is_empty() {
+                return Err(ArchiveError::PasswordRequired);
             }
         }
         ProviderKind::Rar => return Err(ArchiveError::ProviderUnavailable),
@@ -1394,10 +1701,29 @@ fn extract_archive(
     )?;
     let destination = request.destination.clone();
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    if request.destination_mode == "into-directory" {
+        let metadata = fs::symlink_metadata(&destination).map_err(|error| {
+            ArchiveError::InvalidRequest(format!("read extraction container: {error}"))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(ArchiveError::InvalidRequest(
+                "into-directory extraction requires an existing directory".into(),
+            ));
+        }
+    } else if request.destination_mode != "new-directory" {
+        return Err(ArchiveError::InvalidRequest(
+            "unknown extraction destination mode".into(),
+        ));
+    }
     fs::create_dir_all(parent).map_err(|error| {
         ArchiveError::ProviderFailed(format!("create destination parent: {error}"))
     })?;
-    let target = choose_target_for_extraction(&destination, &request.conflict_policy)?;
+    if request.destination_mode == "new-directory"
+        && request.conflict_policy == "prompt"
+        && path_occupied(&destination)
+    {
+        return Err(ArchiveError::DestinationConflict(destination));
+    }
     let mut stage = Stage::new(parent, "extract")?;
     let mut args = Vec::new();
     match provider {
@@ -1501,16 +1827,13 @@ fn extract_archive(
     if cancellation.is_cancelled() {
         return Err(ArchiveError::Cancelled);
     }
-    if target.exists() {
-        if request.conflict_policy == "overwrite" {
-            remove_path(&target).map_err(ArchiveError::ProviderFailed)?;
-        } else {
-            return Err(ArchiveError::DestinationConflict(target));
-        }
-    }
-    fs::rename(&stage.path, &target).map_err(|error| {
-        ArchiveError::ProviderFailed(format!("publish extracted archive: {error}"))
-    })?;
+    let target = publish_extraction(
+        &mut stage,
+        &destination,
+        &request.destination_mode,
+        &request.conflict_policy,
+        cancellation,
+    )?;
     stage.finish();
     emitter.emit(
         "extract",
@@ -1539,14 +1862,325 @@ fn extract_archive(
     }))
 }
 
-fn choose_target_for_extraction(destination: &Path, policy: &str) -> Result<PathBuf, ArchiveError> {
-    if !destination.exists() || policy == "overwrite" {
-        return Ok(destination.to_path_buf());
+fn path_occupied(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn remove_owned_path(path: &Path, protected_root: Option<&Path>) -> Result<(), String> {
+    if protected_root == Some(path) {
+        return Err("refusing to recursively remove extraction container".into());
     }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect published path: {error}")),
+    };
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path).map_err(|error| format!("remove published path: {error}"))
+    } else {
+        fs::remove_file(path).map_err(|error| format!("remove published path: {error}"))
+    }
+}
+
+struct PublicationTransaction {
+    backup: Option<Stage>,
+    backup_parent: PathBuf,
+    protected_root: Option<PathBuf>,
+    moved: Vec<(PathBuf, PathBuf)>,
+    published: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl PublicationTransaction {
+    fn new(protected_root: Option<&Path>, backup_parent: &Path) -> Self {
+        Self {
+            backup: None,
+            backup_parent: backup_parent.to_path_buf(),
+            protected_root: protected_root.map(Path::to_path_buf),
+            moved: Vec::new(),
+            published: Vec::new(),
+            committed: false,
+        }
+    }
+
+    fn ensure_backup(&mut self) -> Result<&Path, ArchiveError> {
+        if self.backup.is_none() {
+            self.backup = Some(Stage::new(&self.backup_parent, "extract-backup")?);
+        }
+        Ok(&self.backup.as_ref().expect("backup stage").path)
+    }
+
+    fn backup_existing(&mut self, path: &Path, relative: &Path) -> Result<(), ArchiveError> {
+        if self.protected_root.as_deref() == Some(path) {
+            return Err(ArchiveError::InvalidRequest(
+                "refusing to replace an into-directory extraction container".into(),
+            ));
+        }
+        let backup_root = self.ensure_backup()?.to_path_buf();
+        let backup_path = backup_root.join(relative);
+        if let Some(parent) = backup_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                ArchiveError::ProviderFailed(format!("create extraction backup parent: {error}"))
+            })?;
+        }
+        fs::rename(path, &backup_path).map_err(|error| {
+            ArchiveError::ProviderFailed(format!("backup conflicting extraction path: {error}"))
+        })?;
+        self.moved.push((path.to_path_buf(), backup_path));
+        Ok(())
+    }
+
+    fn commit(&mut self) {
+        if let Some(backup) = self.backup.as_mut() {
+            backup.finish();
+        }
+        self.committed = true;
+    }
+
+    fn rollback(&mut self) -> Result<(), ArchiveError> {
+        let mut first_error = None;
+        for path in self.published.drain(..).rev() {
+            if let Err(error) = remove_owned_path(&path, self.protected_root.as_deref()) {
+                first_error.get_or_insert(error);
+            }
+        }
+        for (original, backup) in self.moved.drain(..).rev() {
+            if path_occupied(&original)
+                && let Err(error) = remove_owned_path(&original, self.protected_root.as_deref())
+            {
+                first_error.get_or_insert(error);
+                continue;
+            }
+            if let Err(error) = fs::rename(&backup, &original) {
+                first_error.get_or_insert(format!("restore extraction backup: {error}"));
+            }
+        }
+        if let Some(backup) = self.backup.as_mut() {
+            if first_error.is_none() {
+                backup.finish();
+            } else {
+                backup.active = false;
+            }
+        }
+        self.committed = true;
+        match first_error {
+            Some(error) => Err(ArchiveError::ProviderFailed(error)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PublicationTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.rollback();
+        }
+    }
+}
+
+fn unique_child_target(
+    destination: &Path,
+    name: &str,
+    reserved: &mut std::collections::HashSet<PathBuf>,
+) -> PathBuf {
+    let base = Path::new(name);
+    let stem = base
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(name);
+    let suffix = base
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    for index in 1..10000 {
+        let candidate_name = if index == 1 {
+            name.to_string()
+        } else {
+            format!("{stem} ({index}){suffix}")
+        };
+        let candidate = destination.join(candidate_name);
+        if !path_occupied(&candidate) && reserved.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    destination.join(format!("{name} (unique)"))
+}
+
+fn staged_top_level_paths(stage: &Path) -> Result<Vec<PathBuf>, ArchiveError> {
+    let mut entries = fs::read_dir(stage)
+        .map_err(|error| ArchiveError::ProviderFailed(format!("read staged archive: {error}")))?
+        .map(|entry| {
+            entry.map(|entry| entry.path()).map_err(|error| {
+                ArchiveError::ProviderFailed(format!("read staged member: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort();
+    Ok(entries)
+}
+
+fn publish_entry(
+    incoming: &Path,
+    target: &Path,
+    relative: &Path,
+    transaction: &mut PublicationTransaction,
+    cancellation: &Cancellation,
+) -> Result<(), ArchiveError> {
+    if cancellation.is_cancelled() {
+        return Err(ArchiveError::Cancelled);
+    }
+    if !path_occupied(target) {
+        fs::rename(incoming, target).map_err(|error| {
+            ArchiveError::ProviderFailed(format!("publish extracted member: {error}"))
+        })?;
+        transaction.published.push(target.to_path_buf());
+        return Ok(());
+    }
+
+    let incoming_metadata = fs::symlink_metadata(incoming)
+        .map_err(|error| ArchiveError::ProviderFailed(format!("inspect staged member: {error}")))?;
+    let target_metadata = fs::symlink_metadata(target).map_err(|error| {
+        ArchiveError::ProviderFailed(format!("inspect destination member: {error}"))
+    })?;
+    if incoming_metadata.is_dir()
+        && !incoming_metadata.file_type().is_symlink()
+        && target_metadata.is_dir()
+        && !target_metadata.file_type().is_symlink()
+    {
+        let mut children = fs::read_dir(incoming)
+            .map_err(|error| {
+                ArchiveError::ProviderFailed(format!("read staged directory: {error}"))
+            })?
+            .map(|entry| {
+                entry.map(|entry| entry.path()).map_err(|error| {
+                    ArchiveError::ProviderFailed(format!("read staged child: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        children.sort();
+        for child in children {
+            let name = child
+                .file_name()
+                .ok_or_else(|| ArchiveError::ProviderFailed("staged member has no name".into()))?;
+            publish_entry(
+                &child,
+                &target.join(name),
+                &relative.join(name),
+                transaction,
+                cancellation,
+            )?;
+        }
+        fs::remove_dir(incoming).map_err(|error| {
+            ArchiveError::ProviderFailed(format!("finish staged directory merge: {error}"))
+        })?;
+        return Ok(());
+    }
+
+    if target_metadata.is_dir() && !target_metadata.file_type().is_symlink() {
+        return Err(ArchiveError::InvalidRequest(
+            "overwrite would replace a directory containing unrelated data; choose keep-both"
+                .into(),
+        ));
+    }
+
+    transaction.backup_existing(target, relative)?;
+    fs::rename(incoming, target).map_err(|error| {
+        ArchiveError::ProviderFailed(format!("replace extracted member: {error}"))
+    })?;
+    transaction.published.push(target.to_path_buf());
+    Ok(())
+}
+
+fn publish_extraction(
+    stage: &mut Stage,
+    destination: &Path,
+    mode: &str,
+    policy: &str,
+    cancellation: &Cancellation,
+) -> Result<PathBuf, ArchiveError> {
+    if mode == "new-directory" {
+        let target = if path_occupied(destination) {
+            match policy {
+                "keep-both" => {
+                    choose_target(destination, "keep-both").map_err(ArchiveError::ProviderFailed)?
+                }
+                "overwrite" => destination.to_path_buf(),
+                "prompt" => {
+                    return Err(ArchiveError::DestinationConflict(destination.to_path_buf()));
+                }
+                _ => {
+                    return Err(ArchiveError::InvalidRequest(format!(
+                        "unsupported extraction conflict policy: {policy}"
+                    )));
+                }
+            }
+        } else {
+            destination.to_path_buf()
+        };
+        let backup_parent = target.parent().unwrap_or_else(|| Path::new("."));
+        let mut transaction = PublicationTransaction::new(None, backup_parent);
+        if path_occupied(&target) {
+            transaction.backup_existing(
+                &target,
+                target
+                    .file_name()
+                    .map(PathBuf::from)
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("target")),
+            )?;
+        }
+        if cancellation.is_cancelled() {
+            return Err(ArchiveError::Cancelled);
+        }
+        fs::rename(&stage.path, &target).map_err(|error| {
+            ArchiveError::ProviderFailed(format!("publish extracted archive: {error}"))
+        })?;
+        transaction.published.push(target.clone());
+        transaction.commit();
+        return Ok(target);
+    }
+
+    let entries = staged_top_level_paths(&stage.path)?;
+    let backup_parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let mut transaction = PublicationTransaction::new(Some(destination), backup_parent);
     if policy == "prompt" {
-        return Err(ArchiveError::DestinationConflict(destination.to_path_buf()));
+        for entry in &entries {
+            let name = entry
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    ArchiveError::UnsafeMember("staged member has no valid name".into())
+                })?;
+            if path_occupied(&destination.join(name)) {
+                return Err(ArchiveError::DestinationConflict(destination.join(name)));
+            }
+        }
+    } else if policy != "keep-both" && policy != "overwrite" {
+        return Err(ArchiveError::InvalidRequest(format!(
+            "unsupported extraction conflict policy: {policy}"
+        )));
     }
-    choose_target(destination, policy).map_err(|message| ArchiveError::ProviderFailed(message))
+    let mut reserved = std::collections::HashSet::new();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| ArchiveError::UnsafeMember("staged member has no valid name".into()))?;
+        let existing_target = destination.join(name);
+        let target = if policy == "keep-both" && path_occupied(&existing_target) {
+            unique_child_target(destination, name, &mut reserved)
+        } else {
+            reserved.insert(existing_target.clone());
+            existing_target
+        };
+        let relative = target
+            .strip_prefix(destination)
+            .unwrap_or_else(|_| Path::new(name));
+        publish_entry(&entry, &target, relative, &mut transaction, cancellation)?;
+    }
+    transaction.commit();
+    Ok(destination.to_path_buf())
 }
 
 fn validate_extracted_tree(root: &Path) -> Result<(), ArchiveError> {
@@ -1579,8 +2213,23 @@ pub fn run_operation(args: &[String]) -> Result<(), String> {
         .position(|value| value == "--json")
         .and_then(|index| args.get(index + 1))
         .ok_or_else(|| "archive-operation requires --json <request>".to_string())?;
-    let request: OperationRequest = serde_json::from_str(encoded)
+    let mut request: OperationRequest = serde_json::from_str(encoded)
         .map_err(|error| format!("invalid archive request: {error}"))?;
+    if request.password.is_empty() && std::env::var_os("ASTREA_STDIN_PAYLOAD").is_some() {
+        const MAX_ARCHIVE_SECRET_BYTES: usize = 64 * 1024;
+        let mut secret = Vec::new();
+        io::stdin()
+            .take((MAX_ARCHIVE_SECRET_BYTES + 1) as u64)
+            .read_to_end(&mut secret)
+            .map_err(|error| format!("read archive secret payload: {error}"))?;
+        if secret.len() > MAX_ARCHIVE_SECRET_BYTES {
+            return Err("archive secret payload exceeded the configured limit".into());
+        }
+        if !secret.is_empty() {
+            request.password = String::from_utf8(secret)
+                .map_err(|_| "archive secret payload was not valid UTF-8".to_string())?;
+        }
+    }
     let cancellation = Cancellation::from_environment();
     let mut emitter = ProgressEmitter::new();
     let result = match request.kind.as_str() {
@@ -1625,8 +2274,10 @@ fn capability_json(capability: &Capability) -> Value {
         "createSupported": capability.create_supported,
         "extractSupported": capability.extract_supported,
         "profiles": capability.profiles.iter().map(|profile| profile.as_id()).collect::<Vec<_>>(),
-        "passwordSupported": capability.password_supported,
-        "provider": capability.provider.as_id(),
+        "createProvider": capability.create_provider.map(ProviderKind::as_id),
+        "extractProvider": capability.extract_provider.map(ProviderKind::as_id),
+        "createPasswordSupported": capability.create_password_supported,
+        "extractPasswordSupported": capability.extract_password_supported,
     })
 }
 
@@ -1648,7 +2299,7 @@ fn validate_member(value: &str) -> Result<(), String> {
 }
 
 fn choose_target(destination: &Path, policy: &str) -> Result<PathBuf, String> {
-    if !destination.exists() || policy == "overwrite" {
+    if !path_occupied(destination) || policy == "overwrite" {
         return Ok(destination.to_path_buf());
     }
     if policy != "keep-both" && policy != "rename" {
@@ -1663,19 +2314,11 @@ fn choose_target(destination: &Path, policy: &str) -> Result<PathBuf, String> {
             .and_then(|v| v.to_str())
             .unwrap_or("extracted");
         let candidate = destination.with_file_name(format!("{name} ({index})"));
-        if !candidate.exists() {
+        if !path_occupied(&candidate) {
             return Ok(candidate);
         }
     }
     Err("could not choose a unique extraction target".into())
-}
-
-fn remove_path(path: &Path) -> Result<(), String> {
-    if path.is_dir() && !path.is_symlink() {
-        fs::remove_dir_all(path).map_err(|error| format!("remove existing target: {error}"))
-    } else {
-        fs::remove_file(path).map_err(|error| format!("remove existing target: {error}"))
-    }
 }
 
 #[cfg(test)]
@@ -1686,10 +2329,11 @@ mod tests {
         canonical_archive_path, capabilities_for, create_archive, create_arguments,
         extract_archive, plan_create, run_provider,
     };
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -1730,9 +2374,13 @@ mod tests {
             seven_zip: true,
             rar: false,
             bsdtar_zstd: true,
+            bsdtar_xz_threads: true,
+            bsdtar_zstd_threads: true,
+            seven_zip_tar_family: true,
+            seven_zip_rar: true,
         };
         let cases = [
-            (FormatId::Zip, ProviderKind::Bsdtar, "zip"),
+            (FormatId::Zip, ProviderKind::SevenZip, "zip"),
             (FormatId::SevenZip, ProviderKind::SevenZip, "7z"),
             (FormatId::Tar, ProviderKind::Bsdtar, "tar"),
             (FormatId::TarGz, ProviderKind::Bsdtar, "tar.gz"),
@@ -1755,6 +2403,10 @@ mod tests {
             seven_zip: false,
             rar: false,
             bsdtar_zstd: true,
+            bsdtar_xz_threads: false,
+            bsdtar_zstd_threads: false,
+            seven_zip_tar_family: false,
+            seven_zip_rar: false,
         };
 
         let error = plan_create(FormatId::SevenZip, CompressionProfile::Fast, providers)
@@ -1776,6 +2428,10 @@ mod tests {
                 seven_zip: true,
                 rar: false,
                 bsdtar_zstd: false,
+                bsdtar_xz_threads: false,
+                bsdtar_zstd_threads: false,
+                seven_zip_tar_family: false,
+                seven_zip_rar: false,
             },
         )
         .unwrap();
@@ -1796,6 +2452,10 @@ mod tests {
                 seven_zip: true,
                 rar: false,
                 bsdtar_zstd: false,
+                bsdtar_xz_threads: false,
+                bsdtar_zstd_threads: false,
+                seven_zip_tar_family: false,
+                seven_zip_rar: false,
             },
         )
         .unwrap();
@@ -1813,12 +2473,115 @@ mod tests {
     }
 
     #[test]
+    fn advertised_compression_profiles_map_to_distinct_provider_arguments() {
+        let plan = plan_create(
+            FormatId::Zip,
+            CompressionProfile::Balanced,
+            ProviderAvailability {
+                seven_zip: true,
+                ..ProviderAvailability::default()
+            },
+        )
+        .unwrap();
+        let levels = [
+            (CompressionProfile::Fast, "-mx=1"),
+            (CompressionProfile::Balanced, "-mx=5"),
+            (CompressionProfile::Maximum, "-mx=9"),
+        ];
+        for (profile, expected) in levels {
+            let args = create_arguments(
+                &plan,
+                profile,
+                Path::new("/tmp/archive.zip"),
+                &[SourceInfo {
+                    path: PathBuf::from("/tmp/source.txt"),
+                    basename: "source.txt".into(),
+                }],
+            );
+            assert!(args.iter().any(|arg| arg == expected));
+        }
+
+        let bsdtar_plan = plan_create(
+            FormatId::Zip,
+            CompressionProfile::Balanced,
+            ProviderAvailability {
+                bsdtar: true,
+                ..ProviderAvailability::default()
+            },
+        )
+        .unwrap();
+        assert!(bsdtar_plan.profiles.is_empty());
+    }
+
+    #[test]
+    fn bsdtar_threading_arguments_are_added_only_when_probe_succeeds() {
+        let providers = ProviderAvailability {
+            bsdtar: true,
+            bsdtar_zstd: true,
+            bsdtar_xz_threads: true,
+            bsdtar_zstd_threads: true,
+            ..ProviderAvailability::default()
+        };
+        for (format, extension, option) in [
+            (
+                FormatId::TarXz,
+                "tar.xz",
+                "--options=xz:compression-level=6,threads=0",
+            ),
+            (
+                FormatId::TarZst,
+                "tar.zst",
+                "--options=zstd:compression-level=6,threads=0",
+            ),
+        ] {
+            let plan = plan_create(format, CompressionProfile::Balanced, providers).unwrap();
+            let args = create_arguments(
+                &plan,
+                CompressionProfile::Balanced,
+                Path::new(&format!("/tmp/archive.{extension}")),
+                &[SourceInfo {
+                    path: PathBuf::from("/tmp/source.txt"),
+                    basename: "source.txt".into(),
+                }],
+            );
+            assert!(args.iter().any(|arg| arg == option));
+        }
+
+        let plan = plan_create(
+            FormatId::TarXz,
+            CompressionProfile::Balanced,
+            ProviderAvailability {
+                bsdtar: true,
+                ..ProviderAvailability::default()
+            },
+        )
+        .unwrap();
+        let args = create_arguments(
+            &plan,
+            CompressionProfile::Balanced,
+            Path::new("/tmp/archive.tar.xz"),
+            &[SourceInfo {
+                path: PathBuf::from("/tmp/source.txt"),
+                basename: "source.txt".into(),
+            }],
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--options=xz:compression-level=6")
+        );
+    }
+
+    #[test]
     fn capabilities_never_advertise_unavailable_create_formats() {
         let capabilities = capabilities_for(ProviderAvailability {
             bsdtar: true,
             seven_zip: false,
             rar: false,
             bsdtar_zstd: true,
+            bsdtar_xz_threads: false,
+            bsdtar_zstd_threads: false,
+            seven_zip_tar_family: false,
+            seven_zip_rar: false,
         });
 
         assert!(
@@ -1893,6 +2656,7 @@ mod tests {
             sources: vec![first, second],
             archive_path: root.join("Archive"),
             destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
             format: "zip".into(),
             profile: "balanced".into(),
             password: String::new(),
@@ -1923,6 +2687,7 @@ mod tests {
             sources: Vec::new(),
             archive_path: archive,
             destination: destination.clone(),
+            destination_mode: "new-directory".into(),
             format: String::new(),
             profile: "balanced".into(),
             password: String::new(),
@@ -1991,6 +2756,7 @@ mod tests {
             ],
             archive_path: output_base,
             destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
             format: "zip".into(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2040,6 +2806,7 @@ mod tests {
             ],
             archive_path: root.join("Archive"),
             destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
             format: "7z".into(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2068,6 +2835,7 @@ mod tests {
             sources: Vec::new(),
             archive_path: archive,
             destination: root.join("Extracted"),
+            destination_mode: "new-directory".into(),
             format: String::new(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2083,6 +2851,55 @@ mod tests {
         assert!(root.join("Extracted/report.txt").is_file());
         assert!(root.join("Extracted/photos/a.jpg").is_file());
         assert!(root.join("Extracted/notes/note.txt").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_7z_symbolic_link_is_rejected_before_extraction() {
+        if !super::discover_providers().seven_zip {
+            return;
+        }
+        let root = test_root("7z-link");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("target.txt"), b"target").unwrap();
+        std::os::unix::fs::symlink("target.txt", source.join("link.txt")).unwrap();
+        let archive = root.join("link.7z");
+        let provider = std::process::Command::new("7z")
+            .current_dir(&source)
+            .args([
+                "a",
+                "-bd",
+                "-snl",
+                archive.to_str().unwrap(),
+                "target.txt",
+                "link.txt",
+            ])
+            .output()
+            .unwrap();
+        assert!(provider.status.success());
+
+        let external = root.join("external.txt");
+        fs::write(&external, b"must remain untouched").unwrap();
+        let destination = root.join("destination");
+        let request: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive,
+            "destination": destination,
+            "destinationMode": "new-directory",
+            "conflictPolicy": "keep-both"
+        }))
+        .unwrap();
+        let error = extract_archive(
+            &request,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("7z links must be rejected during inspection");
+        assert!(matches!(error, ArchiveError::UnsafeMember(_)));
+        assert!(!destination.exists());
+        assert_eq!(fs::read(external).unwrap(), b"must remain untouched");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2113,6 +2930,7 @@ mod tests {
             sources: Vec::new(),
             archive_path: archive.clone(),
             destination: root.join("Extracted"),
+            destination_mode: "new-directory".into(),
             format: String::new(),
             profile: "balanced".into(),
             password: password.into(),
@@ -2158,6 +2976,7 @@ mod tests {
             sources: vec![fixture.join("report.txt"), fixture.join("photos")],
             archive_path: root.join("Archive"),
             destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
             format: "tar.zst".into(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2175,6 +2994,7 @@ mod tests {
             sources: Vec::new(),
             archive_path: archive,
             destination: root.join("Extracted"),
+            destination_mode: "new-directory".into(),
             format: String::new(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2215,6 +3035,7 @@ mod tests {
             sources: vec![fixture.join("report.txt")],
             archive_path: root.join("Archive"),
             destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
             format: "zip".into(),
             profile: "balanced".into(),
             password: String::new(),
@@ -2246,6 +3067,10 @@ mod tests {
             seven_zip: true,
             rar: false,
             bsdtar_zstd: false,
+            bsdtar_xz_threads: false,
+            bsdtar_zstd_threads: false,
+            seven_zip_tar_family: true,
+            seven_zip_rar: true,
         });
         assert!(
             seven_zip_only
@@ -2262,8 +3087,370 @@ mod tests {
                 .iter()
                 .any(|item| item.id == "rar" && item.extract_supported)
         );
-        assert!(!seven_zip_only.iter().any(|item| item.id == "tar.zst"));
+        assert!(
+            seven_zip_only
+                .iter()
+                .any(|item| item.id == "tar.gz" && item.extract_supported)
+        );
 
         assert!(capabilities_for(ProviderAvailability::default()).is_empty());
+    }
+
+    #[test]
+    fn into_directory_overwrite_preserves_unrelated_contents() {
+        if !super::discover_providers().bsdtar {
+            return;
+        }
+        let root = test_root("into-directory-overwrite");
+        let archive_source = root.join("archive-source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&archive_source).unwrap();
+        fs::create_dir_all(destination.join("folder")).unwrap();
+        fs::write(archive_source.join("archive-file.txt"), b"incoming").unwrap();
+        fs::create_dir_all(archive_source.join("folder")).unwrap();
+        fs::write(archive_source.join("folder/a.txt"), b"incoming child").unwrap();
+        fs::write(destination.join("archive-file.txt"), b"old conflicting").unwrap();
+        fs::write(destination.join("unrelated.txt"), b"must survive").unwrap();
+        fs::write(
+            destination.join("folder/unrelated.txt"),
+            b"nested must survive",
+        )
+        .unwrap();
+        let archive = root.join("archive.zip");
+        let provider = std::process::Command::new("bsdtar")
+            .args([
+                "-cf",
+                archive.to_str().unwrap(),
+                "--format=zip",
+                "-C",
+                archive_source.to_str().unwrap(),
+                "archive-file.txt",
+                "folder",
+            ])
+            .output()
+            .unwrap();
+        assert!(provider.status.success());
+
+        let request: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive,
+            "destination": destination,
+            "destinationMode": "into-directory",
+            "profile": "balanced",
+            "password": "",
+            "conflictPolicy": "overwrite"
+        }))
+        .unwrap();
+        let result = extract_archive(
+            &request,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .unwrap();
+        assert_eq!(result["state"], Value::String("success".into()));
+        assert_eq!(
+            fs::read(destination.join("archive-file.txt")).unwrap(),
+            b"incoming"
+        );
+        assert_eq!(
+            fs::read(destination.join("unrelated.txt")).unwrap(),
+            b"must survive"
+        );
+        assert_eq!(
+            fs::read(destination.join("folder/a.txt")).unwrap(),
+            b"incoming child"
+        );
+        assert_eq!(
+            fs::read(destination.join("folder/unrelated.txt")).unwrap(),
+            b"nested must survive"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn into_directory_keep_both_and_prompt_preserve_the_container() {
+        if !super::discover_providers().bsdtar {
+            return;
+        }
+        let root = test_root("into-directory-policies");
+        let archive_source = root.join("source");
+        fs::create_dir_all(&archive_source).unwrap();
+        fs::write(archive_source.join("file.txt"), b"incoming").unwrap();
+        let archive = root.join("archive.zip");
+        let provider = std::process::Command::new("bsdtar")
+            .args([
+                "-cf",
+                archive.to_str().unwrap(),
+                "--format=zip",
+                "-C",
+                archive_source.to_str().unwrap(),
+                "file.txt",
+            ])
+            .output()
+            .unwrap();
+        assert!(provider.status.success());
+
+        let keep_both_destination = root.join("keep-both");
+        fs::create_dir_all(&keep_both_destination).unwrap();
+        fs::write(keep_both_destination.join("file.txt"), b"existing").unwrap();
+        fs::write(keep_both_destination.join("unrelated.txt"), b"unrelated").unwrap();
+        let keep_both: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive.clone(),
+            "destination": keep_both_destination.clone(),
+            "destinationMode": "into-directory",
+            "conflictPolicy": "keep-both"
+        }))
+        .unwrap();
+        extract_archive(
+            &keep_both,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(keep_both_destination.join("file.txt")).unwrap(),
+            b"existing"
+        );
+        assert_eq!(
+            fs::read(keep_both_destination.join("file (2).txt")).unwrap(),
+            b"incoming"
+        );
+        assert_eq!(
+            fs::read(keep_both_destination.join("unrelated.txt")).unwrap(),
+            b"unrelated"
+        );
+
+        let prompt_destination = root.join("prompt");
+        fs::create_dir_all(&prompt_destination).unwrap();
+        fs::write(prompt_destination.join("file.txt"), b"existing").unwrap();
+        fs::write(prompt_destination.join("unrelated.txt"), b"unrelated").unwrap();
+        let prompt: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive.clone(),
+            "destination": prompt_destination.clone(),
+            "destinationMode": "into-directory",
+            "conflictPolicy": "prompt"
+        }))
+        .unwrap();
+        let error = extract_archive(
+            &prompt,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("prompt must suspend on a member conflict");
+        assert!(matches!(error, ArchiveError::DestinationConflict(_)));
+        assert_eq!(
+            fs::read(prompt_destination.join("file.txt")).unwrap(),
+            b"existing"
+        );
+        assert_eq!(
+            fs::read(prompt_destination.join("unrelated.txt")).unwrap(),
+            b"unrelated"
+        );
+        assert!(
+            !fs::read_dir(&prompt_destination)
+                .unwrap()
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".astrea-extract-")
+                })
+        );
+
+        let type_conflict_destination = root.join("type-conflict");
+        fs::create_dir_all(type_conflict_destination.join("file.txt")).unwrap();
+        fs::write(
+            type_conflict_destination.join("file.txt/unrelated-child.txt"),
+            b"must survive",
+        )
+        .unwrap();
+        let overwrite: OperationRequest = serde_json::from_value(json!({
+            "kind": "extract",
+            "archivePath": archive,
+            "destination": type_conflict_destination,
+            "destinationMode": "into-directory",
+            "conflictPolicy": "overwrite"
+        }))
+        .unwrap();
+        let error = extract_archive(
+            &overwrite,
+            &Cancellation { marker: None },
+            &mut ProgressEmitter::new(),
+        )
+        .expect_err("file-versus-directory overwrite must not discard descendants");
+        assert!(matches!(error, ArchiveError::InvalidRequest(_)));
+        assert_eq!(
+            fs::read(type_conflict_destination.join("file.txt/unrelated-child.txt")).unwrap(),
+            b"must survive"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publication_rollback_guard_refuses_to_remove_the_into_directory_container() {
+        let root = test_root("publication-root-guard");
+        let error = super::remove_owned_path(&root, Some(&root))
+            .expect_err("an into-directory container must never be recursively removed");
+        assert!(error.contains("extraction container"));
+        assert!(root.is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn seven_zip_slt_link_state_never_aliases_encryption_state() {
+        let records = super::parse_seven_zip_slt_records(
+            "Path = regular.txt\nEncrypted = -\nAttributes = A\n\n\
+Path = folder\nFolder = +\nEncrypted = -\nAttributes = D\n\n\
+Path = encrypted.txt\nEncrypted = +\nAttributes = A\n\n\
+Path = symbolic\nEncrypted = -\nSymbolic Link = target.txt\nAttributes = L\n\n\
+Path = hard\nEncrypted = -\nHard Link = regular.txt\nAttributes = A\n\n\
+Path = encrypted-symbolic\nEncrypted = +\nSymbolic Link = target.txt\nAttributes = L\n",
+        )
+        .unwrap();
+        assert_eq!(records.len(), 6);
+        assert!(!records[0].encrypted && !records[0].symbolic_link && !records[0].hard_link);
+        assert!(!records[1].encrypted && !records[1].symbolic_link && !records[1].hard_link);
+        assert!(records[2].encrypted && !records[2].symbolic_link && !records[2].hard_link);
+        assert!(!records[3].encrypted && records[3].symbolic_link);
+        assert!(!records[4].encrypted && records[4].hard_link);
+        assert!(records[5].encrypted && records[5].symbolic_link);
+    }
+
+    #[test]
+    fn canonical_archive_stem_matches_longest_supported_suffix() {
+        let cases = [
+            ("Archive.zip", "Archive"),
+            ("Archive.7z", "Archive"),
+            ("Archive.rar", "Archive"),
+            ("Archive.tar", "Archive"),
+            ("Archive.tar.gz", "Archive"),
+            ("Archive.tgz", "Archive"),
+            ("Archive.tar.bz2", "Archive"),
+            ("Archive.tbz2", "Archive"),
+            ("Archive.tar.xz", "Archive"),
+            ("Archive.txz", "Archive"),
+            ("Archive.tar.zst", "Archive"),
+            ("Archive.tzst", "Archive"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(super::canonical_archive_stem(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn same_parent_seven_zip_creation_does_not_materialize_sources() {
+        let root = test_root("same-parent-plan");
+        let first = root.join("first.txt");
+        let second = root.join("second.txt");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+        let sources = vec![
+            SourceInfo {
+                path: first,
+                basename: "first.txt".into(),
+            },
+            SourceInfo {
+                path: second,
+                basename: "second.txt".into(),
+            },
+        ];
+        let plan = plan_create(
+            FormatId::SevenZip,
+            CompressionProfile::Balanced,
+            ProviderAvailability {
+                seven_zip: true,
+                ..ProviderAvailability::default()
+            },
+        )
+        .unwrap();
+        let prepared = super::plan_source_preparation(&plan, &sources).unwrap();
+        assert!(!prepared.materialize);
+        assert_eq!(prepared.cwd, root);
+        assert_eq!(prepared.sources, vec!["first.txt", "second.txt"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_during_source_preparation_removes_the_input_clone() {
+        if !super::discover_providers().seven_zip {
+            return;
+        }
+        let root = test_root("preparation-cancel");
+        let first_parent = root.join("first");
+        let second_parent = root.join("second");
+        let output_parent = root.join("output");
+        fs::create_dir_all(&first_parent).unwrap();
+        fs::create_dir_all(&second_parent).unwrap();
+        fs::create_dir_all(&output_parent).unwrap();
+        let first = first_parent.join("large.bin");
+        let second = second_parent.join("other.txt");
+        fs::File::create(&first)
+            .unwrap()
+            .set_len(64 * 1024 * 1024)
+            .unwrap();
+        fs::write(&second, b"other").unwrap();
+        let marker = root.join("cancel.marker");
+        let watcher_parent = output_parent.clone();
+        let watcher_marker = marker.clone();
+        let watcher = std::thread::spawn(move || {
+            for _ in 0..10_000 {
+                let input_visible = fs::read_dir(&watcher_parent)
+                    .unwrap()
+                    .flatten()
+                    .any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".astrea-archive-")
+                            && entry.path().join("input").is_dir()
+                    });
+                if input_visible {
+                    fs::write(watcher_marker, b"cancel").unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let request = OperationRequest {
+            kind: "create".into(),
+            sources: vec![first, second],
+            archive_path: output_parent.join("Archive"),
+            destination: PathBuf::new(),
+            destination_mode: "new-directory".into(),
+            format: "zip".into(),
+            profile: "balanced".into(),
+            password: String::new(),
+            conflict_policy: "keep-both".into(),
+        };
+        let result = create_archive(
+            &request,
+            &Cancellation {
+                marker: Some(marker.clone()),
+            },
+            &mut ProgressEmitter::new(),
+        );
+        watcher.join().unwrap();
+        assert!(
+            marker.exists(),
+            "preparation watcher did not observe the input clone"
+        );
+        let error = result.expect_err("cancellation must be observed during preparation");
+        assert_eq!(error, ArchiveError::Cancelled);
+        assert!(!output_parent.join("Archive.zip").exists());
+        assert!(
+            !fs::read_dir(&output_parent)
+                .unwrap()
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".astrea-archive-")
+                })
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

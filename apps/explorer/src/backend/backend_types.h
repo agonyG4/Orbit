@@ -181,6 +181,7 @@ struct ArchiveOperationRequest
     QString profile;
     QString password;
     QString conflictPolicy {QStringLiteral("keep-both")};
+    QString destinationMode {QStringLiteral("new-directory")};
 };
 
 struct ArchiveCapability
@@ -191,8 +192,10 @@ struct ArchiveCapability
     bool createSupported = false;
     bool extractSupported = false;
     QStringList profiles;
-    bool passwordSupported = false;
-    QString provider;
+    QString createProvider;
+    QString extractProvider;
+    bool createPasswordSupported = false;
+    bool extractPasswordSupported = false;
 };
 
 struct ArchiveOperationProgress

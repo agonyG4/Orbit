@@ -14,6 +14,7 @@ const MAX_REQUEST_LINE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 3 * 1024 * 1024;
 const CANCEL_OPERATION: &str = "cancel";
 const COOPERATIVE_CANCEL_WAIT_STEPS: usize = 500;
+const MAX_STDIN_PAYLOAD_BYTES: usize = 64 * 1024;
 
 static CANCEL_MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -22,6 +23,8 @@ struct Request {
     version: u32,
     id: String,
     arguments: Vec<String>,
+    #[serde(rename = "stdinPayload", default)]
+    stdin_payload: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -223,9 +226,20 @@ fn spawn_request(
     request: Request,
 ) -> Result<ActiveRequest, (Request, String)> {
     let cancel_file = cancellation_marker_path();
-    let mut child = match Command::new(executable)
+    let stdin_payload = request.stdin_payload.clone();
+    let mut command = Command::new(executable);
+    command
         .args(&request.arguments)
-        .env("ASTREA_CANCEL_FILE", &cancel_file)
+        .env("ASTREA_CANCEL_FILE", &cancel_file);
+    if stdin_payload.is_some() {
+        command.env("ASTREA_STDIN_PAYLOAD", "1");
+    }
+    let mut child = match command
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -244,6 +258,30 @@ fn spawn_request(
             return Err((request, "backend stdout pipe was unavailable".into()));
         }
     };
+
+    if let Some(payload) = stdin_payload {
+        if payload.len() > MAX_STDIN_PAYLOAD_BYTES {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&cancel_file);
+            return Err((
+                request,
+                "backend stdin payload exceeded the worker limit".into(),
+            ));
+        }
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&cancel_file);
+            return Err((request, "backend stdin pipe was unavailable".into()));
+        };
+        if let Err(error) = stdin.write_all(payload.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&cancel_file);
+            return Err((request, format!("write backend stdin payload: {error}")));
+        }
+    }
     let stderr = match child.stderr.take() {
         Some(stream) => thread::spawn(move || read_stream(stream)),
         None => {

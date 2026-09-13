@@ -59,9 +59,25 @@ PersistentWorkerTransport::~PersistentWorkerTransport()
 
 BackendRequestId PersistentWorkerTransport::start(const QStringList &arguments)
 {
+    return start(arguments, {});
+}
+
+BackendRequestId PersistentWorkerTransport::start(
+    const QStringList &arguments,
+    const QByteArray &stdinPayload)
+{
     const BackendRequestId requestId = allocateRequestId();
     PendingRequest pending;
     pending.arguments = arguments;
+    if (stdinPayload.size() > m_options.maxStdinPayloadBytes) {
+        BackendTransportError error;
+        error.code = QStringLiteral("input_limit_exceeded");
+        error.message = QStringLiteral("backend stdin payload exceeded the configured limit");
+        error.requestId = requestId;
+        emitFailed(requestId, error);
+        return requestId;
+    }
+    pending.stdinPayload = stdinPayload;
     pending.timeout = new QTimer(this);
     pending.timeout->setSingleShot(true);
     connect(pending.timeout, &QTimer::timeout, this, [this, requestId]() {
@@ -150,11 +166,16 @@ void PersistentWorkerTransport::sendRequest(BackendRequestId requestId)
     for (const QString &argument : pending.arguments) {
         encodedArguments.append(argument);
     }
-    const QJsonObject request {
+    QJsonObject request {
         {QStringLiteral("version"), 1},
         {QStringLiteral("id"), QString::number(requestId)},
         {QStringLiteral("arguments"), encodedArguments},
     };
+    if (!pending.stdinPayload.isEmpty()) {
+        request.insert(
+            QStringLiteral("stdinPayload"),
+            QString::fromUtf8(pending.stdinPayload));
+    }
     m_worker->write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
 }
 

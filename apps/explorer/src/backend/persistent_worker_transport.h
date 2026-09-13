@@ -13,6 +13,7 @@ struct PersistentWorkerTransportOptions
     QString backendProgram;
     int requestTimeoutMs = 30000;
     int maxLineBytes = 4 * 1024 * 1024;
+    int maxStdinPayloadBytes = 64 * 1024;
 };
 
 class PersistentWorkerTransport final : public BackendTransport
@@ -26,12 +27,16 @@ public:
     ~PersistentWorkerTransport() override;
 
     BackendRequestId start(const QStringList &arguments) override;
+    BackendRequestId start(
+        const QStringList &arguments,
+        const QByteArray &stdinPayload) override;
     void cancel(BackendRequestId requestId) override;
 
 private:
     struct PendingRequest
     {
         QStringList arguments;
+        QByteArray stdinPayload;
         QTimer *timeout = nullptr;
         QByteArray streamedPayload;
     };
