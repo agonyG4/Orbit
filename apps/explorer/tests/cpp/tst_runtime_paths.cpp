@@ -80,16 +80,13 @@ void createRuntimeRoot(const QString &root, bool optionalFiles = true)
     const QStringList optionalPaths {
         QStringLiteral("Core/bridge/apps/explorer_backend"),
         QStringLiteral("bin/astrea-launch"),
-        QStringLiteral("System/scripts/astrea-windows-run"),
     };
     for (const QString &relativePath : optionalPaths) {
         QFile file(runtime.filePath(relativePath));
         QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(relativePath));
         file.write("fixture");
-        if (relativePath != QStringLiteral("System/scripts/astrea-windows-run")) {
-            QVERIFY(file.setPermissions(
-                QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
-        }
+        QVERIFY(file.setPermissions(
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
     }
 }
 
@@ -279,8 +276,6 @@ void RuntimePathsTest::optionalRuntimePathsStayUnderResolvedRoot()
     QVERIFY(result.valid);
     QVERIFY(result.backendProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
     QVERIFY(result.launcherProgram.startsWith(QDir::cleanPath(root) + QLatin1Char('/')));
-    QVERIFY(result.windowsRunnerProgram.isEmpty());
-    QVERIFY(!result.windowsRunnerAvailable);
     QVERIFY(!result.importPaths.isEmpty());
 }
 
@@ -290,7 +285,6 @@ void RuntimePathsTest::resourceAndExecutableCapabilitiesAreSeparate()
     QVERIFY(fixture.isValid());
     const QString root = fixture.filePath(QStringLiteral("runtime"));
     createRuntimeRoot(root);
-    QVERIFY(QFile::remove(QDir(root).filePath(QStringLiteral("System/scripts/astrea-windows-run"))));
 
     QProcessEnvironment environment = environmentWithoutRoot();
     environment.insert(QStringLiteral("ASTREA_ROOT"), root);
@@ -302,7 +296,6 @@ void RuntimePathsTest::resourceAndExecutableCapabilitiesAreSeparate()
     QVERIFY(result.resourceRootValid);
     QVERIFY(result.backendAvailable);
     QVERIFY(result.launchAvailable);
-    QVERIFY(!result.windowsRunnerAvailable);
     QVERIFY(result.normalRuntimeReady);
     QVERIFY(result.portalRuntimeReady);
 }

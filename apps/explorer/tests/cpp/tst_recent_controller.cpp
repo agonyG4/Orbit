@@ -379,8 +379,7 @@ void RecentControllerTest::qualifiesMixedHistoryThroughDirectoryModelAndLauncher
     QCOMPARE(desktopItem.value(QStringLiteral("lastAccessed")).toLongLong(), 900);
 
     Astrea::Explorer::Native::Services::LaunchService launcher(
-        QStringLiteral("/opt/Astrea/bin/astrea-launch"),
-        QStringLiteral("/opt/Astrea/bin/astrea-windows-run"));
+        QStringLiteral("/opt/Astrea/bin/astrea-launch"));
     const Astrea::Explorer::Native::Services::LaunchSpec launch =
         launcher.desktopLaunch(entries.at(0).filePath);
     QCOMPARE(launch.program, QStringLiteral("/opt/Astrea/bin/astrea-launch"));

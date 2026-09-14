@@ -2,9 +2,11 @@ use std::fs;
 use std::path::Path;
 
 use astrea_launch::{
-    DesktopLaunchContext, LaunchConfig, LaunchRequest, LaunchTarget, Rule,
-    command_from_desktop_file, command_from_desktop_file_with_context, extract_steam_appid,
-    matching_rule, parse_cli_request, parse_exec_line_with_context,
+    DesktopLaunchContext, LaunchConfig, LaunchRequest, LaunchTarget, Rule, SelectedWindowsRunner,
+    WindowsRunnerPolicy, command_from_desktop_file, command_from_desktop_file_with_context,
+    extract_steam_appid, matching_rule, normalize_compatibility_config, parse_argv_tokens,
+    parse_cli_request, parse_exec_line_with_context, parse_pe_machine, select_windows_runner,
+    validate_windows_target,
 };
 
 #[test]
@@ -278,4 +280,86 @@ fn rejects_trailing_or_unknown_cli_arguments() {
         ])
         .is_err()
     );
+}
+
+#[test]
+fn parses_windows_launch_request() {
+    let request = parse_cli_request(&vec!["--windows".into(), "/tmp/game.exe".into()]);
+    assert!(
+        request.is_ok(),
+        "--windows should be a supported launch request"
+    );
+
+    let request = request.expect("windows request");
+    let text = serde_json::to_string(&request).expect("windows request json");
+    assert!(text.contains(r#""kind":"windows""#));
+    assert!(text.contains("/tmp/game.exe"));
+}
+
+#[test]
+fn validates_pe_and_msi_windows_targets() {
+    let root = std::env::temp_dir().join(format!("astrea-launch-pe-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let exe = root.join("game.exe");
+    let msi = root.join("setup.msi");
+    let mut pe = vec![0u8; 0x90];
+    pe[0..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&(0x80u32).to_le_bytes());
+    pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+    pe[0x84..0x86].copy_from_slice(&(0x014cu16).to_le_bytes());
+    fs::write(&exe, &pe).unwrap();
+    fs::write(&msi, b"not a PE image").unwrap();
+
+    assert_eq!(parse_pe_machine(&pe).unwrap(), "i386");
+    assert_eq!(validate_windows_target(&exe).unwrap().machine, "i386");
+    assert!(validate_windows_target(&msi).unwrap().is_msi);
+    assert!(validate_windows_target(&root.join("notes.txt")).is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_policy_preserves_explicit_requirements() {
+    assert_eq!(
+        select_windows_runner(WindowsRunnerPolicy::Proton, true, true).unwrap(),
+        SelectedWindowsRunner::Umu
+    );
+    assert!(select_windows_runner(WindowsRunnerPolicy::Proton, false, true).is_err());
+    assert_eq!(
+        select_windows_runner(WindowsRunnerPolicy::Wine, true, true).unwrap(),
+        SelectedWindowsRunner::Wine
+    );
+    assert!(select_windows_runner(WindowsRunnerPolicy::Wine, true, false).is_err());
+    assert_eq!(
+        select_windows_runner(WindowsRunnerPolicy::Auto, false, true).unwrap(),
+        SelectedWindowsRunner::Wine
+    );
+}
+
+#[test]
+fn parses_custom_prefix_as_literal_argv_tokens() {
+    assert_eq!(
+        parse_argv_tokens(r#"env DXVK_LOG_LEVEL='none quiet' 'wrapper;literal' $(not-expanded)"#)
+            .unwrap(),
+        vec![
+            "env",
+            "DXVK_LOG_LEVEL=none quiet",
+            "wrapper;literal",
+            "$(not-expanded)"
+        ]
+    );
+    assert!(parse_argv_tokens("unterminated'").is_err());
+}
+
+#[test]
+fn normalizes_legacy_compatibility_fields_without_inventing_values() {
+    let config = normalize_compatibility_config(&serde_json::json!({
+        "runner": "not-a-runner",
+        "use_proton_profile": false,
+        "extra_env": " SECRET=one ",
+        "extra_prefix": " env FOO=bar "
+    }));
+    assert_eq!(config.runner, WindowsRunnerPolicy::Proton);
+    assert!(!config.use_proton_profile);
+    assert_eq!(config.extra_env, "SECRET=one");
+    assert_eq!(config.extra_prefix, "env FOO=bar");
 }

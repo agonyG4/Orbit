@@ -17,7 +17,6 @@ QtObject {
     readonly property string helperPath: nativeAppState.helperPath
     readonly property string wallpaperManagerPath: nativeAppState.wallpaperManagerPath
     readonly property string astreaLaunch: nativeAppState.astreaLaunch
-    readonly property string windowsRun: nativeAppState.windowsRun
     readonly property string networkRootPath: nativeAppState.networkRootPath
     readonly property string trashFilesPath: nativeAppState.trashFilesPath
     readonly property string trashInfoPath: nativeAppState.trashInfoPath

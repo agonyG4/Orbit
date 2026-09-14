@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -12,6 +13,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_BOOST_MS: u64 = 3000;
+pub const DEFAULT_UMU_ID: &str = "umu-default";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -62,6 +64,9 @@ pub enum LaunchRequest {
         argv: Vec<String>,
         working_dir: Option<String>,
     },
+    Windows {
+        path: String,
+    },
     File {
         path: String,
     },
@@ -78,6 +83,137 @@ pub struct CommandSpec {
     pub argv: Vec<String>,
     pub working_dir: Option<PathBuf>,
     pub desktop_file: Option<PathBuf>,
+    pub environment: BTreeMap<String, String>,
+    pub windows_metadata: Option<WindowsLaunchMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsLaunchMetadata {
+    pub runner: String,
+    pub machine: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsLaunchPlan {
+    pub command: CommandSpec,
+    pub metadata: WindowsLaunchMetadata,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRunnerPolicy {
+    Proton,
+    Wine,
+    Auto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsCompatibilityConfig {
+    pub runner: WindowsRunnerPolicy,
+    pub use_proton_profile: bool,
+    pub gamemode: bool,
+    pub mangohud: bool,
+    pub gamescope: bool,
+    pub extra_env: String,
+    pub extra_prefix: String,
+}
+
+impl Default for WindowsCompatibilityConfig {
+    fn default() -> Self {
+        Self {
+            runner: WindowsRunnerPolicy::Proton,
+            use_proton_profile: true,
+            gamemode: true,
+            mangohud: false,
+            gamescope: false,
+            extra_env: String::new(),
+            extra_prefix: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsProtonConfig {
+    pub gamemode: bool,
+    pub mangohud: bool,
+    pub gamescope: bool,
+    pub use_gamescope_profile: bool,
+    pub gamescope_width: u32,
+    pub gamescope_height: u32,
+    pub gamescope_refresh: u32,
+    pub gamescope_fullscreen: bool,
+    pub gamescope_immediate_flips: bool,
+    pub gamescope_hide_cursor: bool,
+    pub gamescope_force_grab_cursor: bool,
+    pub gamescope_adaptive_sync: bool,
+    pub gamescope_extra_args: String,
+    pub enable_nvapi: bool,
+    pub hide_nvidia_gpu: bool,
+    pub sync_mode: String,
+    pub use_wined3d: bool,
+    pub dxvk_async: bool,
+    pub dxvk_hdr: bool,
+    pub vkd3d_dxr: bool,
+    pub fsr: bool,
+    pub fsr_strength: u32,
+    pub custom_env: String,
+    pub custom_prefix: String,
+}
+
+impl Default for WindowsProtonConfig {
+    fn default() -> Self {
+        Self {
+            gamemode: true,
+            mangohud: false,
+            gamescope: false,
+            use_gamescope_profile: true,
+            gamescope_width: 1920,
+            gamescope_height: 1080,
+            gamescope_refresh: 60,
+            gamescope_fullscreen: true,
+            gamescope_immediate_flips: false,
+            gamescope_hide_cursor: false,
+            gamescope_force_grab_cursor: false,
+            gamescope_adaptive_sync: false,
+            gamescope_extra_args: String::new(),
+            enable_nvapi: false,
+            hide_nvidia_gpu: false,
+            sync_mode: "default".into(),
+            use_wined3d: false,
+            dxvk_async: false,
+            dxvk_hdr: false,
+            vkd3d_dxr: false,
+            fsr: false,
+            fsr_strength: 2,
+            custom_env: String::new(),
+            custom_prefix: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsGamescopeConfig {
+    pub width: u32,
+    pub height: u32,
+    pub refresh: u32,
+    pub fullscreen: bool,
+    pub immediate_flips: bool,
+    pub hide_cursor: bool,
+    pub extra_args: String,
+}
+
+impl Default for WindowsGamescopeConfig {
+    fn default() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            refresh: 60,
+            fullscreen: true,
+            immediate_flips: false,
+            hide_cursor: false,
+            extra_args: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -147,6 +283,8 @@ pub struct LaunchRecord {
     pub pid: Option<u32>,
     pub status: String,
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<WindowsLaunchMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +298,193 @@ struct LaunchDaemonResponse {
 enum LaunchdError {
     Connect,
     Request(String),
+}
+
+pub fn compatibility_config_path() -> PathBuf {
+    xdg_config_home().join("AstreaOS/gaming/compatibility.json")
+}
+
+pub fn proton_config_path() -> PathBuf {
+    xdg_config_home().join("AstreaOS/gaming/proton.json")
+}
+
+pub fn gamescope_config_path() -> PathBuf {
+    xdg_config_home().join("AstreaOS/gaming/gamescope.json")
+}
+
+pub fn shared_windows_prefix_root() -> PathBuf {
+    xdg_data_home().join("AstreaOS/windows-prefixes/shared/proton")
+}
+
+pub fn shared_windows_wine_prefix() -> PathBuf {
+    shared_windows_prefix_root().join("pfx")
+}
+
+pub fn windows_log_dir() -> PathBuf {
+    xdg_state_home().join("AstreaOS/windows-prefixes/logs")
+}
+
+pub fn normalize_compatibility_config(raw: &serde_json::Value) -> WindowsCompatibilityConfig {
+    let defaults = WindowsCompatibilityConfig::default();
+    let object = raw.as_object();
+    let runner = match object
+        .and_then(|values| values.get("runner"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("wine") => WindowsRunnerPolicy::Wine,
+        Some("auto") => WindowsRunnerPolicy::Auto,
+        _ => defaults.runner,
+    };
+    WindowsCompatibilityConfig {
+        runner,
+        use_proton_profile: json_bool(object, "use_proton_profile", defaults.use_proton_profile),
+        gamemode: json_bool(object, "gamemode", defaults.gamemode),
+        mangohud: json_bool(object, "mangohud", defaults.mangohud),
+        gamescope: json_bool(object, "gamescope", defaults.gamescope),
+        extra_env: json_string(object, "extra_env"),
+        extra_prefix: json_string(object, "extra_prefix"),
+    }
+}
+
+pub fn normalize_proton_config(raw: &serde_json::Value) -> WindowsProtonConfig {
+    let defaults = WindowsProtonConfig::default();
+    let object = raw.as_object();
+    let sync_mode = match json_string_value(object, "sync_mode").as_str() {
+        "disable-esync" | "disable-fsync" | "disable-both" => {
+            json_string_value(object, "sync_mode")
+        }
+        _ => defaults.sync_mode.clone(),
+    };
+    WindowsProtonConfig {
+        gamemode: json_bool(object, "gamemode", defaults.gamemode),
+        mangohud: json_bool(object, "mangohud", defaults.mangohud),
+        gamescope: json_bool(object, "gamescope", defaults.gamescope),
+        use_gamescope_profile: json_bool(
+            object,
+            "use_gamescope_profile",
+            defaults.use_gamescope_profile,
+        ),
+        gamescope_width: json_u32(
+            object,
+            "gamescope_width",
+            defaults.gamescope_width,
+            640,
+            10000,
+        ),
+        gamescope_height: json_u32(
+            object,
+            "gamescope_height",
+            defaults.gamescope_height,
+            360,
+            10000,
+        ),
+        gamescope_refresh: json_u32(
+            object,
+            "gamescope_refresh",
+            defaults.gamescope_refresh,
+            30,
+            1000,
+        ),
+        gamescope_fullscreen: json_bool(
+            object,
+            "gamescope_fullscreen",
+            defaults.gamescope_fullscreen,
+        ),
+        gamescope_immediate_flips: json_bool(
+            object,
+            "gamescope_immediate_flips",
+            defaults.gamescope_immediate_flips,
+        ),
+        gamescope_hide_cursor: json_bool(
+            object,
+            "gamescope_hide_cursor",
+            defaults.gamescope_hide_cursor,
+        ),
+        gamescope_force_grab_cursor: json_bool(
+            object,
+            "gamescope_force_grab_cursor",
+            defaults.gamescope_force_grab_cursor,
+        ),
+        gamescope_adaptive_sync: json_bool(
+            object,
+            "gamescope_adaptive_sync",
+            defaults.gamescope_adaptive_sync,
+        ),
+        gamescope_extra_args: json_string(object, "gamescope_extra_args"),
+        enable_nvapi: json_bool(object, "enable_nvapi", defaults.enable_nvapi),
+        hide_nvidia_gpu: json_bool(object, "hide_nvidia_gpu", defaults.hide_nvidia_gpu),
+        sync_mode,
+        use_wined3d: json_bool(object, "use_wined3d", defaults.use_wined3d),
+        dxvk_async: json_bool(object, "dxvk_async", defaults.dxvk_async),
+        dxvk_hdr: json_bool(object, "dxvk_hdr", defaults.dxvk_hdr),
+        vkd3d_dxr: json_bool(object, "vkd3d_dxr", defaults.vkd3d_dxr),
+        fsr: json_bool(object, "fsr", defaults.fsr),
+        fsr_strength: json_u32(object, "fsr_strength", defaults.fsr_strength, 0, 5),
+        custom_env: json_string(object, "custom_env"),
+        custom_prefix: json_string(object, "custom_prefix"),
+    }
+}
+
+pub fn normalize_gamescope_config(raw: &serde_json::Value) -> WindowsGamescopeConfig {
+    let defaults = WindowsGamescopeConfig::default();
+    let object = raw.as_object();
+    WindowsGamescopeConfig {
+        width: json_u32(object, "width", defaults.width, 640, 10000),
+        height: json_u32(object, "height", defaults.height, 360, 10000),
+        refresh: json_u32(object, "refresh", defaults.refresh, 30, 1000),
+        fullscreen: json_bool(object, "fullscreen", defaults.fullscreen),
+        immediate_flips: json_bool(object, "immediate_flips", defaults.immediate_flips),
+        hide_cursor: json_bool(object, "hide_cursor", defaults.hide_cursor),
+        extra_args: json_string(object, "extra_args"),
+    }
+}
+
+fn json_bool(
+    object: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+    fallback: bool,
+) -> bool {
+    object
+        .and_then(|values| values.get(key))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+fn json_string(object: Option<&serde_json::Map<String, serde_json::Value>>, key: &str) -> String {
+    json_string_value(object, key).trim().to_string()
+}
+
+fn json_string_value(
+    object: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> String {
+    object
+        .and_then(|values| values.get(key))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn json_u32(
+    object: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+    fallback: u32,
+    minimum: u32,
+    maximum: u32,
+) -> u32 {
+    let value = object
+        .and_then(|values| values.get(key))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .map(|value: u64| value as u32)
+        .unwrap_or(fallback);
+    value.clamp(minimum, maximum)
+}
+
+fn read_json_object(path: &Path) -> serde_json::Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()))
 }
 
 pub fn config_path() -> PathBuf {
@@ -207,6 +532,437 @@ pub fn ensure_default_config() -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| format!("create config dir: {err}"))?;
     }
     fs::write(path, default_config_text()).map_err(|err| format!("write config: {err}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsTargetMetadata {
+    pub path: PathBuf,
+    pub machine: String,
+    pub is_msi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedWindowsRunner {
+    Umu,
+    Wine,
+}
+
+pub fn parse_argv_tokens(text: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    let mut quote = None;
+    let mut started = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(ch);
+                started = true;
+            }
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\\' if quote != Some('\'') => {
+                let Some(next) = chars.next() else {
+                    return Err("unterminated escape in argument prefix".into());
+                };
+                current.push(next);
+                started = true;
+            }
+            ch if ch.is_whitespace() && quote.is_none() => {
+                if started {
+                    tokens.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(ch);
+                started = true;
+            }
+        }
+    }
+
+    if quote.is_some() {
+        return Err("unterminated quote in argument prefix".into());
+    }
+    if started {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
+pub fn parse_pe_machine(bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() < 64 || &bytes[..2] != b"MZ" {
+        return Err("Windows executable is not a valid DOS/PE image".into());
+    }
+    let pe_offset = u32::from_le_bytes(
+        bytes[0x3c..0x40]
+            .try_into()
+            .map_err(|_| "Windows executable has an invalid PE offset")?,
+    ) as usize;
+    let header_end = pe_offset
+        .checked_add(6)
+        .ok_or_else(|| "Windows executable has an invalid PE offset".to_string())?;
+    if header_end > bytes.len() || &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
+        return Err("Windows executable is missing a valid PE signature".into());
+    }
+    let machine = u16::from_le_bytes(
+        bytes[pe_offset + 4..pe_offset + 6]
+            .try_into()
+            .map_err(|_| "Windows executable has an invalid PE machine")?,
+    );
+    Ok(match machine {
+        0x014c => "i386".into(),
+        0x8664 => "x86_64".into(),
+        0xaa64 => "arm64".into(),
+        value => format!("unknown-0x{value:04x}"),
+    })
+}
+
+pub fn validate_windows_target(path: &Path) -> Result<WindowsTargetMetadata, String> {
+    let expanded = PathBuf::from(expand_home(&path.to_string_lossy()));
+    let target = expanded
+        .canonicalize()
+        .map_err(|err| format!("file not found: {} ({err})", expanded.display()))?;
+    if !target.is_file() {
+        return Err(format!("file not found: {}", target.display()));
+    }
+    let suffix = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match suffix.as_str() {
+        "msi" => Ok(WindowsTargetMetadata {
+            path: target,
+            machine: "unknown".into(),
+            is_msi: true,
+        }),
+        "exe" => {
+            let bytes =
+                fs::read(&target).map_err(|err| format!("read Windows executable: {err}"))?;
+            let machine = parse_pe_machine(&bytes)?;
+            Ok(WindowsTargetMetadata {
+                path: target,
+                machine,
+                is_msi: false,
+            })
+        }
+        _ => Err(format!("unsupported Windows file: {}", target.display())),
+    }
+}
+
+pub fn select_windows_runner(
+    policy: WindowsRunnerPolicy,
+    umu_available: bool,
+    wine_available: bool,
+) -> Result<SelectedWindowsRunner, String> {
+    match policy {
+        WindowsRunnerPolicy::Proton if umu_available => Ok(SelectedWindowsRunner::Umu),
+        WindowsRunnerPolicy::Proton => Err("UMU is required for the Proton Windows runner".into()),
+        WindowsRunnerPolicy::Wine if wine_available => Ok(SelectedWindowsRunner::Wine),
+        WindowsRunnerPolicy::Wine => Err("Wine not found; install wine or choose Auto".into()),
+        WindowsRunnerPolicy::Auto if umu_available => Ok(SelectedWindowsRunner::Umu),
+        WindowsRunnerPolicy::Auto if wine_available => Ok(SelectedWindowsRunner::Wine),
+        WindowsRunnerPolicy::Auto => Err("neither UMU nor Wine is available".into()),
+    }
+}
+
+pub fn plan_windows_launch(path: &Path) -> Result<WindowsLaunchPlan, String> {
+    let target = validate_windows_target(path)?;
+    let compatibility =
+        normalize_compatibility_config(&read_json_object(&compatibility_config_path()));
+    let profile = if compatibility.use_proton_profile {
+        normalize_proton_config(&read_json_object(&proton_config_path()))
+    } else {
+        WindowsProtonConfig {
+            gamemode: compatibility.gamemode,
+            mangohud: compatibility.mangohud,
+            gamescope: compatibility.gamescope,
+            custom_env: compatibility.extra_env.clone(),
+            custom_prefix: compatibility.extra_prefix.clone(),
+            ..WindowsProtonConfig::default()
+        }
+    };
+    let gamescope = if profile.use_gamescope_profile {
+        normalize_gamescope_config(&read_json_object(&gamescope_config_path()))
+    } else {
+        let mut extra_args = Vec::new();
+        if profile.gamescope_force_grab_cursor {
+            extra_args.push("--force-grab-cursor".into());
+        }
+        if profile.gamescope_adaptive_sync {
+            extra_args.push("--adaptive-sync".into());
+        }
+        extra_args.extend(parse_argv_tokens(&profile.gamescope_extra_args)?);
+        WindowsGamescopeConfig {
+            width: profile.gamescope_width,
+            height: profile.gamescope_height,
+            refresh: profile.gamescope_refresh,
+            fullscreen: profile.gamescope_fullscreen,
+            immediate_flips: profile.gamescope_immediate_flips,
+            hide_cursor: profile.gamescope_hide_cursor,
+            extra_args: extra_args
+                .iter()
+                .map(|arg| {
+                    if arg.contains(char::is_whitespace) {
+                        format!("'{arg}'")
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    };
+    let runtime = discover_windows_runtime();
+    let selected = select_windows_runner(
+        compatibility.runner,
+        runtime.umu_run.is_some(),
+        runtime.wine.is_some(),
+    )?;
+    let mut environment = windows_base_environment(&runtime);
+    let mut warnings = Vec::new();
+    apply_windows_profile_environment(&mut environment, &profile)?;
+
+    let runner_command = match selected {
+        SelectedWindowsRunner::Umu => {
+            let umu = runtime.umu_run.as_ref().expect("UMU selection has a path");
+            environment.insert(
+                "WINEPREFIX".into(),
+                shared_windows_wine_prefix().to_string_lossy().to_string(),
+            );
+            environment.insert(
+                "PROTONPATH".into(),
+                runtime
+                    .proton
+                    .as_ref()
+                    .map(|path| path.parent().unwrap_or(path).to_string_lossy().to_string())
+                    .unwrap_or_else(|| "GE-Proton".into()),
+            );
+            let identity = env::var("UMU_ID")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .or_else(|| env::var("GAMEID").ok().filter(|value| !value.is_empty()))
+                .unwrap_or_else(|| DEFAULT_UMU_ID.into());
+            environment.insert("UMU_ID".into(), identity.clone());
+            environment.insert("GAMEID".into(), identity);
+            environment.insert("STORE".into(), "none".into());
+            let mut command = vec![umu.to_string_lossy().to_string()];
+            append_windows_target_args(&mut command, &target);
+            command
+        }
+        SelectedWindowsRunner::Wine => {
+            environment.insert(
+                "WINEPREFIX".into(),
+                shared_windows_wine_prefix().to_string_lossy().to_string(),
+            );
+            let wine = runtime.wine.as_ref().expect("Wine selection has a path");
+            let mut command = vec![wine.to_string_lossy().to_string()];
+            append_windows_target_args(&mut command, &target);
+            command
+        }
+    };
+
+    let mut argv = compose_windows_wrappers(
+        runner_command,
+        &profile,
+        &gamescope,
+        &target.machine,
+        &runtime,
+        &mut warnings,
+    )?;
+    let custom_prefix = parse_argv_tokens(&profile.custom_prefix)?;
+    if !custom_prefix.is_empty() {
+        let mut prefixed = custom_prefix;
+        prefixed.append(&mut argv);
+        argv = prefixed;
+    }
+
+    let metadata = WindowsLaunchMetadata {
+        runner: match selected {
+            SelectedWindowsRunner::Umu => "umu-proton".into(),
+            SelectedWindowsRunner::Wine => "wine".into(),
+        },
+        machine: target.machine,
+        warnings,
+    };
+    let command = CommandSpec {
+        argv,
+        working_dir: target.path.parent().map(Path::to_path_buf),
+        desktop_file: None,
+        environment,
+        windows_metadata: Some(metadata.clone()),
+    };
+    Ok(WindowsLaunchPlan { command, metadata })
+}
+
+fn append_windows_target_args(command: &mut Vec<String>, target: &WindowsTargetMetadata) {
+    if target.is_msi {
+        command.extend([
+            "msiexec".into(),
+            "/i".into(),
+            target.path.to_string_lossy().to_string(),
+        ]);
+    } else {
+        command.push(target.path.to_string_lossy().to_string());
+    }
+}
+
+fn windows_base_environment(runtime: &WindowsRuntime) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    environment.insert(
+        "PROTON_LOG_DIR".into(),
+        windows_log_dir().to_string_lossy().to_string(),
+    );
+    environment.insert(
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH".into(),
+        steam_root().to_string_lossy().to_string(),
+    );
+    environment.insert("STEAM_COMPAT_APP_ID".into(), "0".into());
+    if let Some(interface) = &runtime.runtime_interface {
+        let mut path = interface.to_string_lossy().to_string();
+        if let Some(existing) = env::var_os("PATH") {
+            let existing = env::split_paths(&existing)
+                .map(|value| value.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            if !existing.is_empty() {
+                path.push(':');
+                path.push_str(&existing.join(":"));
+            }
+        }
+        environment.insert("PATH".into(), path);
+    }
+    environment
+}
+
+fn apply_windows_profile_environment(
+    environment: &mut BTreeMap<String, String>,
+    profile: &WindowsProtonConfig,
+) -> Result<(), String> {
+    if profile.enable_nvapi {
+        environment.insert("PROTON_FORCE_NVAPI".into(), "1".into());
+        environment.insert("PROTON_HIDE_NVIDIA_GPU".into(), "0".into());
+    } else if profile.hide_nvidia_gpu {
+        environment.insert("PROTON_HIDE_NVIDIA_GPU".into(), "1".into());
+    }
+    if matches!(profile.sync_mode.as_str(), "disable-esync" | "disable-both") {
+        environment.insert("PROTON_NO_ESYNC".into(), "1".into());
+    }
+    if matches!(profile.sync_mode.as_str(), "disable-fsync" | "disable-both") {
+        environment.insert("PROTON_NO_FSYNC".into(), "1".into());
+    }
+    if profile.use_wined3d {
+        environment.insert("PROTON_USE_WINED3D".into(), "1".into());
+    }
+    if profile.dxvk_async {
+        environment.insert("DXVK_ASYNC".into(), "1".into());
+    }
+    if profile.dxvk_hdr {
+        environment.insert("DXVK_HDR".into(), "1".into());
+    }
+    if profile.vkd3d_dxr {
+        environment.insert("VKD3D_CONFIG".into(), "dxr".into());
+    }
+    if profile.fsr {
+        environment.insert("WINE_FULLSCREEN_FSR".into(), "1".into());
+        environment.insert(
+            "WINE_FULLSCREEN_FSR_STRENGTH".into(),
+            profile.fsr_strength.to_string(),
+        );
+    }
+    for token in parse_argv_tokens(&profile.custom_env)? {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        if !key.is_empty() && !key.contains('=') {
+            environment.insert(key.to_string(), value.to_string());
+        }
+    }
+    Ok(())
+}
+
+struct WindowsRuntime {
+    umu_run: Option<PathBuf>,
+    wine: Option<PathBuf>,
+    proton: Option<PathBuf>,
+    gamemode: Option<PathBuf>,
+    mangohud: Option<PathBuf>,
+    gamescope: Option<PathBuf>,
+    runtime_interface: Option<PathBuf>,
+}
+
+fn discover_windows_runtime() -> WindowsRuntime {
+    WindowsRuntime {
+        umu_run: find_umu_run(),
+        wine: find_command_path("wine"),
+        proton: find_proton(),
+        gamemode: find_command_path("gamemoderun"),
+        mangohud: find_command_path("mangohud"),
+        gamescope: find_command_path("gamescope"),
+        runtime_interface: find_runtime_interface(),
+    }
+}
+
+fn compose_windows_wrappers(
+    mut command: Vec<String>,
+    profile: &WindowsProtonConfig,
+    gamescope: &WindowsGamescopeConfig,
+    machine: &str,
+    runtime: &WindowsRuntime,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut mangohud_consumed = false;
+    if profile.gamescope {
+        if let Some(gamescope_program) = &runtime.gamescope {
+            let mut wrapper = vec![gamescope_program.to_string_lossy().to_string()];
+            if gamescope.fullscreen {
+                wrapper.push("-f".into());
+            }
+            wrapper.extend([
+                "-W".into(),
+                gamescope.width.to_string(),
+                "-H".into(),
+                gamescope.height.to_string(),
+                "-r".into(),
+                gamescope.refresh.to_string(),
+            ]);
+            if gamescope.immediate_flips {
+                wrapper.push("--immediate-flips".into());
+            }
+            if gamescope.hide_cursor {
+                wrapper.extend(["--hide-cursor-delay".into(), "-1".into()]);
+            }
+            if profile.mangohud && runtime.mangohud.is_some() {
+                wrapper.push("--mangoapp".into());
+                mangohud_consumed = true;
+            }
+            wrapper.extend(parse_argv_tokens(&gamescope.extra_args)?);
+            wrapper.push("--".into());
+            wrapper.append(&mut command);
+            command = wrapper;
+        } else {
+            warnings.push("Gamescope requested but unavailable; continuing without it.".into());
+        }
+    }
+    if profile.mangohud && !mangohud_consumed {
+        if let Some(mangohud) = &runtime.mangohud {
+            command.insert(0, mangohud.to_string_lossy().to_string());
+        } else {
+            warnings.push("MangoHud requested but unavailable; continuing without it.".into());
+        }
+    }
+    if profile.gamemode {
+        if machine == "i386" && !has_32bit_gamemode_auto() {
+            warnings.push(
+                "GameMode skipped for 32-bit Windows app because lib32-gamemode is missing.".into(),
+            );
+        } else if let Some(gamemode) = &runtime.gamemode {
+            command.insert(0, gamemode.to_string_lossy().to_string());
+        } else {
+            warnings.push("GameMode requested but unavailable; continuing without it.".into());
+        }
+    }
+    Ok(command)
 }
 
 pub fn run_launch(request: LaunchRequest) -> Result<LaunchRecord, String> {
@@ -269,6 +1025,7 @@ pub fn run_launch(request: LaunchRequest) -> Result<LaunchRecord, String> {
         pid,
         status,
         detail: detail_parts.join("; "),
+        windows: command.windows_metadata.clone(),
     };
     let _ = append_history(&record, config.history_limit);
     if record.status == "ok" {
@@ -329,6 +1086,9 @@ pub fn parse_cli_request(args: &[String]) -> Result<LaunchRequest, String> {
                 argv,
                 working_dir: None,
             })
+        }
+        "--windows" => {
+            exact_single_arg(args, "--windows").map(|path| LaunchRequest::Windows { path })
         }
         "--file" => exact_single_arg(args, "--file").map(|path| LaunchRequest::File { path }),
         "--url" => {
@@ -398,6 +1158,8 @@ pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
             argv: vec!["sh".into(), "-lc".into(), command.clone()],
             working_dir: None,
             desktop_file: None,
+            environment: BTreeMap::new(),
+            windows_metadata: None,
         }),
         LaunchRequest::Argv { argv, working_dir } => {
             if argv.is_empty() || argv.first().is_some_and(|arg| arg.is_empty()) {
@@ -411,12 +1173,17 @@ pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
                     .map(expand_home)
                     .map(PathBuf::from),
                 desktop_file: None,
+                environment: BTreeMap::new(),
+                windows_metadata: None,
             })
         }
+        LaunchRequest::Windows { path } => Ok(plan_windows_launch(Path::new(path))?.command),
         LaunchRequest::File { path } => Ok(CommandSpec {
             argv: command_for_file_path(&expand_home(path))?,
             working_dir: working_dir_for_file(path),
             desktop_file: None,
+            environment: BTreeMap::new(),
+            windows_metadata: None,
         }),
         LaunchRequest::Url { url } => {
             validate_url(url)?;
@@ -424,6 +1191,8 @@ pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
                 argv: vec!["xdg-open".into(), url.clone()],
                 working_dir: None,
                 desktop_file: None,
+                environment: BTreeMap::new(),
+                windows_metadata: None,
             })
         }
         LaunchRequest::Steam { uri } => {
@@ -437,6 +1206,8 @@ pub fn resolve_request(request: &LaunchRequest) -> Result<CommandSpec, String> {
                 argv: vec![launcher.into(), uri.clone()],
                 working_dir: None,
                 desktop_file: None,
+                environment: BTreeMap::new(),
+                windows_metadata: None,
             })
         }
     }
@@ -490,6 +1261,8 @@ pub fn command_from_desktop_file_with_context(
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
         desktop_file: Some(path.to_path_buf()),
+        environment: BTreeMap::new(),
+        windows_metadata: None,
     })
 }
 
@@ -885,17 +1658,11 @@ fn apply_steam_compat(command: &mut CommandSpec, preset: &str) {
 }
 
 fn prepend_env(command: &mut CommandSpec, vars: Vec<(String, String)>) {
-    if vars.is_empty() {
-        return;
-    }
-    let mut next = vec!["env".to_string()];
     for (key, value) in vars {
-        if !key.is_empty() {
-            next.push(format!("{key}={value}"));
+        if !key.is_empty() && !key.contains('=') {
+            command.environment.insert(key, value);
         }
     }
-    next.extend(command.argv.clone());
-    command.argv = next;
 }
 
 fn spawn_command(command: &CommandSpec, isolate_launches: bool) -> Result<u32, String> {
@@ -935,6 +1702,7 @@ fn spawn_command_direct(command: &CommandSpec) -> Result<u32, String> {
     let mut process = Command::new(program);
     process.args(&command.argv[1..]);
     process.process_group(0);
+    process.envs(&command.environment);
     if let Some(dir) = &command.working_dir {
         process.current_dir(dir);
     }
@@ -997,6 +1765,9 @@ fn systemd_run_args(command: &CommandSpec, unit: &str) -> Vec<String> {
     ];
     if let Some(dir) = &command.working_dir {
         args.push(format!("--working-directory={}", dir.to_string_lossy()));
+    }
+    for (key, value) in &command.environment {
+        args.push(format!("--setenv={key}={value}"));
     }
     args.push("--".into());
     args.extend(command.argv.clone());
@@ -1295,6 +2066,117 @@ fn command_available(name: &str) -> bool {
         .is_some()
 }
 
+fn find_command_path(name: &str) -> Option<PathBuf> {
+    if name.contains('/') {
+        let path = PathBuf::from(name);
+        return is_executable_file(&path).then_some(path);
+    }
+    env::var_os("PATH")?
+        .to_string_lossy()
+        .split(':')
+        .find_map(|dir| {
+            let path = Path::new(dir).join(name);
+            is_executable_file(&path).then_some(path)
+        })
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+        && fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+fn steam_root() -> PathBuf {
+    env::var_os("ASTREA_STEAM_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".local/share/Steam"))
+}
+
+fn find_umu_run() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = find_command_path("umu-run") {
+        candidates.push(path);
+    }
+    candidates.extend([
+        xdg_data_home().join("lutris/runtime/umu/umu-run"),
+        xdg_data_home().join("lutris/runtime/umu/umu_run.py"),
+        PathBuf::from("/app/share/umu/umu-run"),
+        PathBuf::from("/usr/local/share/umu/umu-run"),
+        PathBuf::from("/usr/share/umu/umu-run"),
+        PathBuf::from("/opt/umu/umu-run"),
+    ]);
+    candidates.into_iter().find(|path| is_executable_file(path))
+}
+
+fn find_proton() -> Option<PathBuf> {
+    let root = steam_root();
+    let common = root.join("steamapps/common");
+    let compatibility = root.join("compatibilitytools.d");
+    let mut candidates = vec![
+        compatibility.join("Proton-GE Latest/proton"),
+        common.join("Proton - Experimental/proton"),
+    ];
+    append_named_children(&common, &mut candidates, |name| {
+        name.starts_with("Proton ") && name != "Proton - Experimental"
+    });
+    append_named_children(&compatibility, &mut candidates, |name| {
+        name.starts_with("GE-Proton") || name.starts_with("Proton-GE")
+    });
+    candidates.extend([PathBuf::from(
+        "/usr/share/steam/compatibilitytools.d/proton-cachyos/proton",
+    )]);
+    candidates.into_iter().find(|path| is_executable_file(path))
+}
+
+fn append_named_children<F>(root: &Path, candidates: &mut Vec<PathBuf>, predicate: F)
+where
+    F: Fn(&str) -> bool,
+{
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let mut names = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            predicate(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    names.sort_by(|left, right| right.0.cmp(&left.0));
+    candidates.extend(names.into_iter().map(|(_, path)| path.join("proton")));
+}
+
+fn find_runtime_interface() -> Option<PathBuf> {
+    let root = steam_root().join("steamapps/common");
+    let direct = [
+        "SteamLinuxRuntime_sniper/pressure-vessel/bin/steam-runtime-launcher-interface-0",
+        "SteamLinuxRuntime_4/pressure-vessel/bin/steam-runtime-launcher-interface-0",
+        "SteamLinuxRuntime_soldier/pressure-vessel/bin/steam-runtime-launcher-interface-0",
+    ];
+    for relative in direct {
+        let path = root.join(relative);
+        if is_executable_file(&path) {
+            return path.parent().map(Path::to_path_buf);
+        }
+    }
+    None
+}
+
+fn has_32bit_gamemode_auto() -> bool {
+    let dirs = env::var_os("ASTREA_LIB32_DIRS")
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_else(|| {
+            vec![
+                PathBuf::from("/usr/lib32"),
+                PathBuf::from("/usr/lib/i386-linux-gnu"),
+                PathBuf::from("/lib/i386-linux-gnu"),
+            ]
+        });
+    dirs.into_iter()
+        .any(|dir| dir.join("libgamemodeauto.so.0").is_file())
+}
+
 fn command_for_file_path(path: &str) -> Result<Vec<String>, String> {
     let target = Path::new(path);
     if target.extension().and_then(|v| v.to_str()) == Some("desktop") && target.is_file() {
@@ -1419,6 +2301,7 @@ fn request_kind(request: &LaunchRequest) -> &'static str {
         LaunchRequest::Desktop { .. } => "desktop",
         LaunchRequest::Command { .. } => "command",
         LaunchRequest::Argv { .. } => "argv",
+        LaunchRequest::Windows { .. } => "windows",
         LaunchRequest::File { .. } => "file",
         LaunchRequest::Url { .. } => "url",
         LaunchRequest::Steam { .. } => "steam",
@@ -1430,6 +2313,7 @@ fn request_target(request: &LaunchRequest) -> &str {
         LaunchRequest::Desktop { id, .. } => id,
         LaunchRequest::Command { command } => command,
         LaunchRequest::Argv { argv, .. } => argv.first().map(String::as_str).unwrap_or(""),
+        LaunchRequest::Windows { path } => path,
         LaunchRequest::File { path } => path,
         LaunchRequest::Url { url } => url,
         LaunchRequest::Steam { uri } => uri,
@@ -1471,10 +2355,17 @@ mod tests {
 
     #[test]
     fn builds_systemd_run_args_for_transient_app_service() {
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            "SECRET_VALUE".into(),
+            "must-stay-out-of-argv-history".into(),
+        );
         let command = CommandSpec {
             argv: vec!["/usr/bin/example".into(), "--flag".into()],
             working_dir: Some(PathBuf::from("/tmp/example")),
             desktop_file: None,
+            environment,
+            windows_metadata: None,
         };
 
         let args = systemd_run_args(&command, "astrea-launch-test.service");
@@ -1486,6 +2377,7 @@ mod tests {
         assert!(args.contains(&"--working-directory=/tmp/example".into()));
         assert!(args.contains(&"--property=StartupCPUWeight=10000".into()));
         assert!(args.contains(&"--property=StartupIOWeight=10000".into()));
+        assert!(args.contains(&"--setenv=SECRET_VALUE=must-stay-out-of-argv-history".into()));
         assert_eq!(args.iter().filter(|arg| arg.as_str() == "--").count(), 1);
         assert_eq!(
             &args[args.len() - 3..],
@@ -1508,6 +2400,8 @@ mod launch_spawn_tests {
             argv: vec!["/usr/bin/true".into()],
             working_dir: None,
             desktop_file: None,
+            environment: BTreeMap::new(),
+            windows_metadata: None,
         }
     }
 

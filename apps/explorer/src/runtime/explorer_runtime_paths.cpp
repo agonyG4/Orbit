@@ -152,15 +152,10 @@ ExplorerRuntimePaths fromCandidate(
 
     const QStringList optionalPaths {
         rootDir.filePath(QStringLiteral("bin/astrea-launch")),
-        rootDir.filePath(QStringLiteral("System/scripts/astrea-windows-run")),
     };
     if (isExecutablePresent(optionalPaths.at(0))) {
         result.launcherProgram = optionalPaths.at(0);
         result.launchAvailable = true;
-    }
-    if (isExecutablePresent(optionalPaths.at(1))) {
-        result.windowsRunnerProgram = optionalPaths.at(1);
-        result.windowsRunnerAvailable = true;
     }
 
     result.resourceRootValid = true;
@@ -174,10 +169,6 @@ ExplorerRuntimePaths fromCandidate(
     if (!result.launchAvailable && diagnostics != nullptr) {
         diagnostics->append(
             origin + QStringLiteral(" accepted resource root but missing executable astrea-launch"));
-    }
-    if (!result.windowsRunnerAvailable && diagnostics != nullptr) {
-        diagnostics->append(
-            origin + QStringLiteral(" optional Windows runner is unavailable"));
     }
     return result;
 }

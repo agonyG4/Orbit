@@ -19,8 +19,8 @@ fn main() {
             }
             Ok(empty_record())
         }
-        Some("--desktop") | Some("--command") | Some("--argv-json") | Some("--file")
-        | Some("--url") | Some("--steam") => {
+        Some("--desktop") | Some("--command") | Some("--argv-json") | Some("--windows")
+        | Some("--file") | Some("--url") | Some("--steam") => {
             parse_cli_request(&args).and_then(run_launch_via_daemon)
         }
         _ => {
@@ -89,6 +89,7 @@ fn usage() {
     eprintln!("  astrea-launch --desktop <desktop-id> [--file <path>]... [--url <uri>]...");
     eprintln!("  astrea-launch --command <cmd>");
     eprintln!("  astrea-launch --argv-json '[\"program\",\"arg\"]'");
+    eprintln!("  astrea-launch --windows <path>");
     eprintln!("  astrea-launch --file <path>");
     eprintln!("  astrea-launch --url <url>");
     eprintln!("  astrea-launch --steam <steam-uri>");
@@ -106,5 +107,6 @@ fn empty_record() -> astrea_launch::LaunchRecord {
         pid: None,
         status: String::new(),
         detail: String::new(),
+        windows: None,
     }
 }

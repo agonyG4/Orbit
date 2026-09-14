@@ -23,7 +23,7 @@ struct LaunchResult
 class LaunchService final
 {
 public:
-    LaunchService(QString astreaLaunchProgram, QString windowsRunProgram);
+    explicit LaunchService(QString astreaLaunchProgram);
 
     LaunchSpec fileLaunch(const QString &path) const;
     LaunchSpec desktopLaunch(const QString &path) const;
@@ -39,7 +39,6 @@ private:
     LaunchSpec makeSpec(const QString &program, const QStringList &arguments) const;
 
     QString m_astreaLaunchProgram;
-    QString m_windowsRunProgram;
 };
 
 } // namespace Astrea::Explorer::Native::Services

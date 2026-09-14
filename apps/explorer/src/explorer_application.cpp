@@ -201,9 +201,7 @@ int ExplorerApplication::run(int argc, char **argv)
         QDir(QDir::homePath()).filePath(QStringLiteral(".config/explorer.conf")));
     ExplorerSettingsController explorerSettingsController(&settings, &application);
     ClipboardService clipboard(QGuiApplication::clipboard());
-    LaunchService launchService(
-        runtimePaths.launcherProgram,
-        runtimePaths.windowsRunnerProgram);
+    LaunchService launchService(runtimePaths.launcherProgram);
     DesktopApplicationCatalog applicationCatalog({}, &application);
     MimeAppsService mimeApps;
     mimeApps.setCatalog(&applicationCatalog);

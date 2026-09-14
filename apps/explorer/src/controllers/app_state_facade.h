@@ -69,7 +69,6 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString helperPath READ helperPath CONSTANT)
     Q_PROPERTY(QString wallpaperManagerPath READ wallpaperManagerPath CONSTANT)
     Q_PROPERTY(QString astreaLaunch READ astreaLaunch CONSTANT)
-    Q_PROPERTY(QString windowsRun READ windowsRun CONSTANT)
     Q_PROPERTY(QString networkRootPath READ networkRootPath CONSTANT)
     Q_PROPERTY(QString trashFilesPath READ trashFilesPath CONSTANT)
     Q_PROPERTY(QString trashInfoPath READ trashInfoPath CONSTANT)
@@ -185,7 +184,6 @@ public:
     QString helperPath() const;
     QString wallpaperManagerPath() const;
     QString astreaLaunch() const;
-    QString windowsRun() const;
     QString networkRootPath() const;
     QString trashFilesPath() const;
     QString trashInfoPath() const;

@@ -389,16 +389,6 @@ QString AppStateFacade::astreaLaunch() const
         : QDir(runtimeRoot()).filePath(QStringLiteral("bin/astrea-launch"));
 }
 
-QString AppStateFacade::windowsRun() const
-{
-    if (!m_runtimePaths.windowsRunnerProgram.isEmpty()) {
-        return m_runtimePaths.windowsRunnerProgram;
-    }
-    return runtimeRoot().isEmpty()
-        ? QString()
-        : QDir(runtimeRoot()).filePath(QStringLiteral("System/scripts/astrea-windows-run"));
-}
-
 QString AppStateFacade::networkRootPath() const
 {
     const QString runtimeDirectory = qEnvironmentVariable("XDG_RUNTIME_DIR");

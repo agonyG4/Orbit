@@ -12,9 +12,8 @@ bool LaunchSpec::isValid() const
     return !program.isEmpty();
 }
 
-LaunchService::LaunchService(QString astreaLaunchProgram, QString windowsRunProgram)
+LaunchService::LaunchService(QString astreaLaunchProgram)
     : m_astreaLaunchProgram(std::move(astreaLaunchProgram))
-    , m_windowsRunProgram(std::move(windowsRunProgram))
 {
 }
 
@@ -74,7 +73,7 @@ LaunchSpec LaunchService::windowsLaunch(const QString &path) const
     if (path.isEmpty()) {
         return {};
     }
-    return makeSpec(m_windowsRunProgram, {QStringLiteral("--json"), path});
+    return makeSpec(m_astreaLaunchProgram, {QStringLiteral("--windows"), path});
 }
 
 LaunchResult LaunchService::launch(const LaunchSpec &spec) const

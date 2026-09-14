@@ -14,13 +14,11 @@ struct ExplorerRuntimePaths
     QString backendProgram;
     QString helperProgram;
     QString launcherProgram;
-    QString windowsRunnerProgram;
     QStringList importPaths;
     QStringList diagnostics;
     bool resourceRootValid = false;
     bool backendAvailable = false;
     bool launchAvailable = false;
-    bool windowsRunnerAvailable = false;
     bool normalRuntimeReady = false;
     bool portalRuntimeReady = false;
     bool valid = false;

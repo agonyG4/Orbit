@@ -28,8 +28,7 @@ private slots:
 void LaunchServiceTest::buildsFileLaunchArgv()
 {
     LaunchService service(
-        QStringLiteral("/opt/Astrea/bin/astrea-launch"),
-        QStringLiteral("/opt/Astrea/System/scripts/astrea-windows-run"));
+        QStringLiteral("/opt/Astrea/bin/astrea-launch"));
 
     const LaunchSpec spec = service.fileLaunch(QStringLiteral("/tmp/space name.txt"));
     QCOMPARE(spec.program, QStringLiteral("/opt/Astrea/bin/astrea-launch"));
@@ -38,7 +37,7 @@ void LaunchServiceTest::buildsFileLaunchArgv()
 
 void LaunchServiceTest::buildsDesktopLaunchArgv()
 {
-    LaunchService service(QStringLiteral("launcher"), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral("launcher"));
 
     const LaunchSpec spec = service.desktopLaunch(QStringLiteral("/tmp/My App.desktop"));
     QCOMPARE(spec.program, QStringLiteral("launcher"));
@@ -47,7 +46,7 @@ void LaunchServiceTest::buildsDesktopLaunchArgv()
 
 void LaunchServiceTest::buildsDesktopLaunchArgvWithOrderedTargets()
 {
-    LaunchService service(QStringLiteral("launcher"), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral("launcher"));
 
     const LaunchSpec spec = service.desktopLaunch(
         QStringLiteral("org.example.Editor.desktop"),
@@ -101,7 +100,7 @@ void LaunchServiceTest::forwardsTargetsThroughAstreaLaunchToFinalArgv()
 
     const QString first = QDir(fixture.path()).filePath(QStringLiteral("one file.txt"));
     const QString second = QDir(fixture.path()).filePath(QStringLiteral("two.txt"));
-    LaunchService service(QStringLiteral(ASTREA_LAUNCH_ARTIFACT), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral(ASTREA_LAUNCH_ARTIFACT));
     const LaunchSpec spec = service.desktopLaunch(
         QStringLiteral("org.example.Editor.desktop"),
         {first, second});
@@ -131,16 +130,16 @@ void LaunchServiceTest::forwardsTargetsThroughAstreaLaunchToFinalArgv()
 
 void LaunchServiceTest::buildsWindowsLaunchArgv()
 {
-    LaunchService service(QStringLiteral("launcher"), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral("launcher"));
 
     const LaunchSpec spec = service.windowsLaunch(QStringLiteral("/tmp/Game Folder/game.exe"));
-    QCOMPARE(spec.program, QStringLiteral("windows-run"));
-    QCOMPARE(spec.arguments, QStringList({QStringLiteral("--json"), QStringLiteral("/tmp/Game Folder/game.exe")}));
+    QCOMPARE(spec.program, QStringLiteral("launcher"));
+    QCOMPARE(spec.arguments, QStringList({QStringLiteral("--windows"), QStringLiteral("/tmp/Game Folder/game.exe")}));
 }
 
 void LaunchServiceTest::preservesShellCharactersAsOneArgument()
 {
-    LaunchService service(QStringLiteral("launcher"), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral("launcher"));
     const QString path = QStringLiteral("/tmp/space;$(touch SHOULD_NOT_RUN)-ç.txt");
 
     const LaunchSpec spec = service.fileLaunch(path);
@@ -150,7 +149,7 @@ void LaunchServiceTest::preservesShellCharactersAsOneArgument()
 
 void LaunchServiceTest::rejectsEmptyLaunchPaths()
 {
-    LaunchService service(QStringLiteral("launcher"), QStringLiteral("windows-run"));
+    LaunchService service(QStringLiteral("launcher"));
 
     QVERIFY(!service.fileLaunch(QString()).isValid());
     QVERIFY(!service.desktopLaunch(QString()).isValid());
@@ -161,8 +160,7 @@ void LaunchServiceTest::rejectsEmptyLaunchPaths()
 void LaunchServiceTest::rejectsMissingAbsoluteLauncherAtLaunchTime()
 {
     LaunchService service(
-        QStringLiteral("/path/that/does/not/exist/astrea-launch"),
-        QStringLiteral("/path/that/does/not/exist/windows-run"));
+        QStringLiteral("/path/that/does/not/exist/astrea-launch"));
 
     const LaunchResult result = service.launch(
         service.fileLaunch(QStringLiteral("/tmp/example.txt")));

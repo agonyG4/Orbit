@@ -343,7 +343,6 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"helperPath", "QString", false},
         {"wallpaperManagerPath", "QString", false},
         {"astreaLaunch", "QString", false},
-        {"windowsRun", "QString", false},
         {"networkRootPath", "QString", false},
         {"trashFilesPath", "QString", false},
         {"trashInfoPath", "QString", false},
@@ -623,7 +622,6 @@ void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
     runtimePaths.backendProgram = QStringLiteral("/fixture/astrea/backend");
     runtimePaths.helperProgram.clear();
     runtimePaths.launcherProgram = QStringLiteral("/fixture/astrea/astrea-launch");
-    runtimePaths.windowsRunnerProgram = QStringLiteral("/fixture/astrea/windows-run");
 
     ExplorerSettingsController settingsController(nullptr);
     AppStateFacade facade(facadeDependencies(fixture, &settingsController, nullptr, nullptr, nullptr, nullptr,
@@ -634,7 +632,6 @@ void AppStateFacadeTest::exposesResolverAndDialogCompatibility()
     QCOMPARE(facade.backendPath(), runtimePaths.backendProgram);
     QCOMPARE(facade.helperPath(), QString());
     QCOMPARE(facade.astreaLaunch(), runtimePaths.launcherProgram);
-    QCOMPARE(facade.windowsRun(), runtimePaths.windowsRunnerProgram);
     QCOMPARE(facade.recentVirtualPath(), QStringLiteral("recent://"));
     QVERIFY(facade.trashFilesPath().endsWith(QStringLiteral("/.local/share/Trash/files")));
 
