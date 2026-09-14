@@ -233,7 +233,6 @@ where
     let mut directories = Vec::new();
     let mut root_directories = HashSet::new();
     let mut counted_file_roots = HashSet::new();
-    let mut root_metadata = Vec::new();
     let mount_profile = options
         .mount_profile
         .as_ref()
@@ -242,48 +241,52 @@ where
     let mut last_emit = Instant::now() - options.progress_interval;
     let mut last_count = 0;
 
-    for path in paths {
+    let mut candidates = paths.to_vec();
+    candidates.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    candidates.dedup();
+
+    let mut covering_roots = Vec::new();
+    let mut effective_root_metadata = Vec::new();
+    for path in candidates {
+        if covering_roots
+            .iter()
+            .any(|root: &PathBuf| path != *root && path.starts_with(root))
+        {
+            continue;
+        }
         if options.is_cancelled(result.scanned_entry_count) {
             result.state = MetricsState::Cancelled;
             result.error_code = "cancelled".to_string();
             result.error_message = "directory metrics cancelled".to_string();
             return result;
         }
-        if mount_profile.path_uses_remote_listing(path) {
+        if mount_profile.path_uses_remote_listing(&path) {
             result.unreadable_count = result.unreadable_count.saturating_add(1);
             result.error_code = "unsupported_remote".to_string();
             result.error_message =
                 "recursive metrics are not supported for remote or virtual paths".to_string();
+            covering_roots.push(path);
             continue;
         }
-        let metadata = match root_path_metadata(path, &options) {
+        let metadata = match root_path_metadata(&path, &options) {
             Ok(metadata) => metadata,
             Err(error) => return error,
         };
         if let Err(message) = increment_scanned(&mut result) {
             return failed_result("count_overflow", message);
         }
-        root_metadata.push((path.clone(), metadata));
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            covering_roots.push(path.clone());
+        }
+        effective_root_metadata.push((path, metadata));
     }
 
-    let root_directory_paths = root_metadata
-        .iter()
-        .filter(|(_, metadata)| metadata.is_dir() && !metadata.file_type().is_symlink())
-        .map(|(path, _)| path)
-        .collect::<Vec<_>>();
-
-    let effective_root_metadata = root_metadata
-        .iter()
-        .filter(|(path, metadata)| {
-            !metadata.is_dir()
-                || metadata.file_type().is_symlink()
-                || !root_directory_paths.iter().any(|directory| {
-                    path.as_path() != directory.as_path() && path.starts_with(directory)
-                })
-        })
-        .collect::<Vec<_>>();
-
-    for (path, metadata) in effective_root_metadata {
+    for (path, metadata) in &effective_root_metadata {
         if options.is_cancelled(result.scanned_entry_count) {
             result.state = MetricsState::Cancelled;
             result.error_code = "cancelled".to_string();
@@ -293,11 +296,6 @@ where
 
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             if !counted_file_roots.insert(path.clone()) {
-                continue;
-            }
-            if root_directory_paths.iter().any(|directory| {
-                path.as_path() != directory.as_path() && path.starts_with(directory)
-            }) {
                 continue;
             }
             if let Err(message) = add_entry(&mut result, metadata.len(), false) {
@@ -378,6 +376,23 @@ where
                 }
             };
             let path = entry.path();
+            if mount_profile.path_uses_remote_listing(&path) {
+                result.unreadable_count = result.unreadable_count.saturating_add(1);
+                result.error_code = "unsupported_remote".to_string();
+                result.error_message =
+                    "recursive metrics are not supported for remote or virtual paths".to_string();
+                if let Err(message) = add_entry(&mut result, 0, true) {
+                    return failed_result("count_overflow", message);
+                }
+                emit_progress_if_due(
+                    &result,
+                    &options,
+                    &mut last_emit,
+                    &mut last_count,
+                    &mut emit,
+                );
+                continue;
+            }
             if options.unreadable_paths.contains(&path) {
                 result.unreadable_count = result.unreadable_count.saturating_add(1);
                 result.error_code = "unreadable".to_string();
@@ -407,27 +422,6 @@ where
                     continue;
                 }
             };
-
-            if !metadata.file_type().is_symlink()
-                && metadata.is_dir()
-                && mount_profile.path_uses_remote_listing(&path)
-            {
-                result.unreadable_count = result.unreadable_count.saturating_add(1);
-                result.error_code = "unsupported_remote".to_string();
-                result.error_message =
-                    "recursive metrics are not supported for remote or virtual paths".to_string();
-                if let Err(message) = add_entry(&mut result, 0, true) {
-                    return failed_result("count_overflow", message);
-                }
-                emit_progress_if_due(
-                    &result,
-                    &options,
-                    &mut last_emit,
-                    &mut last_count,
-                    &mut emit,
-                );
-                continue;
-            }
 
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 if let Err(message) = add_entry(&mut result, metadata.len(), false) {
@@ -699,6 +693,118 @@ mod tests {
         );
 
         assert_eq!(result.directory_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unrelated_file_roots_are_each_counted() {
+        let root = test_root("file-roots");
+        let first = root.join("first");
+        let second = root.join("second");
+        write_file(&first, b"first");
+        write_file(&second, b"second");
+
+        let result = scan_paths(
+            &[first.clone(), second.clone()],
+            ScanOptions::default(),
+            |_| {},
+        );
+
+        assert_eq!(result.state, MetricsState::Success);
+        assert_eq!(result.bytes, 11);
+        assert_eq!(result.file_count, 2);
+        assert_eq!(result.directory_count, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parent_absorbs_missing_descendant_before_root_metadata() {
+        let root = test_root("absorbed-missing");
+        let missing = root.join("missing");
+
+        let result = scan_paths(&[missing, root.clone()], ScanOptions::default(), |_| {});
+
+        assert_eq!(result.state, MetricsState::Success);
+        assert_eq!(result.bytes, 0);
+        assert_eq!(result.file_count, 0);
+        assert_eq!(result.directory_count, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parent_and_nested_remote_root_are_accounted_once() {
+        let root = test_root("absorbed-remote");
+        let remote = root.join("nas");
+        fs::create_dir(&remote).expect("create remote mount point");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - nfs server:/export rw\n",
+            remote.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[remote, root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.unreadable_count, 1);
+        assert_eq!(result.directory_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parent_and_nested_remote_root_in_reversed_order_match_parent_first() {
+        let root = test_root("absorbed-remote-reversed");
+        let remote = root.join("nas");
+        fs::create_dir(&remote).expect("create remote mount point");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - nfs server:/export rw\n",
+            remote.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let reversed = scan_paths(&[remote.clone(), root.clone()], options.clone(), |_| {});
+        let parent_first = scan_paths(&[root.clone(), remote], options, |_| {});
+
+        assert_eq!(reversed, parent_first);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn duplicate_direct_remote_roots_do_not_multiply_unsupported_accounting() {
+        let root = test_root("duplicate-remote");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - cifs //server/share rw\n",
+            root.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[root.clone(), root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.unreadable_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_boundary_is_classified_before_metadata_failure_seam() {
+        let root = test_root("remote-before-metadata");
+        let remote = root.join("nas");
+        fs::create_dir(&remote).expect("create remote mount point");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - sshfs user@host:/export rw\n",
+            remote.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+        options.unreadable_paths.insert(remote.clone());
+
+        let result = scan_paths(&[root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.error_code, "unsupported_remote");
+        assert_eq!(result.unreadable_count, 1);
         let _ = fs::remove_dir_all(root);
     }
 

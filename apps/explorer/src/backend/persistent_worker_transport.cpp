@@ -236,9 +236,8 @@ void PersistentWorkerTransport::handleReadyRead()
         if (response.value(QStringLiteral("ok")).toBool(false)) {
             const QByteArray payload = response.value(QStringLiteral("payload")).toString().toUtf8();
             if (pending.retainOnlyLastStreamedPayload) {
-                if (!payload.isEmpty()) {
-                    pending.streamedPayload = payload;
-                }
+                emitCompleted(requestId, payload);
+                continue;
             } else {
                 pending.streamedPayload.append(payload);
             }

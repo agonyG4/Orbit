@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_REQUEST_LINE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 3 * 1024 * 1024;
+const MAX_DIRECTORY_METRICS_EVENT_BYTES: usize = 64 * 1024;
+const DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY: usize = 32;
 const CANCEL_OPERATION: &str = "cancel";
 const COOPERATIVE_CANCEL_WAIT_STEPS: usize = 500;
 const MAX_STDIN_PAYLOAD_BYTES: usize = 64 * 1024;
@@ -53,6 +55,13 @@ enum Incoming {
 struct CapturedStream {
     bytes: Vec<u8>,
     exceeded: bool,
+    protocol_error: bool,
+    terminal_seen: bool,
+}
+
+enum StreamSender {
+    Lossless(Sender<io::Result<Vec<u8>>>),
+    Bounded(mpsc::SyncSender<io::Result<Vec<u8>>>),
 }
 
 #[derive(Clone, Copy)]
@@ -260,7 +269,16 @@ fn spawn_request(
         Err(error) => return Err((request, format!("run backend operation: {error}"))),
     };
 
-    let (stdout_sender, stdout_lines) = mpsc::channel();
+    let (stdout_sender, stdout_lines) = match stream_capture {
+        StreamCapture::All => {
+            let (sender, receiver) = mpsc::channel();
+            (StreamSender::Lossless(sender), receiver)
+        }
+        StreamCapture::LastLine => {
+            let (sender, receiver) = mpsc::sync_channel(DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+            (StreamSender::Bounded(sender), receiver)
+        }
+    };
     let stdout = match child.stdout.take() {
         Some(stream) => {
             thread::spawn(move || read_stream_lines(stream, stdout_sender, stream_capture))
@@ -319,48 +337,133 @@ fn spawn_request(
 
 fn read_stream_lines(
     stream: impl Read,
-    sender: Sender<io::Result<Vec<u8>>>,
+    sender: StreamSender,
     capture: StreamCapture,
 ) -> io::Result<CapturedStream> {
     let mut reader = BufReader::new(stream);
-    let mut captured = Vec::new();
-    let mut exceeded = false;
-    let mut line = Vec::new();
+    let mut captured = CapturedStream {
+        bytes: Vec::new(),
+        exceeded: false,
+        protocol_error: false,
+        terminal_seen: false,
+    };
     loop {
-        line.clear();
-        let count = reader.read_until(b'\n', &mut line)?;
-        if count == 0 {
-            break;
-        }
+        let line = match capture {
+            StreamCapture::All => {
+                let mut line = Vec::new();
+                let count = reader.read_until(b'\n', &mut line)?;
+                if count == 0 {
+                    break;
+                }
+                line
+            }
+            StreamCapture::LastLine => {
+                match read_bounded_line(&mut reader, MAX_DIRECTORY_METRICS_EVENT_BYTES) {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
+                    Err(_) => {
+                        captured.exceeded = true;
+                        break;
+                    }
+                }
+            }
+        };
+        let count = line.len();
         match capture {
             StreamCapture::All => {
-                if captured.len() < MAX_STREAM_BYTES {
-                    let remaining = MAX_STREAM_BYTES - captured.len();
-                    captured.extend_from_slice(&line[..count.min(remaining)]);
+                if captured.bytes.len() < MAX_STREAM_BYTES {
+                    let remaining = MAX_STREAM_BYTES - captured.bytes.len();
+                    captured
+                        .bytes
+                        .extend_from_slice(&line[..count.min(remaining)]);
                 }
-                if captured.len() >= MAX_STREAM_BYTES
-                    && count > MAX_STREAM_BYTES.saturating_sub(captured.len())
+                if captured.bytes.len() >= MAX_STREAM_BYTES
+                    && count > MAX_STREAM_BYTES.saturating_sub(captured.bytes.len())
                 {
-                    exceeded = true;
+                    captured.exceeded = true;
                 }
             }
             StreamCapture::LastLine => {
-                if count > MAX_STREAM_BYTES {
-                    exceeded = true;
-                } else {
-                    captured.clear();
-                    captured.extend_from_slice(&line);
-                }
+                capture_directory_metrics_event(&mut captured, &line);
             }
         }
-        if sender.send(Ok(line.clone())).is_err() {
+        if !send_stream_line(&sender, line) {
             break;
         }
     }
-    Ok(CapturedStream {
-        bytes: captured,
-        exceeded,
-    })
+    Ok(captured)
+}
+
+fn capture_directory_metrics_event(captured: &mut CapturedStream, line: &[u8]) {
+    let value = match serde_json::from_slice::<serde_json::Value>(line) {
+        Ok(value) => value,
+        Err(_) => {
+            captured.protocol_error = true;
+            return;
+        }
+    };
+    let Some(object) = value.as_object() else {
+        captured.protocol_error = true;
+        return;
+    };
+    let event = object.get("event").and_then(serde_json::Value::as_str);
+    let operation = object.get("operation").and_then(serde_json::Value::as_str);
+    let is_progress = event == Some("progress") && operation == Some("directory-metrics");
+    let is_terminal = event == Some("result") && operation == Some("directory-metrics");
+    if captured.terminal_seen || (!is_progress && !is_terminal) {
+        captured.protocol_error = true;
+    }
+    if is_terminal && !captured.terminal_seen {
+        captured.terminal_seen = true;
+        captured.bytes.clear();
+        captured.bytes.extend_from_slice(line);
+    }
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::with_capacity(max_bytes.min(8192));
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(line))
+            };
+        }
+
+        let chunk_length = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buffer.len(), |position| position + 1);
+        let line_length = line
+            .len()
+            .checked_add(chunk_length)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "event line is too large"))?;
+        if line_length > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "event line exceeds its limit",
+            ));
+        }
+
+        let ends_line = buffer[chunk_length - 1] == b'\n';
+        line.extend_from_slice(&buffer[..chunk_length]);
+        reader.consume(chunk_length);
+        if ends_line {
+            return Ok(Some(line));
+        }
+    }
+}
+
+fn send_stream_line(sender: &StreamSender, line: Vec<u8>) -> bool {
+    match sender {
+        StreamSender::Lossless(sender) => sender.send(Ok(line)).is_ok(),
+        StreamSender::Bounded(sender) => match sender.try_send(Ok(line)) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
+            Err(mpsc::TrySendError::Disconnected(_)) => false,
+        },
+    }
 }
 
 fn drain_stdout_lines(active: &mut ActiveRequest, stdout: &mut impl Write) -> Result<(), String> {
@@ -390,7 +493,12 @@ fn read_stream(mut stream: impl Read) -> io::Result<CapturedStream> {
             exceeded = true;
         }
     }
-    Ok(CapturedStream { bytes, exceeded })
+    Ok(CapturedStream {
+        bytes,
+        exceeded,
+        protocol_error: false,
+        terminal_seen: false,
+    })
 }
 
 fn write_finished_response(
@@ -432,14 +540,23 @@ fn write_finished_response(
             "backend operation output exceeded the worker limit".into(),
         );
     }
+    if captured_stdout.protocol_error {
+        return write_error_response(
+            stdout,
+            request.id,
+            "protocol_error",
+            "directory metrics emitted an invalid event sequence".into(),
+        );
+    }
     if status.success() {
+        let payload = completion_payload(&request, &captured_stdout);
         return write_response(
             stdout,
             Response {
                 version: 1,
                 id: request.id,
                 ok: true,
-                payload: None,
+                payload,
                 error_code: None,
                 error: None,
                 stream: None,
@@ -456,6 +573,16 @@ fn write_finished_response(
             .trim()
             .to_string(),
     )
+}
+
+fn completion_payload(request: &Request, captured_stdout: &CapturedStream) -> Option<String> {
+    if request.arguments.first().map(String::as_str) != Some("directory-metrics")
+        || captured_stdout.protocol_error
+        || !captured_stdout.terminal_seen
+    {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&captured_stdout.bytes).into_owned())
 }
 
 fn terminate_request(active: ActiveRequest) {
@@ -547,6 +674,28 @@ fn write_response(stdout: &mut impl Write, response: Response) -> Result<(), Str
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    struct CountingReader {
+        bytes: Vec<u8>,
+        offset: usize,
+        bytes_read: Arc<AtomicUsize>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let remaining = self.bytes.len().saturating_sub(self.offset);
+            let count = remaining.min(buffer.len());
+            if count == 0 {
+                return Ok(0);
+            }
+            buffer[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            self.bytes_read.fetch_add(count, Ordering::Relaxed);
+            Ok(count)
+        }
+    }
 
     #[test]
     fn directory_metrics_progress_does_not_fill_terminal_capture() {
@@ -561,12 +710,123 @@ mod tests {
         input.extend_from_slice(terminal_line);
         assert!(input.len() > MAX_STREAM_BYTES);
 
-        let (sender, receiver) = mpsc::channel();
-        let captured = read_stream_lines(Cursor::new(input), sender, StreamCapture::LastLine)
-            .expect("read streamed directory metrics");
+        let (sender, receiver) = mpsc::sync_channel(DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+        let captured = read_stream_lines(
+            Cursor::new(input),
+            StreamSender::Bounded(sender),
+            StreamCapture::LastLine,
+        )
+        .expect("read streamed directory metrics");
 
         assert!(!captured.exceeded);
         assert_eq!(captured.bytes, terminal_line);
-        assert_eq!(receiver.iter().count(), 40_001);
+        assert!(receiver.iter().count() <= DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn directory_metrics_event_line_is_rejected_before_unbounded_allocation() {
+        let bytes_read = Arc::new(AtomicUsize::new(0));
+        let reader = CountingReader {
+            bytes: vec![b'x'; MAX_DIRECTORY_METRICS_EVENT_BYTES * 4],
+            offset: 0,
+            bytes_read: Arc::clone(&bytes_read),
+        };
+        let (sender, _receiver) = mpsc::sync_channel(DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+
+        let captured = read_stream_lines(
+            reader,
+            StreamSender::Bounded(sender),
+            StreamCapture::LastLine,
+        )
+        .expect("bounded event reader should return a capture result");
+
+        assert!(captured.exceeded);
+        assert!(bytes_read.load(Ordering::Relaxed) <= MAX_DIRECTORY_METRICS_EVENT_BYTES + 8192);
+    }
+
+    #[test]
+    fn directory_metrics_completion_uses_captured_terminal_record() {
+        let request = Request {
+            version: 1,
+            id: "metrics".into(),
+            arguments: vec!["directory-metrics".into()],
+            stdin_payload: None,
+        };
+        let captured_stdout = CapturedStream {
+            bytes: br#"{"event":"result","operation":"directory-metrics","state":"success"}
+"#
+            .to_vec(),
+            exceeded: false,
+            protocol_error: false,
+            terminal_seen: true,
+        };
+
+        assert_eq!(
+            completion_payload(&request, &captured_stdout),
+            Some(String::from_utf8_lossy(&captured_stdout.bytes).into_owned())
+        );
+    }
+
+    #[test]
+    fn ordinary_completion_does_not_retain_stdout_as_payload() {
+        let request = Request {
+            version: 1,
+            id: "list".into(),
+            arguments: vec!["list".into()],
+            stdin_payload: None,
+        };
+        let captured_stdout = CapturedStream {
+            bytes: b"ordinary output".to_vec(),
+            exceeded: false,
+            protocol_error: false,
+            terminal_seen: false,
+        };
+
+        assert_eq!(completion_payload(&request, &captured_stdout), None);
+    }
+
+    #[test]
+    fn directory_metrics_missing_terminal_has_no_completion_payload() {
+        let progress_line =
+            br#"{"event":"progress","operation":"directory-metrics","state":"running"}
+"#;
+        let (sender, _receiver) = mpsc::sync_channel(DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+        let captured = read_stream_lines(
+            Cursor::new(progress_line),
+            StreamSender::Bounded(sender),
+            StreamCapture::LastLine,
+        )
+        .expect("read progress-only metrics output");
+        let request = Request {
+            version: 1,
+            id: "metrics".into(),
+            arguments: vec!["directory-metrics".into()],
+            stdin_payload: None,
+        };
+
+        assert!(captured.bytes.is_empty());
+        assert_eq!(completion_payload(&request, &captured), None);
+    }
+
+    #[test]
+    fn directory_metrics_malformed_or_late_events_mark_capture_invalid() {
+        let terminal_line =
+            br#"{"event":"result","operation":"directory-metrics","state":"success"}
+"#;
+        let late_line = br#"{"event":"progress","operation":"directory-metrics","state":"running"}
+"#;
+        let mut input = b"not json\n".to_vec();
+        input.extend_from_slice(terminal_line);
+        input.extend_from_slice(late_line);
+        let (sender, _receiver) = mpsc::sync_channel(DIRECTORY_METRICS_PROGRESS_QUEUE_CAPACITY);
+
+        let captured = read_stream_lines(
+            Cursor::new(input),
+            StreamSender::Bounded(sender),
+            StreamCapture::LastLine,
+        )
+        .expect("read invalid metrics output");
+
+        assert!(captured.protocol_error);
     }
 }

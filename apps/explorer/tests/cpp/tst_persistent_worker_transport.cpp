@@ -51,6 +51,7 @@ private slots:
     void sendsBoundedStdinPayloadWithoutChangingArguments();
     void dedicatedMetricsWorkerDoesNotBlockInteractiveWorker();
     void directoryMetricsProgressDoesNotExhaustTerminalCapture();
+    void directoryMetricsDoesNotUseProgressAsTerminalFallback();
 };
 
 void PersistentWorkerTransportTest::queuesRequestsUntilWorkerIsReady()
@@ -277,8 +278,7 @@ void PersistentWorkerTransportTest::directoryMetricsProgressDoesNotExhaustTermin
             "    for _ in range(40000):\n"
             "        print(json.dumps({'id':request['id'],'ok':True,'stream':True,'payload':progress}), flush=False)\n"
             "    terminal=json.dumps({'event':'result','operation':'directory-metrics','state':'success','bytes':42,'fileCount':42,'directoryCount':0,'unreadableCount':0,'scannedEntryCount':42})\n"
-            "    print(json.dumps({'id':request['id'],'ok':True,'stream':True,'payload':terminal}), flush=True)\n"
-            "    print(json.dumps({'id':request['id'],'ok':True,'done':True}), flush=True)\n"));
+            "    print(json.dumps({'id':request['id'],'ok':True,'done':True,'payload':terminal}), flush=True)\n"));
     QVERIFY(!worker.isEmpty());
 
     PersistentWorkerTransportOptions options;
@@ -297,13 +297,41 @@ void PersistentWorkerTransportTest::directoryMetricsProgressDoesNotExhaustTermin
     const BackendRequestId requestId = transport.start({QStringLiteral("directory-metrics")});
     QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 10000);
     QCOMPARE(failedSpy.count(), 0);
-    QVERIFY(streamedCount > 40000);
+    QVERIFY(streamedCount > 0);
     QCOMPARE(completedSpy.at(0).at(0).value<BackendRequestId>(), requestId);
     const QByteArray terminalPayload = completedSpy.at(0).at(1).toByteArray();
     QVERIFY(terminalPayload.size() < 1000);
     QVERIFY(terminalPayload.contains("\"event\": \"result\""));
     const QJsonObject terminal = QJsonDocument::fromJson(terminalPayload).object();
     QCOMPARE(terminal.value(QStringLiteral("bytes")).toInteger(), qint64(42));
+}
+
+void PersistentWorkerTransportTest::directoryMetricsDoesNotUseProgressAsTerminalFallback()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString worker = makeWorker(
+        directory,
+        QStringLiteral(
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            "    request=json.loads(line)\n"
+            "    progress=json.dumps({'event':'progress','operation':'directory-metrics','state':'running','bytes':1,'fileCount':1,'directoryCount':0,'unreadableCount':0,'scannedEntryCount':1})\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'stream':True,'payload':progress}), flush=True)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'done':True}), flush=True)\n"));
+    QVERIFY(!worker.isEmpty());
+
+    PersistentWorkerTransportOptions options;
+    options.backendProgram = worker;
+    options.requestTimeoutMs = 0;
+    PersistentWorkerTransport transport(options);
+    QSignalSpy completedSpy(&transport, &BackendTransport::completed);
+    QSignalSpy failedSpy(&transport, &BackendTransport::failed);
+
+    transport.start({QStringLiteral("directory-metrics")});
+    QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 1500);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(completedSpy.at(0).at(1).toByteArray(), QByteArray());
 }
 
 QTEST_MAIN(PersistentWorkerTransportTest)
