@@ -8,6 +8,8 @@ QtObject {
     id: state
 
     signal openWithReady(string path, var applications)
+    signal directoryMetricsUpdated(int requestId)
+    signal directoryMetricsSuperseded(int requestId)
 
     readonly property QtObject nativeAppState: NativeAppState
     readonly property bool isPortalDialog: nativeAppState.isPortalDialog
@@ -231,6 +233,12 @@ QtObject {
         }
         function onOpenWithReady(path, applications) {
             state.openWithReady(path, applications)
+        }
+        function onDirectoryMetricsUpdated(requestId) {
+            state.directoryMetricsUpdated(requestId)
+        }
+        function onDirectoryMetricsSuperseded(requestId) {
+            state.directoryMetricsSuperseded(requestId)
         }
     }
 

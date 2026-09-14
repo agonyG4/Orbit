@@ -52,6 +52,9 @@ private slots:
     void retainsSelectionWhenDeleteFails();
     void routesWindowsExtensionsThroughAsyncController();
     void routesDirectoryMetricsThroughDedicatedService();
+    void forwardsEveryDirectoryMetricsProgressUpdate();
+    void exposesSupersededDirectoryMetricsRequest();
+    void reportsDirectoryMetricsStartFailureImmediately();
 };
 
 struct FacadeFixture
@@ -638,6 +641,8 @@ void AppStateFacadeTest::locksPublicQmlContract()
              "wallpaperStateChanged()",
              "windowsLaunchStateChanged()",
              "directoryMetricsStateChanged()",
+             "directoryMetricsUpdated(quint64)",
+             "directoryMetricsSuperseded(quint64)",
              "iconThemeChanged()",
              "filesystemActionFinished(quint64,QString,bool,QVariantMap,QString)",
          }) {
@@ -788,6 +793,60 @@ void AppStateFacadeTest::routesDirectoryMetricsThroughDedicatedService()
     QVERIFY(fixture.client.cancelledRequests().contains(third));
     fixture.client.failRequest(third, QStringLiteral("cancelled"), QStringLiteral("request cancelled"));
     QTRY_COMPARE(facade.directoryMetricsState(), QStringLiteral("cancelled"));
+    QCOMPARE(facade.directoryMetricsRunning(), false);
+}
+
+void AppStateFacadeTest::forwardsEveryDirectoryMetricsProgressUpdate()
+{
+    FacadeFixture fixture;
+    DirectoryMetricsService metrics(&fixture.client);
+    AppStateFacade facade(facadeDependencies(fixture, nullptr, nullptr, nullptr, nullptr,
+                                              nullptr, nullptr, nullptr, nullptr, nullptr,
+                                              nullptr, nullptr, nullptr, {}, nullptr, &metrics));
+    QSignalSpy updatesSpy(&facade, &AppStateFacade::directoryMetricsUpdated);
+
+    const BackendRequestId requestId = facade.requestDirectoryMetrics({QStringLiteral("/fixture")});
+    DirectoryMetricsProgress first;
+    first.state = QStringLiteral("running");
+    first.bytes = 10;
+    fixture.client.completeDirectoryMetricsProgress(requestId, first);
+    DirectoryMetricsProgress second = first;
+    second.bytes = 20;
+    fixture.client.completeDirectoryMetricsProgress(requestId, second);
+
+    QTRY_VERIFY_WITH_TIMEOUT(updatesSpy.count() >= 2, 1000);
+    QCOMPARE(facade.directoryMetricsBytes(), qint64(20));
+    QCOMPARE(updatesSpy.at(updatesSpy.count() - 1).at(0).value<BackendRequestId>(), requestId);
+}
+
+void AppStateFacadeTest::exposesSupersededDirectoryMetricsRequest()
+{
+    FacadeFixture fixture;
+    DirectoryMetricsService metrics(&fixture.client);
+    AppStateFacade facade(facadeDependencies(fixture, nullptr, nullptr, nullptr, nullptr,
+                                              nullptr, nullptr, nullptr, nullptr, nullptr,
+                                              nullptr, nullptr, nullptr, {}, nullptr, &metrics));
+    QSignalSpy supersededSpy(&facade, &AppStateFacade::directoryMetricsSuperseded);
+
+    const BackendRequestId first = facade.requestDirectoryMetrics({QStringLiteral("/fixture/A")});
+    const BackendRequestId second = facade.requestDirectoryMetrics({QStringLiteral("/fixture/B")});
+
+    QVERIFY(second != first);
+    QTRY_COMPARE_WITH_TIMEOUT(supersededSpy.count(), 1, 1000);
+    QCOMPARE(supersededSpy.at(0).at(0).value<BackendRequestId>(), first);
+    QCOMPARE(facade.directoryMetricsRequestId(), quint64(second));
+}
+
+void AppStateFacadeTest::reportsDirectoryMetricsStartFailureImmediately()
+{
+    FacadeFixture fixture;
+    AppStateFacade facade(&fixture.navigation, &fixture.selection, &fixture.model);
+
+    const BackendRequestId requestId = facade.requestDirectoryMetrics({QStringLiteral("/fixture")});
+
+    QCOMPARE(requestId, BackendRequestId(0));
+    QCOMPARE(facade.directoryMetricsState(), QStringLiteral("failed"));
+    QVERIFY(!facade.directoryMetricsError().isEmpty());
     QCOMPARE(facade.directoryMetricsRunning(), false);
 }
 

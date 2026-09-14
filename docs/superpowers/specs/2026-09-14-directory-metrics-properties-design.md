@@ -88,4 +88,3 @@ coalescing. Native tests cover request encoding, decoding, service lifecycle,
 stale-result filtering, cancellation, and two-worker responsiveness. QML/source
 tests cover both Properties surfaces, multi-selection, partial display, close
 cancellation, and the invariant that listing does not request metrics.
-

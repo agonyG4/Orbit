@@ -39,6 +39,7 @@
     "apps.explorer.properties.text.calculating": "Calculating…",
     "apps.explorer.properties.text.files_and_folders": "%1 files, %2 folders",
     "apps.explorer.properties.text.metrics_failed": "Could not calculate folder size.",
+    "apps.explorer.properties.text.metrics_replaced": "Calculation replaced.",
     "apps.explorer.properties.text.multiple_items": "Multiple items",
     "apps.explorer.properties.text.some_items_unreadable": "Some items could not be read.",
     "apps.explorer.components.layout.preview_panel.label.criado": "Created",

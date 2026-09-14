@@ -55,6 +55,12 @@ struct CapturedStream {
     exceeded: bool,
 }
 
+#[derive(Clone, Copy)]
+enum StreamCapture {
+    All,
+    LastLine,
+}
+
 struct ActiveRequest {
     request: Request,
     child: Child,
@@ -227,6 +233,12 @@ fn spawn_request(
 ) -> Result<ActiveRequest, (Request, String)> {
     let cancel_file = cancellation_marker_path();
     let stdin_payload = request.stdin_payload.clone();
+    let stream_capture =
+        if request.arguments.first().map(String::as_str) == Some("directory-metrics") {
+            StreamCapture::LastLine
+        } else {
+            StreamCapture::All
+        };
     let mut command = Command::new(executable);
     command
         .args(&request.arguments)
@@ -250,7 +262,9 @@ fn spawn_request(
 
     let (stdout_sender, stdout_lines) = mpsc::channel();
     let stdout = match child.stdout.take() {
-        Some(stream) => thread::spawn(move || read_stream_lines(stream, stdout_sender)),
+        Some(stream) => {
+            thread::spawn(move || read_stream_lines(stream, stdout_sender, stream_capture))
+        }
         None => {
             let _ = child.kill();
             let _ = child.wait();
@@ -306,6 +320,7 @@ fn spawn_request(
 fn read_stream_lines(
     stream: impl Read,
     sender: Sender<io::Result<Vec<u8>>>,
+    capture: StreamCapture,
 ) -> io::Result<CapturedStream> {
     let mut reader = BufReader::new(stream);
     let mut captured = Vec::new();
@@ -317,14 +332,26 @@ fn read_stream_lines(
         if count == 0 {
             break;
         }
-        if captured.len() < MAX_STREAM_BYTES {
-            let remaining = MAX_STREAM_BYTES - captured.len();
-            captured.extend_from_slice(&line[..count.min(remaining)]);
-        }
-        if captured.len() >= MAX_STREAM_BYTES
-            && count > MAX_STREAM_BYTES.saturating_sub(captured.len())
-        {
-            exceeded = true;
+        match capture {
+            StreamCapture::All => {
+                if captured.len() < MAX_STREAM_BYTES {
+                    let remaining = MAX_STREAM_BYTES - captured.len();
+                    captured.extend_from_slice(&line[..count.min(remaining)]);
+                }
+                if captured.len() >= MAX_STREAM_BYTES
+                    && count > MAX_STREAM_BYTES.saturating_sub(captured.len())
+                {
+                    exceeded = true;
+                }
+            }
+            StreamCapture::LastLine => {
+                if count > MAX_STREAM_BYTES {
+                    exceeded = true;
+                } else {
+                    captured.clear();
+                    captured.extend_from_slice(&line);
+                }
+            }
         }
         if sender.send(Ok(line.clone())).is_err() {
             break;
@@ -514,4 +541,32 @@ fn write_response(stdout: &mut impl Write, response: Response) -> Result<(), Str
     serde_json::to_writer(&mut *stdout, &response).map_err(|error| error.to_string())?;
     stdout.write_all(b"\n").map_err(|error| error.to_string())?;
     stdout.flush().map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn directory_metrics_progress_does_not_fill_terminal_capture() {
+        let progress_line = br#"{"event":"progress","operation":"directory-metrics","state":"running","bytes":1,"fileCount":1,"directoryCount":0,"unreadableCount":0,"scannedEntryCount":1}
+"#;
+        let terminal_line = br#"{"event":"result","operation":"directory-metrics","state":"success","bytes":42,"fileCount":42,"directoryCount":0,"unreadableCount":0,"scannedEntryCount":42}
+"#;
+        let mut input = Vec::new();
+        for _ in 0..40_000 {
+            input.extend_from_slice(progress_line);
+        }
+        input.extend_from_slice(terminal_line);
+        assert!(input.len() > MAX_STREAM_BYTES);
+
+        let (sender, receiver) = mpsc::channel();
+        let captured = read_stream_lines(Cursor::new(input), sender, StreamCapture::LastLine)
+            .expect("read streamed directory metrics");
+
+        assert!(!captured.exceeded);
+        assert_eq!(captured.bytes, terminal_line);
+        assert_eq!(receiver.iter().count(), 40_001);
+    }
 }

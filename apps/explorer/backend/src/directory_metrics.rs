@@ -65,6 +65,7 @@ pub struct ScanOptions {
     pub cancel_after_entries: Option<u64>,
     pub progress_every: u64,
     pub progress_interval: Duration,
+    pub(crate) mount_profile: Option<crate::entries::ListingProfileSnapshot>,
 }
 
 impl Default for ScanOptions {
@@ -75,6 +76,7 @@ impl Default for ScanOptions {
             cancel_after_entries: None,
             progress_every: DEFAULT_PROGRESS_EVERY,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            mount_profile: None,
         }
     }
 }
@@ -232,6 +234,11 @@ where
     let mut root_directories = HashSet::new();
     let mut counted_file_roots = HashSet::new();
     let mut root_metadata = Vec::new();
+    let mount_profile = options
+        .mount_profile
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(crate::entries::capture_listing_profile);
     let mut last_emit = Instant::now() - options.progress_interval;
     let mut last_count = 0;
 
@@ -242,7 +249,7 @@ where
             result.error_message = "directory metrics cancelled".to_string();
             return result;
         }
-        if crate::entries::path_uses_remote_listing(path) {
+        if mount_profile.path_uses_remote_listing(path) {
             result.unreadable_count = result.unreadable_count.saturating_add(1);
             result.error_code = "unsupported_remote".to_string();
             result.error_message =
@@ -265,7 +272,18 @@ where
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
-    for (path, metadata) in &root_metadata {
+    let effective_root_metadata = root_metadata
+        .iter()
+        .filter(|(path, metadata)| {
+            !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || !root_directory_paths.iter().any(|directory| {
+                    path.as_path() != directory.as_path() && path.starts_with(directory)
+                })
+        })
+        .collect::<Vec<_>>();
+
+    for (path, metadata) in effective_root_metadata {
         if options.is_cancelled(result.scanned_entry_count) {
             result.state = MetricsState::Cancelled;
             result.error_code = "cancelled".to_string();
@@ -301,9 +319,6 @@ where
         let identity = directory_identity(path);
         if !visited_directories.insert(identity) {
             continue;
-        }
-        if let Err(message) = add_entry(&mut result, 0, true) {
-            return failed_result("count_overflow", message);
         }
         root_directories.insert(path.clone());
         directories.push(path.clone());
@@ -392,6 +407,27 @@ where
                     continue;
                 }
             };
+
+            if !metadata.file_type().is_symlink()
+                && metadata.is_dir()
+                && mount_profile.path_uses_remote_listing(&path)
+            {
+                result.unreadable_count = result.unreadable_count.saturating_add(1);
+                result.error_code = "unsupported_remote".to_string();
+                result.error_message =
+                    "recursive metrics are not supported for remote or virtual paths".to_string();
+                if let Err(message) = add_entry(&mut result, 0, true) {
+                    return failed_result("count_overflow", message);
+                }
+                emit_progress_if_due(
+                    &result,
+                    &options,
+                    &mut last_emit,
+                    &mut last_count,
+                    &mut emit,
+                );
+                continue;
+            }
 
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 if let Err(message) = add_entry(&mut result, metadata.len(), false) {
@@ -511,13 +547,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_directory_has_zero_bytes_and_one_directory() {
+    fn empty_directory_has_zero_bytes_and_no_content_directories() {
         let root = test_root("empty");
         let result = scan_paths(&[root.clone()], ScanOptions::default(), |_| {});
         assert_eq!(result.state, MetricsState::Success);
         assert_eq!(result.bytes, 0);
         assert_eq!(result.file_count, 0);
-        assert_eq!(result.directory_count, 1);
+        assert_eq!(result.directory_count, 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -568,7 +604,7 @@ mod tests {
         assert_eq!(result.state, MetricsState::Success);
         assert_eq!(result.bytes, 12);
         assert_eq!(result.file_count, 3);
-        assert_eq!(result.directory_count, 2);
+        assert_eq!(result.directory_count, 1);
         assert_eq!(result.unreadable_count, 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -600,7 +636,7 @@ mod tests {
         assert_eq!(result.state, MetricsState::Success);
         assert_eq!(result.bytes, 4 + link_size);
         assert_eq!(result.file_count, 5);
-        assert_eq!(result.directory_count, 2);
+        assert_eq!(result.directory_count, 1);
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
     }
@@ -616,7 +652,7 @@ mod tests {
         assert_eq!(result.state, MetricsState::Success);
         assert_eq!(result.bytes, 5);
         assert_eq!(result.file_count, 1);
-        assert_eq!(result.directory_count, 2);
+        assert_eq!(result.directory_count, 1);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -632,7 +668,134 @@ mod tests {
         assert_eq!(result.state, MetricsState::Success);
         assert_eq!(result.bytes, 5);
         assert_eq!(result.file_count, 1);
+        assert_eq!(result.directory_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn two_nested_directories_count_only_descendant_directories() {
+        let root = test_root("two-nested-directories");
+        let first = root.join("first");
+        let second = first.join("second");
+        fs::create_dir(&first).expect("create first nested directory");
+        fs::create_dir(&second).expect("create second nested directory");
+        write_file(&second.join("file"), b"payload");
+
+        let result = scan_paths(&[root.clone()], ScanOptions::default(), |_| {});
+
         assert_eq!(result.directory_count, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn duplicate_directory_roots_are_counted_once_without_counting_roots() {
+        let root = test_root("duplicate-roots");
+        fs::create_dir(root.join("child")).expect("create child directory");
+
+        let result = scan_paths(
+            &[root.clone(), root.clone()],
+            ScanOptions::default(),
+            |_| {},
+        );
+
+        assert_eq!(result.directory_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_remote_mount_is_skipped_but_local_descendants_are_scanned() {
+        let root = test_root("nested-remote-mount");
+        let remote = root.join("nas");
+        let local = root.join("local");
+        fs::create_dir(&remote).expect("create remote mount point");
+        fs::create_dir(&local).expect("create local directory");
+        write_file(&remote.join("not-scanned"), b"remote");
+        write_file(&local.join("kept"), b"local");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - nfs server:/export rw\n",
+            remote.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.bytes, 5);
+        assert_eq!(result.file_count, 1);
+        assert_eq!(result.unreadable_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_remote_mount_filesystem_types_are_all_skipped() {
+        let root = test_root("nested-remote-types");
+        let local = root.join("local");
+        fs::create_dir(&local).expect("create local directory");
+        write_file(&local.join("kept"), b"local");
+        let remote_types = [("nfs", "nfs"), ("cifs", "cifs"), ("sshfs", "sshfs")];
+        let mut mountinfo = String::new();
+        for (index, (name, fs_type)) in remote_types.iter().enumerate() {
+            let mount = root.join(name);
+            fs::create_dir(&mount).expect("create remote mount point");
+            write_file(&mount.join("not-scanned"), b"remote");
+            mountinfo.push_str(&format!(
+                "{} 1 0:{} / {} rw,relatime - {} remote rw\n",
+                42 + index,
+                42 + index,
+                mount.display(),
+                fs_type
+            ));
+        }
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.bytes, 5);
+        assert_eq!(result.file_count, 1);
+        assert_eq!(result.unreadable_count, 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_nested_mount_remains_scannable() {
+        let root = test_root("nested-local-mount");
+        let mounted = root.join("external");
+        fs::create_dir(&mounted).expect("create local mount point");
+        write_file(&mounted.join("kept"), b"local");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - ext4 /dev/test rw\n",
+            mounted.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Success);
+        assert_eq!(result.bytes, 5);
+        assert_eq!(result.file_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn direct_remote_root_is_rejected_without_traversal() {
+        let root = test_root("direct-remote-root");
+        write_file(&root.join("not-scanned"), b"remote");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - cifs //server/share rw\n",
+            root.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let result = scan_paths(&[root.clone()], options, |_| {});
+
+        assert_eq!(result.state, MetricsState::Partial);
+        assert_eq!(result.bytes, 0);
+        assert_eq!(result.file_count, 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -651,7 +814,7 @@ mod tests {
         );
         assert_eq!(result.bytes, 10);
         assert_eq!(result.file_count, 2);
-        assert_eq!(result.directory_count, 3);
+        assert_eq!(result.directory_count, 1);
         let _ = fs::remove_dir_all(first);
         let _ = fs::remove_dir_all(second);
     }

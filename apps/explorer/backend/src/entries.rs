@@ -59,6 +59,22 @@ struct MountInfoEntry {
     fs_type: String,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ListingProfileSnapshot {
+    remote_prefixes: Vec<PathBuf>,
+    mounts: Vec<MountInfoEntry>,
+}
+
+impl ListingProfileSnapshot {
+    pub(crate) fn path_uses_remote_listing(&self, path: &Path) -> bool {
+        self.remote_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+            || filesystem_type_for_path_from_mounts(path, &self.mounts)
+                .is_some_and(|fs_type| filesystem_type_is_remote(&fs_type))
+    }
+}
+
 impl ListingProfile {
     fn local(filesystem: String) -> Self {
         Self {
@@ -635,6 +651,13 @@ pub fn path_uses_remote_listing(path: &Path) -> bool {
     path_listing_profile(path).remote
 }
 
+pub(crate) fn capture_listing_profile() -> ListingProfileSnapshot {
+    ListingProfileSnapshot {
+        remote_prefixes: remote_listing_prefixes(),
+        mounts: mountinfo_entries().unwrap_or_default(),
+    }
+}
+
 fn path_listing_profile(path: &Path) -> ListingProfile {
     if path_has_remote_prefix_hint(path) {
         return ListingProfile::remote("path-hint".to_string());
@@ -652,15 +675,25 @@ fn path_listing_profile(path: &Path) -> ListingProfile {
 }
 
 fn path_has_remote_prefix_hint(path: &Path) -> bool {
+    remote_listing_prefixes()
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn remote_listing_prefixes() -> Vec<PathBuf> {
     let runtime_dir = env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("/run/user/{}", current_uid())));
-    if path.starts_with(runtime_dir.join("gvfs")) {
-        return true;
-    }
-
-    let prefixes = env::var("ASTREA_EXPLORER_REMOTE_PREFIXES").unwrap_or_default();
-    path_matches_remote_prefixes(path, &prefixes)
+    let mut prefixes = vec![runtime_dir.join("gvfs")];
+    prefixes.extend(
+        env::var("ASTREA_EXPLORER_REMOTE_PREFIXES")
+            .unwrap_or_default()
+            .split(':')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+    );
+    prefixes
 }
 
 fn path_matches_remote_prefixes(path: &Path, prefixes: &str) -> bool {
@@ -738,6 +771,14 @@ fn parse_mountinfo_entries(mountinfo: &str) -> Vec<MountInfoEntry> {
         });
     }
     entries
+}
+
+#[cfg(test)]
+pub(crate) fn listing_profile_from_mountinfo(mountinfo: &str) -> ListingProfileSnapshot {
+    ListingProfileSnapshot {
+        remote_prefixes: Vec::new(),
+        mounts: parse_mountinfo_entries(mountinfo),
+    }
 }
 
 fn decode_mountinfo_field(value: &str) -> String {

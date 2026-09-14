@@ -14,6 +14,7 @@ class DirectoryMetricsServiceTest final : public QObject
 private slots:
     void forwardsMultiPathRequestAndResult();
     void replacesOldRequestAndRejectsLateSignals();
+    void reportsSupersededRequestIdentity();
     void forwardsCancellationAsTerminalState();
     void forwardsNonCancellationFailure();
 };
@@ -82,6 +83,20 @@ void DirectoryMetricsServiceTest::replacesOldRequestAndRejectsLateSignals()
     client.completeDirectoryMetrics(second, current);
     QCOMPARE(finishedSpy.count(), 1);
     QCOMPARE(finishedSpy.at(0).at(0).value<BackendRequestId>(), second);
+}
+
+void DirectoryMetricsServiceTest::reportsSupersededRequestIdentity()
+{
+    FakeRustBackendClient client;
+    DirectoryMetricsService service(&client);
+    QSignalSpy supersededSpy(&service, &DirectoryMetricsService::superseded);
+
+    const BackendRequestId first = service.start({QStringLiteral("/tmp/A")});
+    const BackendRequestId second = service.start({QStringLiteral("/tmp/B")});
+
+    QCOMPARE(second != first, true);
+    QCOMPARE(supersededSpy.count(), 1);
+    QCOMPARE(supersededSpy.at(0).at(0).value<BackendRequestId>(), first);
 }
 
 void DirectoryMetricsServiceTest::forwardsCancellationAsTerminalState()

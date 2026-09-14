@@ -39,6 +39,7 @@
     "apps.explorer.properties.text.calculating": "Calculando…",
     "apps.explorer.properties.text.files_and_folders": "%1 arquivos, %2 pastas",
     "apps.explorer.properties.text.metrics_failed": "Não foi possível calcular o tamanho da pasta.",
+    "apps.explorer.properties.text.metrics_replaced": "O cálculo foi substituído.",
     "apps.explorer.properties.text.multiple_items": "Vários itens",
     "apps.explorer.properties.text.some_items_unreadable": "Não foi possível ler alguns itens.",
     "apps.explorer.components.layout.preview_panel.label.criado": "Criado",

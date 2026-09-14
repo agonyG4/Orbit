@@ -39,6 +39,7 @@ private:
         QByteArray stdinPayload;
         QTimer *timeout = nullptr;
         QByteArray streamedPayload;
+        bool retainOnlyLastStreamedPayload = false;
     };
 
     QString resolveBackendProgram() const;

@@ -27,6 +27,7 @@ signals:
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
         const Astrea::Explorer::Native::Backend::DirectoryMetricsResult &result);
     void failed(const Astrea::Explorer::Native::Backend::BackendError &error);
+    void superseded(Astrea::Explorer::Native::Backend::BackendRequestId requestId);
 
 private slots:
     void handleProgress(

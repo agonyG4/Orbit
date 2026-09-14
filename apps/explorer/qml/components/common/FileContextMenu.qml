@@ -624,6 +624,31 @@ Item {
             }
         }
 
+        function markMetricsStartFailure() {
+            propertiesWin.metricsRequestId = 0
+            propertiesWin.propSize = metricsText(
+                "apps.explorer.properties.text.metrics_failed",
+                "Could not calculate folder size.",
+                [])
+            propertiesWin.propContains = ""
+            propertiesWin.errorText = AppState.directoryMetricsError
+                || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
+            propertiesWin.isLoading = false
+        }
+
+        function handleMetricsSuperseded(requestId) {
+            if (requestId !== propertiesWin.metricsRequestId)
+                return
+            propertiesWin.metricsRequestId = 0
+            propertiesWin.propSize = metricsText(
+                "apps.explorer.properties.text.metrics_replaced",
+                "Calculation replaced.",
+                [])
+            propertiesWin.propContains = ""
+            propertiesWin.errorText = propertiesWin.propSize
+            propertiesWin.isLoading = false
+        }
+
         onVisibilityChanged: {
             if (!visible) {
                 if (propertiesWin.metricsRequestId !== 0)
@@ -654,6 +679,9 @@ Item {
                     ? propertiesWin.targetPaths
                     : [propertiesWin.targetPath])
                 : 0
+            if ((propertiesWin.isMulti || propertiesWin.targetIsDir)
+                && propertiesWin.metricsRequestId === 0)
+                propertiesWin.markMetricsStartFailure()
         }
 
         Rectangle {
@@ -815,6 +843,7 @@ Item {
                     return
                 }
                 if (!propertiesWin.isMulti
+                    && !propertiesWin.targetIsDir
                     && propertiesWin.metricsRequestId === 0)
                     propertiesWin.errorText = ""
                 propertiesWin.propType = data.type || (propertiesWin.targetIsDir ? "Pasta" : "Arquivo")
@@ -823,14 +852,19 @@ Item {
                 propertiesWin.propModified = propertiesWin.fmtDate(Number(data.modifiedMs || 0) / 1000)
                 propertiesWin.propAccessed = propertiesWin.fmtDate(Number(data.accessedMs || 0) / 1000)
                 propertiesWin.propPerms = data.permissions || "--"
-                if (propertiesWin.targetIsDir && propertiesWin.metricsRequestId === 0) {
+                if (propertiesWin.targetIsDir && propertiesWin.metricsRequestId === 0
+                    && data.containsKnown === true) {
                     var count = Number(data.contains || 0)
                     propertiesWin.propContains = count + (count === 1 ? " item" : " itens")
                 }
                 propertiesWin.isLoading = false
             }
-            function onDirectoryMetricsStateChanged() {
-                propertiesWin.applyMetricsState()
+            function onDirectoryMetricsUpdated(requestId) {
+                if (requestId === propertiesWin.metricsRequestId)
+                    propertiesWin.applyMetricsState()
+            }
+            function onDirectoryMetricsSuperseded(requestId) {
+                propertiesWin.handleMetricsSuperseded(requestId)
             }
         }
     }

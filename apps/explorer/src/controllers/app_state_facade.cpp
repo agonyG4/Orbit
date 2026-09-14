@@ -325,6 +325,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
                 m_directoryMetricsScannedEntryCount = progress.scannedEntryCount;
                 m_directoryMetricsError.clear();
                 emit directoryMetricsStateChanged();
+                emit directoryMetricsUpdated(requestId);
             },
             Qt::QueuedConnection);
         connect(
@@ -344,6 +345,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
                 m_directoryMetricsScannedEntryCount = result.scannedEntryCount;
                 m_directoryMetricsError = result.errorMessage;
                 emit directoryMetricsStateChanged();
+                emit directoryMetricsUpdated(requestId);
             },
             Qt::QueuedConnection);
         connect(
@@ -358,6 +360,15 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
                 m_directoryMetricsState = QStringLiteral("failed");
                 m_directoryMetricsError = error.message;
                 emit directoryMetricsStateChanged();
+                emit directoryMetricsUpdated(error.requestId);
+            },
+            Qt::QueuedConnection);
+        connect(
+            m_directoryMetricsService,
+            &Services::DirectoryMetricsService::superseded,
+            this,
+            [this](BackendRequestId requestId) {
+                emit directoryMetricsSuperseded(requestId);
             },
             Qt::QueuedConnection);
     }

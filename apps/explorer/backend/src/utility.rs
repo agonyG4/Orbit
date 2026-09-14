@@ -236,22 +236,18 @@ fn properties(args: &[String]) -> Result<String, String> {
         .and_then(to_millis)
         .unwrap_or_default();
     let permissions = permissions_string(&metadata);
-    let contains = if is_dir {
-        fs::read_dir(&path)
-            .map(|entries| entries.filter_map(Result::ok).count())
-            .unwrap_or_default()
-    } else {
-        0
-    };
+    let contains = 0;
+    let contains_known = !is_dir;
     Ok(format!(
-        "{{\"ok\":true,\"operation\":\"properties\",\"type\":\"{}\",\"size\":{},\"sizeKnown\":{},\"modifiedMs\":{},\"accessedMs\":{},\"permissions\":\"{}\",\"contains\":{}}}",
+        "{{\"ok\":true,\"operation\":\"properties\",\"type\":\"{}\",\"size\":{},\"sizeKnown\":{},\"modifiedMs\":{},\"accessedMs\":{},\"permissions\":\"{}\",\"contains\":{},\"containsKnown\":{}}}",
         escape_json(item_type),
         size,
         size_known,
         modified,
         accessed,
         escape_json(&permissions),
-        contains
+        contains,
+        contains_known
     ))
 }
 
@@ -1289,6 +1285,8 @@ mod tests {
         .unwrap();
         assert!(directory_result.contains("\"size\":0"));
         assert!(directory_result.contains("\"sizeKnown\":false"));
+        assert!(directory_result.contains("\"contains\":0"));
+        assert!(directory_result.contains("\"containsKnown\":false"));
 
         let file_result = properties(&vec![
             "properties".into(),
@@ -1297,7 +1295,19 @@ mod tests {
         .unwrap();
         assert!(file_result.contains("\"size\":7"));
         assert!(file_result.contains("\"sizeKnown\":true"));
+        assert!(file_result.contains("\"containsKnown\":true"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn basic_directory_properties_do_not_enumerate_children() {
+        let source = include_str!("utility.rs");
+        let properties_source = source
+            .split_once("fn properties(")
+            .and_then(|(_, remainder)| remainder.split_once("\nfn batch_item_json"))
+            .map(|(function, _)| function)
+            .expect("properties function source");
+        assert!(!properties_source.contains("read_dir"));
     }
 
     #[test]

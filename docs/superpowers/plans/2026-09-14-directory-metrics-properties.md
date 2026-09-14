@@ -86,4 +86,3 @@ Run QML/source tests and i18n validation.
 ### Task 7: Full verification and review gates
 
 Run focused Rust, client/service/AppState, QML, and CTest suites first, then the complete configured Rust workspace, CTest, QML, i18n validation, source gate, and `git diff --check`. Inspect the final diff and source for recursive listing, interactive-worker traversal, symlink following, stale-result overwrite, unbounded path collection, fake percentages, ordinary file/desktop regressions, retired Windows runtime references, direct Proton execution, environment/history leaks, shell construction, and unrelated Archive/Windows changes. Record synthetic fixture timing, progress-event count, and cancellation latency; report real provider availability separately.
-

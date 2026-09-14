@@ -36,6 +36,7 @@ Backend::BackendRequestId DirectoryMetricsService::start(const QStringList &path
     if (m_activeRequest != 0) {
         const Backend::BackendRequestId oldRequest = m_activeRequest;
         m_activeRequest = 0;
+        emit superseded(oldRequest);
         m_client->cancel(oldRequest);
     }
     Backend::DirectoryMetricsRequest request;

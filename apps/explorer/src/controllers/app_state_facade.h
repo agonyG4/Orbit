@@ -565,6 +565,10 @@ signals:
     void wallpaperStateChanged();
     void windowsLaunchStateChanged();
     void directoryMetricsStateChanged();
+    void directoryMetricsUpdated(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId);
+    void directoryMetricsSuperseded(
+        Astrea::Explorer::Native::Backend::BackendRequestId requestId);
     void iconThemeChanged();
     void filesystemActionFinished(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,

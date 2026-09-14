@@ -69,6 +69,8 @@ BackendRequestId PersistentWorkerTransport::start(
     const BackendRequestId requestId = allocateRequestId();
     PendingRequest pending;
     pending.arguments = arguments;
+    pending.retainOnlyLastStreamedPayload =
+        arguments.value(0) == QStringLiteral("directory-metrics");
     if (stdinPayload.size() > m_options.maxStdinPayloadBytes) {
         BackendTransportError error;
         error.code = QStringLiteral("input_limit_exceeded");
@@ -182,15 +184,19 @@ void PersistentWorkerTransport::sendRequest(BackendRequestId requestId)
 void PersistentWorkerTransport::handleReadyRead()
 {
     m_readBuffer.append(m_worker->readAllStandardOutput());
-    if (m_options.maxLineBytes > 0 && m_readBuffer.size() > m_options.maxLineBytes) {
-        failAll(QStringLiteral("output_limit_exceeded"), QStringLiteral("worker response exceeded line limit"));
-        m_worker->kill();
-        return;
-    }
 
     while (true) {
         const qsizetype newline = m_readBuffer.indexOf('\n');
         if (newline < 0) {
+            if (m_options.maxLineBytes > 0 && m_readBuffer.size() > m_options.maxLineBytes) {
+                failAll(QStringLiteral("output_limit_exceeded"), QStringLiteral("worker response exceeded line limit"));
+                m_worker->kill();
+            }
+            return;
+        }
+        if (m_options.maxLineBytes > 0 && newline > m_options.maxLineBytes) {
+            failAll(QStringLiteral("output_limit_exceeded"), QStringLiteral("worker response exceeded line limit"));
+            m_worker->kill();
             return;
         }
         const QByteArray line = m_readBuffer.left(newline).trimmed();
@@ -214,7 +220,11 @@ void PersistentWorkerTransport::handleReadyRead()
         if (response.value(QStringLiteral("stream")).toBool(false)) {
             const QByteArray payload = response.value(QStringLiteral("payload")).toString().toUtf8();
             auto pending = m_pending.find(requestId);
-            pending->streamedPayload.append(payload);
+            if (pending->retainOnlyLastStreamedPayload) {
+                pending->streamedPayload = payload;
+            } else {
+                pending->streamedPayload.append(payload);
+            }
             emitStreamed(requestId, payload);
             continue;
         }
@@ -224,8 +234,14 @@ void PersistentWorkerTransport::handleReadyRead()
             pending.timeout->deleteLater();
         }
         if (response.value(QStringLiteral("ok")).toBool(false)) {
-            pending.streamedPayload.append(
-                response.value(QStringLiteral("payload")).toString().toUtf8());
+            const QByteArray payload = response.value(QStringLiteral("payload")).toString().toUtf8();
+            if (pending.retainOnlyLastStreamedPayload) {
+                if (!payload.isEmpty()) {
+                    pending.streamedPayload = payload;
+                }
+            } else {
+                pending.streamedPayload.append(payload);
+            }
             emitCompleted(requestId, pending.streamedPayload);
         } else {
             BackendTransportError error;

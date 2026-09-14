@@ -30,12 +30,16 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
 
         self.assertIn("requestDirectoryMetrics", app_state)
         self.assertIn("cancelDirectoryMetrics", app_state)
+        self.assertIn("signal directoryMetricsUpdated", app_state)
+        self.assertIn("signal directoryMetricsSuperseded", app_state)
         for source in [context_menu, sidebar]:
             self.assertIn("AppState.requestDirectoryMetrics", source)
             self.assertIn("AppState.cancelDirectoryMetrics", source)
-            self.assertIn("onDirectoryMetricsStateChanged", source)
+            self.assertIn("onDirectoryMetricsUpdated", source)
+            self.assertIn("onDirectoryMetricsSuperseded", source)
             self.assertIn("apps.explorer.properties.text.calculating", source)
             self.assertIn("apps.explorer.properties.text.at_least", source)
+            self.assertIn("apps.explorer.properties.text.metrics_replaced", source)
             self.assertNotIn("targetPaths[0]", source)
 
         self.assertIn("sizeKnown", context_menu)
@@ -58,10 +62,13 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("sizeKnown", utility)
+        self.assertIn("containsKnown", utility)
         self.assertIn("data.sizeKnown !== false", context_menu)
         self.assertIn("data.sizeKnown !== false", sidebar)
         self.assertIn("propertiesWin.metricsRequestId", context_menu)
         self.assertIn("sidebarProperties.metricsRequestId", sidebar)
+        self.assertIn("metricsRequestId === 0", context_menu)
+        self.assertIn("metricsRequestId === 0", sidebar)
 
     def test_preview_state_converts_nested_icon_model_before_native_call(self):
         qml6 = shutil.which("qml6")

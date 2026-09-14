@@ -634,6 +634,31 @@ Item {
             }
         }
 
+        function markMetricsStartFailure() {
+            sidebarProperties.metricsRequestId = 0
+            sidebarProperties.propSize = metricsText(
+                "apps.explorer.properties.text.metrics_failed",
+                "Could not calculate folder size.",
+                [])
+            sidebarProperties.propContains = ""
+            sidebarProperties.errorText = AppState.directoryMetricsError
+                || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
+            sidebarProperties.isLoading = false
+        }
+
+        function handleMetricsSuperseded(requestId) {
+            if (requestId !== sidebarProperties.metricsRequestId)
+                return
+            sidebarProperties.metricsRequestId = 0
+            sidebarProperties.propSize = metricsText(
+                "apps.explorer.properties.text.metrics_replaced",
+                "Calculation replaced.",
+                [])
+            sidebarProperties.propContains = ""
+            sidebarProperties.errorText = sidebarProperties.propSize
+            sidebarProperties.isLoading = false
+        }
+
         onVisibilityChanged: {
             if (!visible) {
                 if (sidebarProperties.metricsRequestId !== 0)
@@ -655,6 +680,8 @@ Item {
             sidebarProperties.metricsRequestId = targetIsDir
                 ? AppState.requestDirectoryMetrics([sidebarProperties.targetPath])
                 : 0
+            if (targetIsDir && sidebarProperties.metricsRequestId === 0)
+                sidebarProperties.markMetricsStartFailure()
         }
 
         Rectangle {
@@ -800,8 +827,12 @@ Item {
                     sidebarProperties.propContains = count > 0 ? (count + (count === 1 ? " item" : " itens")) : "--"
                 }
             }
-            function onDirectoryMetricsStateChanged() {
-                sidebarProperties.applyMetricsState()
+            function onDirectoryMetricsUpdated(requestId) {
+                if (requestId === sidebarProperties.metricsRequestId)
+                    sidebarProperties.applyMetricsState()
+            }
+            function onDirectoryMetricsSuperseded(requestId) {
+                sidebarProperties.handleMetricsSuperseded(requestId)
             }
         }
     }
