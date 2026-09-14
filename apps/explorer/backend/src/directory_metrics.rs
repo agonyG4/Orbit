@@ -270,7 +270,6 @@ where
             result.error_code = "unsupported_remote".to_string();
             result.error_message =
                 "recursive metrics are not supported for remote or virtual paths".to_string();
-            covering_roots.push(path);
             continue;
         }
         let metadata = match root_path_metadata(&path, &options) {
@@ -767,6 +766,37 @@ mod tests {
         let parent_first = scan_paths(&[root.clone(), remote], options, |_| {});
 
         assert_eq!(reversed, parent_first);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_root_does_not_absorb_explicit_local_mount_in_either_order() {
+        let root = test_root("remote-local-roots");
+        let remote = root.join("nas");
+        let local_mount = remote.join("usb");
+        fs::create_dir_all(&local_mount).expect("create nested mount points");
+        write_file(&local_mount.join("kept"), b"kept");
+        let mountinfo = format!(
+            "42 1 0:42 / {} rw,relatime - nfs server:/export rw\n43 42 0:43 / {} rw,relatime - ext4 /dev/usb rw\n",
+            remote.display(),
+            local_mount.display()
+        );
+        let mut options = ScanOptions::default();
+        options.mount_profile = Some(crate::entries::listing_profile_from_mountinfo(&mountinfo));
+
+        let remote_first = scan_paths(
+            &[remote.clone(), local_mount.clone()],
+            options.clone(),
+            |_| {},
+        );
+        let local_first = scan_paths(&[local_mount, remote], options, |_| {});
+
+        assert_eq!(remote_first, local_first);
+        assert_eq!(remote_first.state, MetricsState::Partial);
+        assert_eq!(remote_first.bytes, 4);
+        assert_eq!(remote_first.file_count, 1);
+        assert_eq!(remote_first.directory_count, 0);
+        assert_eq!(remote_first.unreadable_count, 1);
         let _ = fs::remove_dir_all(root);
     }
 

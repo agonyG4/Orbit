@@ -21,6 +21,9 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
         sidebar = (
             APP_ROOT / "components" / "layout" / "Sidebar.qml"
         ).read_text(encoding="utf-8")
+        metrics_presentation = (
+            APP_ROOT / "state" / "DirectoryMetricsProperties.js"
+        ).read_text(encoding="utf-8")
         file_list = (
             APP_ROOT / "components" / "views" / "FileListView.qml"
         ).read_text(encoding="utf-8")
@@ -37,10 +40,15 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
             self.assertIn("AppState.cancelDirectoryMetrics", source)
             self.assertIn("onDirectoryMetricsUpdated", source)
             self.assertIn("onDirectoryMetricsSuperseded", source)
-            self.assertIn("apps.explorer.properties.text.calculating", source)
-            self.assertIn("apps.explorer.properties.text.at_least", source)
-            self.assertIn("apps.explorer.properties.text.metrics_replaced", source)
             self.assertNotIn("targetPaths[0]", source)
+        for key in [
+            "apps.explorer.properties.text.calculating",
+            "apps.explorer.properties.text.at_least",
+            "apps.explorer.properties.text.metrics_replaced",
+        ]:
+            self.assertIn(key, metrics_presentation)
+        self.assertIn("DirectoryMetricsProperties", context_menu)
+        self.assertIn("DirectoryMetricsProperties", sidebar)
 
         self.assertIn("sizeKnown", context_menu)
         self.assertIn("sizeKnown", sidebar)
@@ -122,6 +130,27 @@ class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
         environment["QT_QPA_PLATFORM"] = "offscreen"
         result = subprocess.run(
             [qml6, "-I", str(REPO_ROOT / "shared" / "qml"), str(fixture)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+
+    def test_directory_metrics_properties_runtime_lifecycle(self):
+        qml6 = shutil.which("qml6")
+        if qml6 is None:
+            self.skipTest("qml6 is unavailable")
+
+        fixture = Path(__file__).with_name("directory_metrics_properties.qml")
+        environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        result = subprocess.run(
+            [qml6, str(fixture)],
             capture_output=True,
             text=True,
             env=environment,

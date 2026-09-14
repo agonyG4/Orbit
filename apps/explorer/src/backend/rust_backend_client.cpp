@@ -228,23 +228,6 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 }
             }
 
-            if (kind == RequestKind::DirectoryMetrics && !transportError.stdoutData.isEmpty()) {
-                BackendError decodeError;
-                QVector<DirectoryMetricsProgress> progresses;
-                const DirectoryMetricsResult result = decodeDirectoryMetrics(
-                    requestId,
-                    transportError.stdoutData,
-                    &decodeError,
-                    &progresses);
-                if (decodeError.code.isEmpty()) {
-                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
-                        emit directoryMetricsProgress(requestId, progresses.at(index));
-                    }
-                    emit directoryMetricsReady(requestId, result);
-                    return;
-                }
-            }
-
             BackendError error;
             error.code = transportError.code;
             error.message = transportError.message;

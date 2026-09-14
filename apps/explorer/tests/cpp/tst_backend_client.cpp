@@ -66,6 +66,20 @@ public:
         emitFailed(requestId, error);
     }
 
+    void failWithStdout(
+        BackendRequestId requestId,
+        const QString &code,
+        const QString &message,
+        const QByteArray &stdoutData)
+    {
+        BackendTransportError error;
+        error.requestId = requestId;
+        error.code = code;
+        error.message = message;
+        error.stdoutData = stdoutData;
+        emitFailed(requestId, error);
+    }
+
     QVector<StartedRequest> startedRequests;
     QVector<BackendRequestId> cancelledRequests;
 };
@@ -107,6 +121,7 @@ private slots:
     void encodesDirectoryMetricsRequestAndDecodesProgressAndResult();
     void rejectsMalformedDirectoryMetricsResult();
     void rejectsMissingDirectoryMetricsTerminal();
+    void directoryMetricsTransportFailureWinsOverStreamedTerminal();
     void transportsArchivePasswordOutsideOperationArguments();
     void decodesStructuredArchiveContinuationStates();
     void acceptsSynchronousTransportCompletion();
@@ -612,6 +627,47 @@ void BackendClientTest::rejectsMissingDirectoryMetricsTerminal()
     QTRY_COMPARE(failedSpy.count(), 1);
     QCOMPARE(failedSpy.at(0).at(0).value<BackendError>().requestId, requestId);
     QCOMPARE(failedSpy.at(0).at(0).value<BackendError>().code, QStringLiteral("decode_error"));
+}
+
+void BackendClientTest::directoryMetricsTransportFailureWinsOverStreamedTerminal()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+    QSignalSpy readySpy(&client, &IRustBackendClient::directoryMetricsReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    DirectoryMetricsRequest request;
+    request.paths = {QStringLiteral("/tmp/one")};
+    const BackendRequestId requestId = client.directoryMetrics(request);
+    transport.stream(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"progress\",\"operation\":\"directory-metrics\","
+            "\"state\":\"running\",\"bytes\":1,\"fileCount\":1,"
+            "\"directoryCount\":0,\"unreadableCount\":0,\"scannedEntryCount\":1}"));
+    transport.stream(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"directory-metrics\","
+            "\"ok\":true,\"state\":\"success\",\"bytes\":99,"
+            "\"fileCount\":9,\"directoryCount\":2,\"unreadableCount\":0,"
+            "\"scannedEntryCount\":11,\"errorCode\":\"\",\"errorMessage\":\"\"}"));
+    transport.failWithStdout(
+        requestId,
+        QStringLiteral("backend_exit"),
+        QStringLiteral("worker failed"),
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"directory-metrics\","
+            "\"ok\":true,\"state\":\"success\",\"bytes\":99,"
+            "\"fileCount\":9,\"directoryCount\":2,\"unreadableCount\":0,"
+            "\"scannedEntryCount\":11,\"errorCode\":\"\",\"errorMessage\":\"\"}"));
+
+    QTRY_COMPARE(failedSpy.count(), 1);
+    QCOMPARE(readySpy.count(), 0);
+    const BackendError error =
+        failedSpy.at(0).constFirst().value<BackendError>();
+    QCOMPARE(error.code, QStringLiteral("backend_exit"));
+    QCOMPARE(error.message, QStringLiteral("worker failed"));
 }
 
 void BackendClientTest::decodesStructuredArchiveContinuationStates()

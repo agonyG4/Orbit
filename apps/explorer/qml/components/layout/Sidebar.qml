@@ -8,6 +8,7 @@ import "../.."
 import "../common" as Common
 import Astrea.Components 1.0 as UI
 import Astrea.I18n 1.0 as AstreaI18n
+import "../../state/DirectoryMetricsProperties.js" as DirectoryMetricsProperties
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Root transparente — serve apenas como âncora de posição na janela.
@@ -596,67 +597,18 @@ Item {
         }
 
         function applyMetricsState() {
-            if (metricsRequestId === 0 || metricsRequestId !== AppState.directoryMetricsRequestId)
-                return
-            var counts = metricsText(
-                "apps.explorer.properties.text.files_and_folders",
-                "%1 files, %2 folders",
-                [Number(AppState.directoryMetricsFileCount), Number(AppState.directoryMetricsDirectoryCount)])
-            var state = AppState.directoryMetricsState
-            if (state === "running") {
-                var liveSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
-                sidebarProperties.propSize = Number(AppState.directoryMetricsBytes) > 0
-                    ? liveSize + " (" + metricsText("apps.explorer.properties.text.calculating", "Calculating…", []) + ")"
-                    : metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
-                sidebarProperties.propContains = counts
-                sidebarProperties.errorText = ""
-                return
-            }
-            if (state === "success") {
-                sidebarProperties.propSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
-                sidebarProperties.propContains = counts
-                sidebarProperties.errorText = ""
-                return
-            }
-            if (state === "partial") {
-                sidebarProperties.propSize = metricsText(
-                    "apps.explorer.properties.text.at_least",
-                    "At least %1",
-                    [AppState.formatSize(Number(AppState.directoryMetricsBytes))])
-                sidebarProperties.propContains = counts
-                sidebarProperties.errorText = AppState.directoryMetricsError
-                    || metricsText("apps.explorer.properties.text.some_items_unreadable", "Some items could not be read.", [])
-                return
-            }
-            if (state === "failed") {
-                sidebarProperties.errorText = AppState.directoryMetricsError
-                    || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
-            }
+            DirectoryMetricsProperties.applyMetricsState(
+                AppState, AstreaI18n.I18n.messages, sidebarProperties)
         }
 
         function markMetricsStartFailure() {
-            sidebarProperties.metricsRequestId = 0
-            sidebarProperties.propSize = metricsText(
-                "apps.explorer.properties.text.metrics_failed",
-                "Could not calculate folder size.",
-                [])
-            sidebarProperties.propContains = ""
-            sidebarProperties.errorText = AppState.directoryMetricsError
-                || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
-            sidebarProperties.isLoading = false
+            DirectoryMetricsProperties.markStartFailure(
+                AppState, AstreaI18n.I18n.messages, sidebarProperties)
         }
 
         function handleMetricsSuperseded(requestId) {
-            if (requestId !== sidebarProperties.metricsRequestId)
-                return
-            sidebarProperties.metricsRequestId = 0
-            sidebarProperties.propSize = metricsText(
-                "apps.explorer.properties.text.metrics_replaced",
-                "Calculation replaced.",
-                [])
-            sidebarProperties.propContains = ""
-            sidebarProperties.errorText = sidebarProperties.propSize
-            sidebarProperties.isLoading = false
+            DirectoryMetricsProperties.handleMetricsSuperseded(
+                AstreaI18n.I18n.messages, sidebarProperties, requestId)
         }
 
         onVisibilityChanged: {

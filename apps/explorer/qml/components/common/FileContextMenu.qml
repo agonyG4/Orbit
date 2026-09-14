@@ -4,6 +4,7 @@ import "../.."
 import "." as Common
 import Astrea.Files 1.0 as AstreaFiles
 import Astrea.I18n 1.0 as AstreaI18n
+import "../../state/DirectoryMetricsProperties.js" as DirectoryMetricsProperties
 
 Item {
     id: menuRoot
@@ -584,69 +585,18 @@ Item {
         }
 
         function applyMetricsState() {
-            if (metricsRequestId === 0 || metricsRequestId !== AppState.directoryMetricsRequestId)
-                return
-            var files = Number(AppState.directoryMetricsFileCount)
-            var folders = Number(AppState.directoryMetricsDirectoryCount)
-            var counts = metricsText(
-                "apps.explorer.properties.text.files_and_folders",
-                "%1 files, %2 folders",
-                [files, folders])
-            var state = AppState.directoryMetricsState
-            if (state === "running") {
-                var liveSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
-                propertiesWin.propSize = Number(AppState.directoryMetricsBytes) > 0
-                    ? liveSize + " (" + metricsText("apps.explorer.properties.text.calculating", "Calculating…", []) + ")"
-                    : metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
-                propertiesWin.propContains = counts
-                propertiesWin.errorText = ""
-                return
-            }
-            if (state === "success") {
-                propertiesWin.propSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
-                propertiesWin.propContains = counts
-                propertiesWin.errorText = ""
-                return
-            }
-            if (state === "partial") {
-                propertiesWin.propSize = metricsText(
-                    "apps.explorer.properties.text.at_least",
-                    "At least %1",
-                    [AppState.formatSize(Number(AppState.directoryMetricsBytes))])
-                propertiesWin.propContains = counts
-                propertiesWin.errorText = AppState.directoryMetricsError
-                    || metricsText("apps.explorer.properties.text.some_items_unreadable", "Some items could not be read.", [])
-                return
-            }
-            if (state === "failed") {
-                propertiesWin.errorText = AppState.directoryMetricsError
-                    || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
-            }
+            DirectoryMetricsProperties.applyMetricsState(
+                AppState, AstreaI18n.I18n.messages, propertiesWin)
         }
 
         function markMetricsStartFailure() {
-            propertiesWin.metricsRequestId = 0
-            propertiesWin.propSize = metricsText(
-                "apps.explorer.properties.text.metrics_failed",
-                "Could not calculate folder size.",
-                [])
-            propertiesWin.propContains = ""
-            propertiesWin.errorText = AppState.directoryMetricsError
-                || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
-            propertiesWin.isLoading = false
+            DirectoryMetricsProperties.markStartFailure(
+                AppState, AstreaI18n.I18n.messages, propertiesWin)
         }
 
         function handleMetricsSuperseded(requestId) {
-            if (requestId !== propertiesWin.metricsRequestId)
-                return
-            propertiesWin.metricsRequestId = 0
-            propertiesWin.propSize = metricsText(
-                "apps.explorer.properties.text.metrics_replaced",
-                "Calculation replaced.",
-                [])
-            propertiesWin.propContains = ""
-            propertiesWin.errorText = propertiesWin.propSize
-            propertiesWin.isLoading = false
+            DirectoryMetricsProperties.handleMetricsSuperseded(
+                AstreaI18n.I18n.messages, propertiesWin, requestId)
         }
 
         onVisibilityChanged: {
