@@ -248,6 +248,8 @@ target_link_libraries(astrea_explorer_native_clipboard PUBLIC
 add_library(astrea_explorer_native_launch STATIC
     src/services/launch_service.h
     src/services/launch_service.cpp
+    src/services/windows_launch_controller.h
+    src/services/windows_launch_controller.cpp
 )
 
 target_include_directories(astrea_explorer_native_launch PUBLIC
@@ -656,6 +658,22 @@ target_compile_definitions(tst_launch_service PRIVATE
     ASTREA_LAUNCH_ARTIFACT="${ASTREA_EXPLORER_LAUNCH_ARTIFACT}")
 
 add_test(NAME launch_service COMMAND tst_launch_service)
+
+qt_add_executable(tst_windows_launch_controller
+    tests/cpp/tst_windows_launch_controller.cpp
+)
+
+target_include_directories(tst_windows_launch_controller PRIVATE
+    src
+)
+
+target_link_libraries(tst_windows_launch_controller PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_launch
+)
+
+add_test(NAME windows_launch_controller COMMAND tst_windows_launch_controller)
 
 add_test(
     NAME launch_provider

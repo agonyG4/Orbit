@@ -16,6 +16,7 @@
 #include "services/file_uri_list.h"
 #include "services/recent_store.h"
 #include "services/settings_service.h"
+#include "services/windows_launch_controller.h"
 #include "controllers/explorer_settings_controller.h"
 #include "controllers/sidebar_favorites_controller.h"
 
@@ -48,6 +49,7 @@ private slots:
     void projectsArchiveCompletionThroughFilesystemActionFinished();
     void resetsArchivePresentationStateAcrossOperations();
     void retainsSelectionWhenDeleteFails();
+    void routesWindowsExtensionsThroughAsyncController();
 };
 
 struct FacadeFixture
@@ -74,7 +76,8 @@ AppStateFacadeDependencies facadeDependencies(
     WallpaperService *wallpaper = nullptr,
     MimeAppsService *mimeApps = nullptr,
     IconThemeService *iconTheme = nullptr,
-    Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths runtimePaths = {})
+    Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths runtimePaths = {},
+    WindowsLaunchController *windowsLaunch = nullptr)
 {
     AppStateFacadeDependencies dependencies;
     dependencies.navigation = &fixture.navigation;
@@ -94,6 +97,7 @@ AppStateFacadeDependencies facadeDependencies(
     dependencies.mimeApps = mimeApps;
     dependencies.iconTheme = iconTheme;
     dependencies.runtimePaths = runtimePaths;
+    dependencies.windowsLaunch = windowsLaunch;
     return dependencies;
 }
 
@@ -314,7 +318,9 @@ void AppStateFacadeTest::exposesCoreQmlContract()
              "fileModelRevision", "showPreview", "viewMode", "sortField",
              "sortAsc", "showHidden", "foldersFirst", "groupingEnabled", "zoomLevel",
              "homePath", "runtimeRoot", "backendPath", "helperPath", "dialogActive",
-             "sidebarFavoritesModel",
+             "sidebarFavoritesModel", "windowsLaunchRunning", "windowsLaunchStatus",
+             "windowsLaunchError", "windowsLaunchRunner", "windowsLaunchMachine",
+             "windowsLaunchWarnings",
              "dialogMode", "dialogFilePatterns", "inTrashView", "recentVirtualPath"}) {
         QVERIFY2(
             metaObject.indexOfProperty(propertyName) >= 0,
@@ -343,6 +349,12 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"helperPath", "QString", false},
         {"wallpaperManagerPath", "QString", false},
         {"astreaLaunch", "QString", false},
+        {"windowsLaunchRunning", "bool", false},
+        {"windowsLaunchStatus", "QString", false},
+        {"windowsLaunchError", "QString", false},
+        {"windowsLaunchRunner", "QString", false},
+        {"windowsLaunchMachine", "QString", false},
+        {"windowsLaunchWarnings", "QStringList", false},
         {"networkRootPath", "QString", false},
         {"trashFilesPath", "QString", false},
         {"trashInfoPath", "QString", false},
@@ -605,12 +617,63 @@ void AppStateFacadeTest::locksPublicQmlContract()
              "deviceStateChanged()",
              "archiveStateChanged()",
              "wallpaperStateChanged()",
+             "windowsLaunchStateChanged()",
              "iconThemeChanged()",
              "filesystemActionFinished(quint64,QString,bool,QVariantMap,QString)",
          }) {
         QVERIFY2(
             metaObject.indexOfSignal(signalSignature) >= 0,
             qPrintable(QStringLiteral("missing signal %1").arg(signalSignature)));
+    }
+}
+
+void AppStateFacadeTest::routesWindowsExtensionsThroughAsyncController()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString launcherPath = QDir(directory.path()).filePath(QStringLiteral("astrea-launch"));
+    QFile launcher(launcherPath);
+    QVERIFY(launcher.open(QIODevice::WriteOnly));
+    launcher.write(
+        "#!/bin/sh\n"
+        "printf '{\"timestamp_ms\":1,\"kind\":\"windows\",\"target\":\"%s\","
+        "\"argv\":[],\"pid\":1,\"status\":\"ok\",\"detail\":\"spawned\","
+        "\"windows\":{\"runner\":\"wine\",\"machine\":\"x86_64\","
+        "\"warnings\":[]}}\\n' \"$2\"\n");
+    launcher.close();
+    QVERIFY(QFile::setPermissions(
+        launcherPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+
+    FacadeFixture fixture;
+    LaunchService launchService(launcherPath);
+    WindowsLaunchController controller;
+    AppStateFacade facade(facadeDependencies(
+        fixture,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        &launchService,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        &controller));
+
+    for (const QString &extension : {
+             QStringLiteral(".EXE"), QStringLiteral(".exe"),
+             QStringLiteral(".MSI"), QStringLiteral(".msi")}) {
+        const QString path = QDir(directory.path()).filePath(QStringLiteral("game") + extension);
+        facade.openItem(path, false, QString());
+        QTRY_VERIFY_WITH_TIMEOUT(!facade.windowsLaunchRunning(), 5000);
+        QCOMPARE(facade.windowsLaunchError(), QString());
+        QCOMPARE(facade.windowsLaunchRunner(), QStringLiteral("wine"));
+        QCOMPARE(facade.windowsLaunchMachine(), QStringLiteral("x86_64"));
     }
 }
 

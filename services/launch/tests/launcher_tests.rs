@@ -1,12 +1,13 @@
 use std::fs;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use astrea_launch::{
     DesktopLaunchContext, LaunchConfig, LaunchRequest, LaunchTarget, Rule, SelectedWindowsRunner,
     WindowsRunnerPolicy, command_from_desktop_file, command_from_desktop_file_with_context,
     extract_steam_appid, matching_rule, normalize_compatibility_config, parse_argv_tokens,
-    parse_cli_request, parse_exec_line_with_context, parse_pe_machine, select_windows_runner,
-    validate_windows_target,
+    parse_cli_request, parse_exec_line_with_context, parse_pe_machine, parse_pe_machine_reader,
+    select_windows_runner, validate_windows_target,
 };
 
 #[test]
@@ -315,6 +316,87 @@ fn validates_pe_and_msi_windows_targets() {
     assert!(validate_windows_target(&msi).unwrap().is_msi);
     assert!(validate_windows_target(&root.join("notes.txt")).is_err());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn bounded_pe_reader_does_not_read_a_large_executable_body() {
+    let mut pe = vec![0u8; 0x106];
+    pe[0..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&(0x100u32).to_le_bytes());
+    pe[0x100..0x104].copy_from_slice(b"PE\0\0");
+    pe[0x104..0x106].copy_from_slice(&(0x8664u16).to_le_bytes());
+
+    let mut reader = CountingReader::new(pe);
+    assert_eq!(
+        parse_pe_machine_reader(&mut reader, 8 * 1024 * 1024 * 1024).unwrap(),
+        "x86_64"
+    );
+    assert!(
+        reader.bytes_read() <= 70,
+        "read {} bytes",
+        reader.bytes_read()
+    );
+}
+
+#[test]
+fn bounded_pe_reader_rejects_untrusted_offsets() {
+    let mut pe = vec![0u8; 64];
+    pe[0..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut reader = Cursor::new(pe);
+    assert!(parse_pe_machine_reader(&mut reader, 64).is_err());
+}
+
+#[test]
+fn sparse_large_pe_file_is_validated_without_body_allocation() {
+    let root = std::env::temp_dir().join(format!("astrea-launch-sparse-pe-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let exe = root.join("large.exe");
+    let mut file = fs::File::create(&exe).unwrap();
+    file.set_len(4 * 1024 * 1024 * 1024).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(&[b'M', b'Z']).unwrap();
+    file.seek(SeekFrom::Start(0x3c)).unwrap();
+    file.write_all(&(0x100u32).to_le_bytes()).unwrap();
+    file.seek(SeekFrom::Start(0x100)).unwrap();
+    file.write_all(b"PE\0\0").unwrap();
+    file.write_all(&(0x8664u16).to_le_bytes()).unwrap();
+    drop(file);
+
+    assert_eq!(validate_windows_target(&exe).unwrap().machine, "x86_64");
+    let _ = fs::remove_dir_all(root);
+}
+
+struct CountingReader {
+    cursor: Cursor<Vec<u8>>,
+    read_count: usize,
+}
+
+impl CountingReader {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            cursor: Cursor::new(bytes),
+            read_count: 0,
+        }
+    }
+
+    fn bytes_read(&self) -> usize {
+        self.read_count
+    }
+}
+
+impl std::io::Read for CountingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = std::io::Read::read(&mut self.cursor, buffer)?;
+        self.read_count += count;
+        Ok(count)
+    }
+}
+
+impl Seek for CountingReader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.cursor.seek(position)
+    }
 }
 
 #[test]

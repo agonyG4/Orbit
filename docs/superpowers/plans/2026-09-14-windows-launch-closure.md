@@ -24,11 +24,11 @@
 - Test: `services/launch/tests/launcher_tests.rs`
 - Test: `services/launch/tests/cli_contract.rs`
 
-- [ ] Add failing tests for bounded PE validation, malformed offsets, sparse large files, historical wrapper ordering, MSI runner argv, and doctor capability output.
-- [ ] Run the focused Rust tests and confirm they fail for the missing bounded reader/order/diagnostic behavior.
-- [ ] Implement bounded `File` header reads with checked offset and length validation, then restore `custom_prefix` inside GameMode/Gamescope/MangoHud outer composition.
-- [ ] Add non-secret Windows capability lines to `doctor` without reading or printing Gaming config values.
-- [ ] Run all `services/launch` Rust targets and confirm green.
+- [x] Add failing tests for bounded PE validation, malformed offsets, sparse large files, historical wrapper ordering, MSI runner argv, and doctor capability output.
+- [x] Run the focused Rust tests and confirm they fail for the missing bounded reader/order/diagnostic behavior.
+- [x] Implement bounded `File` header reads with checked offset and length validation, then restore `custom_prefix` inside GameMode/Gamescope/MangoHud outer composition.
+- [x] Add non-secret Windows capability lines to `doctor` without reading or printing Gaming config values.
+- [x] Run all `services/launch` Rust targets and confirm green.
 
 ### Task 2: Add the native asynchronous Windows launch controller
 
@@ -38,11 +38,11 @@
 - Modify: `apps/explorer/CMakeLists.txt`
 - Create: `apps/explorer/tests/cpp/tst_windows_launch_controller.cpp`
 
-- [ ] Add failing Qt tests for valid success JSON, UMU/Wine/PE failures, malformed JSON, failed process start, bounded output, and a fake CLI that exits while a separate child remains alive.
-- [ ] Run the focused controller target and confirm it fails because the controller does not exist.
-- [ ] Implement bounded stdout/stderr capture, asynchronous process completion, Windows-record validation, runner/machine/warnings projection, and actionable errors.
-- [ ] Ensure the controller never calls `waitForFinished()` and never follows the child application after the CLI exits.
-- [ ] Build and run the controller target.
+- [x] Add failing Qt tests for valid success JSON, UMU/Wine/PE failures, malformed JSON, failed process start, bounded output, and a fake CLI that exits while a separate child remains alive.
+- [x] Run the focused controller target and confirm it fails because the controller does not exist.
+- [x] Implement bounded stdout/stderr capture, asynchronous process completion, Windows-record validation, runner/machine/warnings projection, and actionable errors.
+- [x] Ensure the controller never calls `waitForFinished()` and never follows the child application after the CLI exits.
+- [x] Build and run the controller target.
 
 ### Task 3: Project controller state through AppState and preserve routing
 
@@ -54,11 +54,11 @@
 - Modify: `apps/explorer/qml/components/layout/StatusBar.qml`
 - Modify: `apps/explorer/tests/cpp/tst_app_state_facade.cpp`
 
-- [ ] Add failing AppState contract/routing tests for `.exe/.EXE/.msi/.MSI`, native properties, and unchanged ordinary file/desktop launch dispatch.
-- [ ] Run the focused AppState test and confirm the new properties/controller routing are absent.
-- [ ] Add the controller dependency, connect its state signal, expose running/status/error/runner/machine/warnings properties, and route only Windows targets through it.
-- [ ] Add the accepted-launch and error text to the existing status bar; do not create a new notification subsystem.
-- [ ] Build and run AppState, LaunchService, RuntimePaths, and QML tests.
+- [x] Add failing AppState contract/routing tests for `.exe/.EXE/.msi/.MSI`, native properties, and unchanged ordinary file/desktop launch dispatch.
+- [x] Run the focused AppState test and confirm the new properties/controller routing are absent.
+- [x] Add the controller dependency, connect its state signal, expose running/status/error/runner/machine/warnings properties, and route only Windows targets through it.
+- [x] Add the accepted-launch and error text to the existing status bar; do not create a new notification subsystem.
+- [x] Build and run AppState, LaunchService, RuntimePaths, and QML tests.
 
 ### Task 4: Final verification and commit
 
@@ -66,6 +66,6 @@
 - Verify: all modified source and test files above.
 - Modify if needed: `docs/superpowers/plans/2026-09-14-windows-launch-closure.md`
 
-- [ ] Run focused Rust tests, focused Qt tests, complete `build/debug` CMake build, complete CTest, Rust workspace tests where configured, QML tests, source gates, and `git diff --check`.
-- [ ] Inspect specifically for whole-file PE reads, direct Proton execution, shell custom-prefix construction, environment/history leakage, stale Gaming config, Explorer application-lifetime waits, and retired runtime references.
-- [ ] Commit the closure with a focused message and verify the working tree is clean.
+- [x] Run focused Rust tests, focused Qt tests, complete `build/debug` CMake build, complete CTest, Rust workspace tests where configured, QML tests, source gates, and `git diff --check`.
+- [x] Inspect specifically for whole-file PE reads, direct Proton execution, shell custom-prefix construction, environment/history leakage, stale Gaming config, Explorer application-lifetime waits, and retired runtime references.
+- [x] Commit the closure with a focused message and verify the working tree is clean.

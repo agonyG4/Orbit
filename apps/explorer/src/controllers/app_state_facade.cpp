@@ -30,6 +30,7 @@
 #include "services/icon_theme_service.h"
 #include "services/mime_apps_service.h"
 #include "services/wallpaper_service.h"
+#include "services/windows_launch_controller.h"
 
 namespace Astrea::Explorer::Native::Backend {
 
@@ -48,6 +49,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     , m_filesystemService(dependencies.filesystem)
     , m_openWith(dependencies.openWith)
     , m_launchService(dependencies.launch)
+    , m_windowsLaunchController(dependencies.windowsLaunch)
     , m_wallpaperService(dependencies.wallpaper)
     , m_mimeAppsService(dependencies.mimeApps)
     , m_iconThemeService(dependencies.iconTheme)
@@ -56,6 +58,14 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     Q_ASSERT(m_navigation != nullptr);
     Q_ASSERT(m_selection != nullptr);
     Q_ASSERT(m_model != nullptr);
+
+    if (m_windowsLaunchController != nullptr) {
+        connect(
+            m_windowsLaunchController,
+            &Services::WindowsLaunchController::stateChanged,
+            this,
+            &AppStateFacade::windowsLaunchStateChanged);
+    }
 
     if (m_iconThemeService != nullptr) {
         connect(
@@ -387,6 +397,36 @@ QString AppStateFacade::astreaLaunch() const
     return runtimeRoot().isEmpty()
         ? QString()
         : QDir(runtimeRoot()).filePath(QStringLiteral("bin/astrea-launch"));
+}
+
+bool AppStateFacade::windowsLaunchRunning() const
+{
+    return m_windowsLaunchController != nullptr && m_windowsLaunchController->running();
+}
+
+QString AppStateFacade::windowsLaunchStatus() const
+{
+    return m_windowsLaunchController == nullptr ? QString() : m_windowsLaunchController->status();
+}
+
+QString AppStateFacade::windowsLaunchError() const
+{
+    return m_windowsLaunchController == nullptr ? QString() : m_windowsLaunchController->error();
+}
+
+QString AppStateFacade::windowsLaunchRunner() const
+{
+    return m_windowsLaunchController == nullptr ? QString() : m_windowsLaunchController->runner();
+}
+
+QString AppStateFacade::windowsLaunchMachine() const
+{
+    return m_windowsLaunchController == nullptr ? QString() : m_windowsLaunchController->machine();
+}
+
+QStringList AppStateFacade::windowsLaunchWarnings() const
+{
+    return m_windowsLaunchController == nullptr ? QStringList() : m_windowsLaunchController->warnings();
 }
 
 QString AppStateFacade::networkRootPath() const
@@ -1443,6 +1483,10 @@ void AppStateFacade::openItem(
     } else if (path.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)
                || path.endsWith(QStringLiteral(".msi"), Qt::CaseInsensitive)) {
         spec = m_launchService->windowsLaunch(path);
+        if (m_windowsLaunchController != nullptr) {
+            m_windowsLaunchController->launch(spec);
+        }
+        return;
     } else {
         spec = m_launchService->fileLaunch(path);
     }

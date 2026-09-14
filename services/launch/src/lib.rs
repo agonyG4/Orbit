@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -591,25 +591,43 @@ pub fn parse_argv_tokens(text: &str) -> Result<Vec<String>, String> {
 }
 
 pub fn parse_pe_machine(bytes: &[u8]) -> Result<String, String> {
-    if bytes.len() < 64 || &bytes[..2] != b"MZ" {
+    let mut reader = std::io::Cursor::new(bytes);
+    parse_pe_machine_reader(&mut reader, bytes.len() as u64)
+}
+
+pub fn parse_pe_machine_reader<R: Read + Seek>(
+    reader: &mut R,
+    file_len: u64,
+) -> Result<String, String> {
+    if file_len < 64 {
         return Err("Windows executable is not a valid DOS/PE image".into());
     }
-    let pe_offset = u32::from_le_bytes(
-        bytes[0x3c..0x40]
-            .try_into()
-            .map_err(|_| "Windows executable has an invalid PE offset")?,
-    ) as usize;
+    let mut dos_header = [0u8; 64];
+    reader
+        .read_exact(&mut dos_header)
+        .map_err(|_| "Windows executable is not a valid DOS/PE image")?;
+    if &dos_header[..2] != b"MZ" {
+        return Err("Windows executable is not a valid DOS/PE image".into());
+    }
+
+    let pe_offset = u32::from_le_bytes(dos_header[0x3c..0x40].try_into().unwrap()) as u64;
     let header_end = pe_offset
         .checked_add(6)
         .ok_or_else(|| "Windows executable has an invalid PE offset".to_string())?;
-    if header_end > bytes.len() || &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
+    if header_end > file_len {
+        return Err("Windows executable has an invalid PE offset".into());
+    }
+    reader
+        .seek(SeekFrom::Start(pe_offset))
+        .map_err(|_| "Windows executable has an invalid PE offset")?;
+    let mut pe_header = [0u8; 6];
+    reader
+        .read_exact(&mut pe_header)
+        .map_err(|_| "Windows executable has an invalid PE machine")?;
+    if &pe_header[..4] != b"PE\0\0" {
         return Err("Windows executable is missing a valid PE signature".into());
     }
-    let machine = u16::from_le_bytes(
-        bytes[pe_offset + 4..pe_offset + 6]
-            .try_into()
-            .map_err(|_| "Windows executable has an invalid PE machine")?,
-    );
+    let machine = u16::from_le_bytes(pe_header[4..6].try_into().unwrap());
     Ok(match machine {
         0x014c => "i386".into(),
         0x8664 => "x86_64".into(),
@@ -638,9 +656,13 @@ pub fn validate_windows_target(path: &Path) -> Result<WindowsTargetMetadata, Str
             is_msi: true,
         }),
         "exe" => {
-            let bytes =
-                fs::read(&target).map_err(|err| format!("read Windows executable: {err}"))?;
-            let machine = parse_pe_machine(&bytes)?;
+            let mut file =
+                fs::File::open(&target).map_err(|err| format!("read Windows executable: {err}"))?;
+            let file_len = file
+                .metadata()
+                .map_err(|err| format!("read Windows executable metadata: {err}"))?
+                .len();
+            let machine = parse_pe_machine_reader(&mut file, file_len)?;
             Ok(WindowsTargetMetadata {
                 path: target,
                 machine,
@@ -763,7 +785,7 @@ pub fn plan_windows_launch(path: &Path) -> Result<WindowsLaunchPlan, String> {
         }
     };
 
-    let mut argv = compose_windows_wrappers(
+    let argv = compose_windows_wrappers(
         runner_command,
         &profile,
         &gamescope,
@@ -771,12 +793,6 @@ pub fn plan_windows_launch(path: &Path) -> Result<WindowsLaunchPlan, String> {
         &runtime,
         &mut warnings,
     )?;
-    let custom_prefix = parse_argv_tokens(&profile.custom_prefix)?;
-    if !custom_prefix.is_empty() {
-        let mut prefixed = custom_prefix;
-        prefixed.append(&mut argv);
-        argv = prefixed;
-    }
 
     let metadata = WindowsLaunchMetadata {
         runner: match selected {
@@ -903,6 +919,47 @@ fn discover_windows_runtime() -> WindowsRuntime {
     }
 }
 
+pub fn windows_doctor_lines() -> Vec<String> {
+    let runtime = discover_windows_runtime();
+    let compatibility =
+        normalize_compatibility_config(&read_json_object(&compatibility_config_path()));
+    let selection = match select_windows_runner(
+        compatibility.runner,
+        runtime.umu_run.is_some(),
+        runtime.wine.is_some(),
+    ) {
+        Ok(SelectedWindowsRunner::Umu) => "umu-proton".into(),
+        Ok(SelectedWindowsRunner::Wine) => "wine".into(),
+        Err(error) => format!("unavailable ({error})"),
+    };
+    vec![
+        format_optional_capability("windows_umu", runtime.umu_run.as_deref()),
+        format_optional_capability("windows_wine", runtime.wine.as_deref()),
+        format!("windows_proton_selection: {selection}"),
+        format!(
+            "windows_shared_prefix: {}",
+            shared_windows_wine_prefix().display()
+        ),
+        config_status_line("windows_compatibility_config", &compatibility_config_path()),
+        config_status_line("windows_proton_config", &proton_config_path()),
+        config_status_line("windows_gamescope_config", &gamescope_config_path()),
+    ]
+}
+
+fn format_optional_capability(label: &str, path: Option<&Path>) -> String {
+    match path {
+        Some(path) => format!("{label}: available [{}]", path.display()),
+        None => format!("{label}: missing"),
+    }
+}
+
+fn config_status_line(label: &str, path: &Path) -> String {
+    format!(
+        "{label}: {}",
+        if path.is_file() { "present" } else { "missing" }
+    )
+}
+
 fn compose_windows_wrappers(
     mut command: Vec<String>,
     profile: &WindowsProtonConfig,
@@ -911,6 +968,12 @@ fn compose_windows_wrappers(
     runtime: &WindowsRuntime,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<String>, String> {
+    let custom_prefix = parse_argv_tokens(&profile.custom_prefix)?;
+    if !custom_prefix.is_empty() {
+        let mut prefixed = custom_prefix;
+        prefixed.append(&mut command);
+        command = prefixed;
+    }
     let mut mangohud_consumed = false;
     if profile.gamescope {
         if let Some(gamescope_program) = &runtime.gamescope {
@@ -973,7 +1036,14 @@ pub fn run_launch(request: LaunchRequest) -> Result<LaunchRecord, String> {
     }
 
     let mut command = resolve_request(&request)?;
-    let raw_command = command.argv.join(" ");
+    // Windows argv is deliberately never flattened into a command string.  In
+    // addition to avoiding shell-like semantics, this keeps the target path
+    // out of the generic command-text matching path.
+    let raw_command = if matches!(request, LaunchRequest::Windows { .. }) {
+        String::new()
+    } else {
+        command.argv.join(" ")
+    };
     let executable = command.argv.first().map(String::as_str);
     let rule = matching_rule(&config, &request, executable, &raw_command).cloned();
     if let Some(rule) = &rule {
@@ -2387,6 +2457,113 @@ mod tests {
                 "--flag".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn composes_custom_prefix_inside_outer_game_wrappers() {
+        let mut profile = WindowsProtonConfig::default();
+        profile.gamemode = true;
+        profile.mangohud = true;
+        profile.custom_prefix = "custom --flag".into();
+        let runtime = WindowsRuntime {
+            umu_run: None,
+            wine: None,
+            proton: None,
+            gamemode: Some(PathBuf::from("gamemoderun")),
+            mangohud: Some(PathBuf::from("mangohud")),
+            gamescope: None,
+            runtime_interface: None,
+        };
+        let mut warnings = Vec::new();
+
+        let argv = compose_windows_wrappers(
+            vec!["umu-run".into(), "game.exe".into()],
+            &profile,
+            &WindowsGamescopeConfig::default(),
+            "x86_64",
+            &runtime,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(
+            argv,
+            vec![
+                "gamemoderun",
+                "mangohud",
+                "custom",
+                "--flag",
+                "umu-run",
+                "game.exe"
+            ]
+        );
+    }
+
+    #[test]
+    fn composes_gamescope_mangoapp_around_custom_prefix_and_runner() {
+        let mut profile = WindowsProtonConfig::default();
+        profile.gamemode = true;
+        profile.mangohud = true;
+        profile.gamescope = true;
+        profile.custom_prefix = "custom '$() # ;'".into();
+        let runtime = WindowsRuntime {
+            umu_run: None,
+            wine: None,
+            proton: None,
+            gamemode: Some(PathBuf::from("gamemoderun")),
+            mangohud: Some(PathBuf::from("mangohud")),
+            gamescope: Some(PathBuf::from("gamescope")),
+            runtime_interface: None,
+        };
+        let gamescope = WindowsGamescopeConfig {
+            fullscreen: false,
+            ..WindowsGamescopeConfig::default()
+        };
+        let mut warnings = Vec::new();
+
+        let argv = compose_windows_wrappers(
+            vec!["umu-run".into(), "game.exe".into()],
+            &profile,
+            &gamescope,
+            "x86_64",
+            &runtime,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(
+            argv,
+            vec![
+                "gamemoderun",
+                "gamescope",
+                "-W",
+                "1920",
+                "-H",
+                "1080",
+                "-r",
+                "60",
+                "--mangoapp",
+                "--",
+                "custom",
+                "$() # ;",
+                "umu-run",
+                "game.exe",
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_msi_argv_for_umu_and_wine_without_shelling() {
+        let target = WindowsTargetMetadata {
+            path: PathBuf::from("/tmp/installer.msi"),
+            machine: "unknown".into(),
+            is_msi: true,
+        };
+        for runner in ["umu-run", "wine"] {
+            let mut command = vec![runner.to_string()];
+            append_windows_target_args(&mut command, &target);
+            assert_eq!(command, vec![runner, "msiexec", "/i", "/tmp/installer.msi"]);
+        }
     }
 }
 

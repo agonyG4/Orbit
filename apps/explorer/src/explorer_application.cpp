@@ -44,6 +44,7 @@
 #include "services/filesystem_service.h"
 #include "services/icon_theme_service.h"
 #include "services/launch_service.h"
+#include "services/windows_launch_controller.h"
 #include "services/wallpaper_service.h"
 #include "services/settings_service.h"
 
@@ -202,6 +203,7 @@ int ExplorerApplication::run(int argc, char **argv)
     ExplorerSettingsController explorerSettingsController(&settings, &application);
     ClipboardService clipboard(QGuiApplication::clipboard());
     LaunchService launchService(runtimePaths.launcherProgram);
+    WindowsLaunchController windowsLaunchController(&application);
     DesktopApplicationCatalog applicationCatalog({}, &application);
     MimeAppsService mimeApps;
     mimeApps.setCatalog(&applicationCatalog);
@@ -260,6 +262,7 @@ int ExplorerApplication::run(int argc, char **argv)
     appStateDependencies.filesystem = &filesystemService;
     appStateDependencies.openWith = &openWith;
     appStateDependencies.launch = &launchService;
+    appStateDependencies.windowsLaunch = &windowsLaunchController;
     appStateDependencies.wallpaper = &wallpaper;
     appStateDependencies.mimeApps = &mimeApps;
     appStateDependencies.iconTheme = &iconThemeService;

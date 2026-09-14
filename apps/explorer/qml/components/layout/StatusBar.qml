@@ -19,6 +19,9 @@ Rectangle {
             return AppState.archiveExtractionStatus
         return ""
     }
+    readonly property string windowsLaunchText: AppState.windowsLaunchError !== ""
+        ? AppState.windowsLaunchError
+        : AppState.windowsLaunchStatus
 
     Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.border }
 
@@ -57,6 +60,15 @@ Rectangle {
             font.pixelSize: 11
             text: operationText
             visible: operationText !== ""
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            color: AppState.windowsLaunchError !== "" ? "#ff8b8b" : Theme.textTer
+            font.pixelSize: 11
+            text: windowsLaunchText
+            visible: windowsLaunchText !== ""
+            elide: Text.ElideRight
         }
     }
 }

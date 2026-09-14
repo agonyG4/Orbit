@@ -17,6 +17,7 @@ class LaunchService;
 class MimeAppsService;
 class SettingsService;
 class WallpaperService;
+class WindowsLaunchController;
 
 } // namespace Astrea::Explorer::Native::Services
 
@@ -51,6 +52,7 @@ struct AppStateFacadeDependencies
     Services::FilesystemService *filesystem = nullptr;
     OpenWithController *openWith = nullptr;
     Services::LaunchService *launch = nullptr;
+    Services::WindowsLaunchController *windowsLaunch = nullptr;
     Services::WallpaperService *wallpaper = nullptr;
     Services::MimeAppsService *mimeApps = nullptr;
     Services::IconThemeService *iconTheme = nullptr;
@@ -69,6 +71,12 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString helperPath READ helperPath CONSTANT)
     Q_PROPERTY(QString wallpaperManagerPath READ wallpaperManagerPath CONSTANT)
     Q_PROPERTY(QString astreaLaunch READ astreaLaunch CONSTANT)
+    Q_PROPERTY(bool windowsLaunchRunning READ windowsLaunchRunning NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(QString windowsLaunchStatus READ windowsLaunchStatus NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(QString windowsLaunchError READ windowsLaunchError NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(QString windowsLaunchRunner READ windowsLaunchRunner NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(QString windowsLaunchMachine READ windowsLaunchMachine NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(QStringList windowsLaunchWarnings READ windowsLaunchWarnings NOTIFY windowsLaunchStateChanged)
     Q_PROPERTY(QString networkRootPath READ networkRootPath CONSTANT)
     Q_PROPERTY(QString trashFilesPath READ trashFilesPath CONSTANT)
     Q_PROPERTY(QString trashInfoPath READ trashInfoPath CONSTANT)
@@ -184,6 +192,12 @@ public:
     QString helperPath() const;
     QString wallpaperManagerPath() const;
     QString astreaLaunch() const;
+    bool windowsLaunchRunning() const;
+    QString windowsLaunchStatus() const;
+    QString windowsLaunchError() const;
+    QString windowsLaunchRunner() const;
+    QString windowsLaunchMachine() const;
+    QStringList windowsLaunchWarnings() const;
     QString networkRootPath() const;
     QString trashFilesPath() const;
     QString trashInfoPath() const;
@@ -527,6 +541,7 @@ signals:
     void archiveStateChanged();
     void archiveCapabilitiesChanged();
     void wallpaperStateChanged();
+    void windowsLaunchStateChanged();
     void iconThemeChanged();
     void filesystemActionFinished(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
@@ -556,6 +571,7 @@ private:
     bool m_wallpaperApplyRunning = false;
     OpenWithController *m_openWith = nullptr;
     Services::LaunchService *m_launchService = nullptr;
+    Services::WindowsLaunchController *m_windowsLaunchController = nullptr;
     Services::WallpaperService *m_wallpaperService = nullptr;
     Services::MimeAppsService *m_mimeAppsService = nullptr;
     Services::IconThemeService *m_iconThemeService = nullptr;

@@ -281,3 +281,65 @@ fn daemon_path_reads_compatibility_json_for_each_windows_launch() {
     let _ = daemon.wait();
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn doctor_reports_windows_capabilities_without_printing_gaming_values() {
+    let root = std::env::temp_dir().join(format!(
+        "astrea-launch-windows-doctor-{}",
+        std::process::id()
+    ));
+    let bin = root.join("bin");
+    let gaming = root.join("config/AstreaOS/gaming");
+    let system = root.join("config/AstreaOS/system");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&gaming).unwrap();
+    fs::create_dir_all(&system).unwrap();
+    for name in ["umu-run", "wine"] {
+        let path = bin.join(name);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        system.join("launch.json"),
+        "{\"latency\":{\"enabled\":false}}\n",
+    )
+    .unwrap();
+    fs::write(
+        gaming.join("compatibility.json"),
+        r#"{"runner":"proton","extra_env":"SECRET_VALUE=must-not-print"}"#,
+    )
+    .unwrap();
+    fs::write(gaming.join("proton.json"), "{}\n").unwrap();
+    fs::write(gaming.join("gamescope.json"), "{}\n").unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_astrea-launch"))
+        .arg("doctor")
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("PATH", &bin)
+        .output()
+        .expect("run astrea-launch doctor");
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("windows_umu: available"));
+    assert!(stdout.contains("windows_wine: available"));
+    assert!(stdout.contains("windows_proton_selection:"));
+    assert!(stdout.contains("windows_shared_prefix:"));
+    assert!(stdout.contains("windows_compatibility_config: present"));
+    assert!(stdout.contains("windows_proton_config: present"));
+    assert!(stdout.contains("windows_gamescope_config: present"));
+    assert!(!stdout.contains("SECRET_VALUE"));
+    assert!(
+        !root
+            .join("data/AstreaOS/windows-prefixes/shared/proton/pfx")
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
