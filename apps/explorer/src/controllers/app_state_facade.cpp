@@ -26,6 +26,7 @@
 #include "controllers/selection_controller.h"
 #include "controllers/sidebar_favorites_controller.h"
 #include "models/directory_model.h"
+#include "services/directory_metrics_service.h"
 #include "services/filesystem_service.h"
 #include "services/icon_theme_service.h"
 #include "services/mime_apps_service.h"
@@ -47,6 +48,7 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
     , m_devices(dependencies.devices)
     , m_recentController(dependencies.recent)
     , m_filesystemService(dependencies.filesystem)
+    , m_directoryMetricsService(dependencies.directoryMetrics)
     , m_openWith(dependencies.openWith)
     , m_launchService(dependencies.launch)
     , m_windowsLaunchController(dependencies.windowsLaunch)
@@ -305,6 +307,60 @@ AppStateFacade::AppStateFacade(AppStateFacadeDependencies dependencies, QObject 
                     result.ok ? QString() : result.errorMessage);
             });
     }
+    if (m_directoryMetricsService != nullptr) {
+        connect(
+            m_directoryMetricsService,
+            &Services::DirectoryMetricsService::progress,
+            this,
+            [this](BackendRequestId requestId, const DirectoryMetricsProgress &progress) {
+                if (requestId != m_directoryMetricsRequestId) {
+                    return;
+                }
+                m_directoryMetricsRunning = true;
+                m_directoryMetricsState = progress.state;
+                m_directoryMetricsBytes = progress.bytes;
+                m_directoryMetricsFileCount = progress.fileCount;
+                m_directoryMetricsDirectoryCount = progress.directoryCount;
+                m_directoryMetricsUnreadableCount = progress.unreadableCount;
+                m_directoryMetricsScannedEntryCount = progress.scannedEntryCount;
+                m_directoryMetricsError.clear();
+                emit directoryMetricsStateChanged();
+            },
+            Qt::QueuedConnection);
+        connect(
+            m_directoryMetricsService,
+            &Services::DirectoryMetricsService::finished,
+            this,
+            [this](BackendRequestId requestId, const DirectoryMetricsResult &result) {
+                if (requestId != m_directoryMetricsRequestId) {
+                    return;
+                }
+                m_directoryMetricsRunning = false;
+                m_directoryMetricsState = result.state;
+                m_directoryMetricsBytes = result.bytes;
+                m_directoryMetricsFileCount = result.fileCount;
+                m_directoryMetricsDirectoryCount = result.directoryCount;
+                m_directoryMetricsUnreadableCount = result.unreadableCount;
+                m_directoryMetricsScannedEntryCount = result.scannedEntryCount;
+                m_directoryMetricsError = result.errorMessage;
+                emit directoryMetricsStateChanged();
+            },
+            Qt::QueuedConnection);
+        connect(
+            m_directoryMetricsService,
+            &Services::DirectoryMetricsService::failed,
+            this,
+            [this](const BackendError &error) {
+                if (error.requestId != m_directoryMetricsRequestId) {
+                    return;
+                }
+                m_directoryMetricsRunning = false;
+                m_directoryMetricsState = QStringLiteral("failed");
+                m_directoryMetricsError = error.message;
+                emit directoryMetricsStateChanged();
+            },
+            Qt::QueuedConnection);
+    }
     if (m_openWith != nullptr) {
         connect(
             m_openWith,
@@ -427,6 +483,51 @@ QString AppStateFacade::windowsLaunchMachine() const
 QStringList AppStateFacade::windowsLaunchWarnings() const
 {
     return m_windowsLaunchController == nullptr ? QStringList() : m_windowsLaunchController->warnings();
+}
+
+quint64 AppStateFacade::directoryMetricsRequestId() const
+{
+    return m_directoryMetricsRequestId;
+}
+
+bool AppStateFacade::directoryMetricsRunning() const
+{
+    return m_directoryMetricsRunning;
+}
+
+QString AppStateFacade::directoryMetricsState() const
+{
+    return m_directoryMetricsState;
+}
+
+qint64 AppStateFacade::directoryMetricsBytes() const
+{
+    return m_directoryMetricsBytes;
+}
+
+qint64 AppStateFacade::directoryMetricsFileCount() const
+{
+    return m_directoryMetricsFileCount;
+}
+
+qint64 AppStateFacade::directoryMetricsDirectoryCount() const
+{
+    return m_directoryMetricsDirectoryCount;
+}
+
+qint64 AppStateFacade::directoryMetricsUnreadableCount() const
+{
+    return m_directoryMetricsUnreadableCount;
+}
+
+qint64 AppStateFacade::directoryMetricsScannedEntryCount() const
+{
+    return m_directoryMetricsScannedEntryCount;
+}
+
+QString AppStateFacade::directoryMetricsError() const
+{
+    return m_directoryMetricsError;
 }
 
 QString AppStateFacade::networkRootPath() const
@@ -1239,6 +1340,53 @@ BackendRequestId AppStateFacade::requestProperties(const QString &path)
     return m_filesystemService == nullptr
         ? 0
         : m_filesystemService->properties(path);
+}
+
+BackendRequestId AppStateFacade::requestDirectoryMetrics(const QStringList &paths)
+{
+    m_directoryMetricsRequestId = 0;
+    m_directoryMetricsRunning = false;
+    m_directoryMetricsState = paths.isEmpty()
+        ? QStringLiteral("failed")
+        : QStringLiteral("running");
+    m_directoryMetricsBytes = 0;
+    m_directoryMetricsFileCount = 0;
+    m_directoryMetricsDirectoryCount = 0;
+    m_directoryMetricsUnreadableCount = 0;
+    m_directoryMetricsScannedEntryCount = 0;
+    m_directoryMetricsError = paths.isEmpty()
+        ? QStringLiteral("directory metrics requires at least one path")
+        : QString();
+    emit directoryMetricsStateChanged();
+    if (paths.isEmpty()) {
+        return 0;
+    }
+    if (m_directoryMetricsService == nullptr) {
+        m_directoryMetricsState = QStringLiteral("failed");
+        m_directoryMetricsError = QStringLiteral("directory metrics service is unavailable");
+        emit directoryMetricsStateChanged();
+        return 0;
+    }
+    const BackendRequestId requestId = m_directoryMetricsService->start(paths);
+    if (requestId == 0) {
+        m_directoryMetricsState = QStringLiteral("failed");
+        m_directoryMetricsError = QStringLiteral("could not start directory metrics");
+        emit directoryMetricsStateChanged();
+        return 0;
+    }
+    m_directoryMetricsRequestId = requestId;
+    m_directoryMetricsRunning = true;
+    emit directoryMetricsStateChanged();
+    return requestId;
+}
+
+void AppStateFacade::cancelDirectoryMetrics(BackendRequestId requestId)
+{
+    if (requestId == 0 || requestId != m_directoryMetricsRequestId
+        || m_directoryMetricsService == nullptr) {
+        return;
+    }
+    m_directoryMetricsService->cancel(requestId);
 }
 
 BackendRequestId AppStateFacade::createDesktopShortcut(const QString &path)

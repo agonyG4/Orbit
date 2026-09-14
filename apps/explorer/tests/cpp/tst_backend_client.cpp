@@ -104,6 +104,8 @@ private slots:
     void decodesFileOperationProgressAndResult();
     void forwardsLiveFileOperationProgressBeforeTerminalResult();
     void encodesArchiveRequestAndDecodesProgressAndResult();
+    void encodesDirectoryMetricsRequestAndDecodesProgressAndResult();
+    void rejectsMalformedDirectoryMetricsResult();
     void transportsArchivePasswordOutsideOperationArguments();
     void decodesStructuredArchiveContinuationStates();
     void acceptsSynchronousTransportCompletion();
@@ -533,6 +535,61 @@ void BackendClientTest::transportsArchivePasswordOutsideOperationArguments()
     QVERIFY(!started.arguments.constLast().contains(QStringLiteral("correct horse")));
     QVERIFY(!started.arguments.constLast().contains(QStringLiteral("password")));
     QCOMPARE(started.stdinPayload, request.password.toUtf8());
+}
+
+void BackendClientTest::encodesDirectoryMetricsRequestAndDecodesProgressAndResult()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+    QSignalSpy progressSpy(&client, &IRustBackendClient::directoryMetricsProgress);
+    QSignalSpy readySpy(&client, &IRustBackendClient::directoryMetricsReady);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    DirectoryMetricsRequest request;
+    request.paths = {QStringLiteral("/tmp/one"), QStringLiteral("/tmp/two")};
+    const BackendRequestId requestId = client.directoryMetrics(request);
+    QCOMPARE(transport.startedRequests.constLast().arguments.at(0), QStringLiteral("directory-metrics"));
+    const QJsonDocument encoded = QJsonDocument::fromJson(
+        transport.startedRequests.constLast().arguments.at(2).toUtf8());
+    QCOMPARE(encoded.object().value(QStringLiteral("paths")).toArray().size(), 2);
+
+    transport.stream(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"progress\",\"operation\":\"directory-metrics\","
+            "\"state\":\"running\",\"bytes\":12,\"fileCount\":2,"
+            "\"directoryCount\":1,\"unreadableCount\":0,\"scannedEntryCount\":3}"));
+    QTRY_COMPARE(progressSpy.count(), 1);
+    QCOMPARE(progressSpy.at(0).at(1).value<DirectoryMetricsProgress>().bytes, qint64(12));
+
+    transport.succeed(
+        requestId,
+        QByteArrayLiteral(
+            "{\"event\":\"result\",\"operation\":\"directory-metrics\","
+            "\"ok\":true,\"state\":\"success\",\"bytes\":12,"
+            "\"fileCount\":2,\"directoryCount\":1,\"unreadableCount\":0,"
+            "\"scannedEntryCount\":3,\"errorCode\":\"\",\"errorMessage\":\"\"}"));
+    QTRY_COMPARE(readySpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    const DirectoryMetricsResult result =
+        readySpy.at(0).at(1).value<DirectoryMetricsResult>();
+    QCOMPARE(result.requestId, requestId);
+    QCOMPARE(result.state, QStringLiteral("success"));
+    QCOMPARE(result.fileCount, qint64(2));
+}
+
+void BackendClientTest::rejectsMalformedDirectoryMetricsResult()
+{
+    InMemoryTransport transport;
+    RustBackendClient client(&transport);
+    QSignalSpy failedSpy(&client, &IRustBackendClient::failed);
+
+    DirectoryMetricsRequest request;
+    request.paths = {QStringLiteral("/tmp/one")};
+    const BackendRequestId requestId = client.directoryMetrics(request);
+    transport.succeed(requestId, QByteArrayLiteral("{\"event\":\"result\"}"));
+    QTRY_COMPARE(failedSpy.count(), 1);
+    QCOMPARE(failedSpy.at(0).at(0).value<BackendError>().code, QStringLiteral("decode_error"));
 }
 
 void BackendClientTest::decodesStructuredArchiveContinuationStates()

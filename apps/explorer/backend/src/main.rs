@@ -1,6 +1,7 @@
 mod appimage;
 mod archive;
 mod devices;
+mod directory_metrics;
 mod entries;
 mod file_ops;
 mod file_visual_metadata;
@@ -31,10 +32,11 @@ fn run() -> Result<(), String> {
         Some("thumbnail-batch") => thumbnails::run_batch(&args[2..]),
         Some("install-appimage") => appimage::run(&args[2..]),
         Some("file-op") => file_ops::run(&args[2..]),
+        Some("directory-metrics") => directory_metrics::run(&args[2..]),
         Some("archive-operation") => archive::run_operation(&args[2..]),
         Some("utility") => utility::run(&args[2..]),
         Some("serve") => worker::run(),
         _ if args.len() >= 6 => entries::run_list(&args[1..]),
-        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|thumbnail-batch|install-appimage|file-op|archive-operation|utility|serve ...".into()),
+        _ => Err("usage: explorer_backend list|search|devices|mount|unmount|remount|thumbnail-batch|install-appimage|file-op|directory-metrics|archive-operation|utility|serve ...".into()),
     }
 }

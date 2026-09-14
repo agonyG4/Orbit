@@ -47,6 +47,7 @@ private slots:
     void streamsOutputBeforeTerminalCompletion();
     void noTimeoutRequestSurvivesNormalBoundaryAndStillCancels();
     void sendsBoundedStdinPayloadWithoutChangingArguments();
+    void dedicatedMetricsWorkerDoesNotBlockInteractiveWorker();
 };
 
 void PersistentWorkerTransportTest::queuesRequestsUntilWorkerIsReady()
@@ -222,6 +223,41 @@ void PersistentWorkerTransportTest::sendsBoundedStdinPayloadWithoutChangingArgum
     QTRY_COMPARE_WITH_TIMEOUT(completedSpy.count(), 1, 1500);
     QCOMPARE(completedSpy.at(0).at(0).value<BackendRequestId>(), requestId);
     QCOMPARE(completedSpy.at(0).at(1).toByteArray(), QByteArrayLiteral("checked"));
+}
+
+void PersistentWorkerTransportTest::dedicatedMetricsWorkerDoesNotBlockInteractiveWorker()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString worker = makeWorker(
+        directory,
+        QStringLiteral(
+            "import json,sys,time\n"
+            "for line in sys.stdin:\n"
+            "    request=json.loads(line)\n"
+            "    if request['arguments'][0] == 'directory-metrics':\n"
+            "        time.sleep(0.5)\n"
+            "    print(json.dumps({'id':request['id'],'ok':True,'payload':'done'}), flush=True)\n"));
+    QVERIFY(!worker.isEmpty());
+
+    PersistentWorkerTransportOptions metricsOptions;
+    metricsOptions.backendProgram = worker;
+    metricsOptions.requestTimeoutMs = 0;
+    PersistentWorkerTransport metricsTransport(metricsOptions);
+    QSignalSpy metricsCompleted(&metricsTransport, &BackendTransport::completed);
+
+    PersistentWorkerTransportOptions interactiveOptions;
+    interactiveOptions.backendProgram = worker;
+    interactiveOptions.requestTimeoutMs = 1000;
+    PersistentWorkerTransport interactiveTransport(interactiveOptions);
+    QSignalSpy interactiveCompleted(&interactiveTransport, &BackendTransport::completed);
+
+    metricsTransport.start({QStringLiteral("directory-metrics")});
+    interactiveTransport.start({QStringLiteral("list"), QStringLiteral("/fixture")});
+
+    QTRY_COMPARE_WITH_TIMEOUT(interactiveCompleted.count(), 1, 300);
+    QCOMPARE(metricsCompleted.count(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(metricsCompleted.count(), 1, 1500);
 }
 
 QTEST_MAIN(PersistentWorkerTransportTest)

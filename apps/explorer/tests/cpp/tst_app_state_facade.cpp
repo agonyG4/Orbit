@@ -13,6 +13,7 @@
 #include "services/directory_watch_service.h"
 #include "services/archive_operation_service.h"
 #include "services/filesystem_service.h"
+#include "services/directory_metrics_service.h"
 #include "services/file_uri_list.h"
 #include "services/recent_store.h"
 #include "services/settings_service.h"
@@ -50,6 +51,7 @@ private slots:
     void resetsArchivePresentationStateAcrossOperations();
     void retainsSelectionWhenDeleteFails();
     void routesWindowsExtensionsThroughAsyncController();
+    void routesDirectoryMetricsThroughDedicatedService();
 };
 
 struct FacadeFixture
@@ -77,7 +79,8 @@ AppStateFacadeDependencies facadeDependencies(
     MimeAppsService *mimeApps = nullptr,
     IconThemeService *iconTheme = nullptr,
     Astrea::Explorer::Native::Runtime::ExplorerRuntimePaths runtimePaths = {},
-    WindowsLaunchController *windowsLaunch = nullptr)
+    WindowsLaunchController *windowsLaunch = nullptr,
+    DirectoryMetricsService *directoryMetrics = nullptr)
 {
     AppStateFacadeDependencies dependencies;
     dependencies.navigation = &fixture.navigation;
@@ -98,6 +101,7 @@ AppStateFacadeDependencies facadeDependencies(
     dependencies.iconTheme = iconTheme;
     dependencies.runtimePaths = runtimePaths;
     dependencies.windowsLaunch = windowsLaunch;
+    dependencies.directoryMetrics = directoryMetrics;
     return dependencies;
 }
 
@@ -321,6 +325,10 @@ void AppStateFacadeTest::exposesCoreQmlContract()
              "sidebarFavoritesModel", "windowsLaunchRunning", "windowsLaunchStatus",
              "windowsLaunchError", "windowsLaunchRunner", "windowsLaunchMachine",
              "windowsLaunchWarnings",
+             "directoryMetricsRequestId", "directoryMetricsRunning", "directoryMetricsState",
+             "directoryMetricsBytes", "directoryMetricsFileCount",
+             "directoryMetricsDirectoryCount", "directoryMetricsUnreadableCount",
+             "directoryMetricsScannedEntryCount", "directoryMetricsError",
              "dialogMode", "dialogFilePatterns", "inTrashView", "recentVirtualPath"}) {
         QVERIFY2(
             metaObject.indexOfProperty(propertyName) >= 0,
@@ -355,6 +363,15 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"windowsLaunchRunner", "QString", false},
         {"windowsLaunchMachine", "QString", false},
         {"windowsLaunchWarnings", "QStringList", false},
+        {"directoryMetricsRequestId", "qulonglong", false},
+        {"directoryMetricsRunning", "bool", false},
+        {"directoryMetricsState", "QString", false},
+        {"directoryMetricsBytes", "qlonglong", false},
+        {"directoryMetricsFileCount", "qlonglong", false},
+        {"directoryMetricsDirectoryCount", "qlonglong", false},
+        {"directoryMetricsUnreadableCount", "qlonglong", false},
+        {"directoryMetricsScannedEntryCount", "qlonglong", false},
+        {"directoryMetricsError", "QString", false},
         {"networkRootPath", "QString", false},
         {"trashFilesPath", "QString", false},
         {"trashInfoPath", "QString", false},
@@ -491,6 +508,8 @@ void AppStateFacadeTest::locksPublicQmlContract()
         {"requestDirectorySuggestions(QString,QString)", "qulonglong"},
         {"checkExecutable(QString)", "qulonglong"},
         {"requestProperties(QString)", "qulonglong"},
+        {"requestDirectoryMetrics(QStringList)", "qulonglong"},
+        {"cancelDirectoryMetrics(qulonglong)", "void"},
         {"createDesktopShortcut(QString)", "qulonglong"},
         {"requestNetworkMountProbe(QString)", "qulonglong"},
         {"connectToNetwork(QString)", "qulonglong"},
@@ -618,6 +637,7 @@ void AppStateFacadeTest::locksPublicQmlContract()
              "archiveStateChanged()",
              "wallpaperStateChanged()",
              "windowsLaunchStateChanged()",
+             "directoryMetricsStateChanged()",
              "iconThemeChanged()",
              "filesystemActionFinished(quint64,QString,bool,QVariantMap,QString)",
          }) {
@@ -675,6 +695,100 @@ void AppStateFacadeTest::routesWindowsExtensionsThroughAsyncController()
         QCOMPARE(facade.windowsLaunchRunner(), QStringLiteral("wine"));
         QCOMPARE(facade.windowsLaunchMachine(), QStringLiteral("x86_64"));
     }
+}
+
+void AppStateFacadeTest::routesDirectoryMetricsThroughDedicatedService()
+{
+    FacadeFixture fixture;
+    DirectoryMetricsService metrics(&fixture.client);
+    AppStateFacade facade(facadeDependencies(
+        fixture,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        {},
+        nullptr,
+        &metrics));
+
+    const BackendRequestId first = facade.requestDirectoryMetrics(
+        {QStringLiteral("/fixture/A"), QStringLiteral("/fixture/B")});
+    QVERIFY(first != 0);
+    const QStringList expectedPaths {
+        QStringLiteral("/fixture/A"), QStringLiteral("/fixture/B")};
+    QCOMPARE(fixture.client.directoryMetricsRequests().constLast().paths, expectedPaths);
+    QCOMPARE(facade.directoryMetricsRequestId(), quint64(first));
+    QVERIFY(facade.directoryMetricsRunning());
+
+    DirectoryMetricsProgress progress;
+    progress.state = QStringLiteral("running");
+    progress.bytes = 12;
+    progress.fileCount = 2;
+    progress.directoryCount = 1;
+    progress.scannedEntryCount = 3;
+    fixture.client.completeDirectoryMetricsProgress(first, progress);
+    QTRY_COMPARE(facade.directoryMetricsBytes(), qint64(12));
+    QCOMPARE(facade.directoryMetricsFileCount(), qint64(2));
+
+    DirectoryMetricsResult partial;
+    partial.operation = QStringLiteral("directory-metrics");
+    partial.state = QStringLiteral("partial");
+    partial.bytes = 42;
+    partial.fileCount = 4;
+    partial.directoryCount = 2;
+    partial.unreadableCount = 1;
+    partial.scannedEntryCount = 7;
+    partial.errorMessage = QStringLiteral("Some items could not be read");
+    fixture.client.completeDirectoryMetrics(first, partial);
+    QTRY_COMPARE(facade.directoryMetricsState(), QStringLiteral("partial"));
+    QCOMPARE(facade.directoryMetricsRunning(), false);
+    QCOMPARE(facade.directoryMetricsBytes(), qint64(42));
+    QCOMPARE(facade.directoryMetricsUnreadableCount(), qint64(1));
+    QCOMPARE(facade.directoryMetricsError(), QStringLiteral("Some items could not be read"));
+
+    const BackendRequestId second = facade.requestDirectoryMetrics(
+        {QStringLiteral("/fixture/C")});
+    QVERIFY(second != 0);
+    QCOMPARE(facade.directoryMetricsRequestId(), quint64(second));
+    QVERIFY(facade.directoryMetricsRunning());
+
+    DirectoryMetricsResult stale;
+    stale.operation = QStringLiteral("directory-metrics");
+    stale.state = QStringLiteral("success");
+    stale.bytes = 999;
+    fixture.client.completeDirectoryMetrics(first, stale);
+    QTest::qWait(20);
+    QCOMPARE(facade.directoryMetricsBytes(), qint64(0));
+    QCOMPARE(facade.directoryMetricsState(), QStringLiteral("running"));
+
+    DirectoryMetricsResult success;
+    success.operation = QStringLiteral("directory-metrics");
+    success.state = QStringLiteral("success");
+    success.bytes = 84;
+    success.fileCount = 8;
+    success.directoryCount = 3;
+    success.scannedEntryCount = 11;
+    fixture.client.completeDirectoryMetrics(second, success);
+    QTRY_COMPARE(facade.directoryMetricsState(), QStringLiteral("success"));
+    QCOMPARE(facade.directoryMetricsBytes(), qint64(84));
+    QCOMPARE(facade.directoryMetricsError(), QString());
+
+    const BackendRequestId third = facade.requestDirectoryMetrics(
+        {QStringLiteral("/fixture/D")});
+    QVERIFY(third != 0);
+    facade.cancelDirectoryMetrics(third);
+    QVERIFY(fixture.client.cancelledRequests().contains(third));
+    fixture.client.failRequest(third, QStringLiteral("cancelled"), QStringLiteral("request cancelled"));
+    QTRY_COMPARE(facade.directoryMetricsState(), QStringLiteral("cancelled"));
+    QCOMPARE(facade.directoryMetricsRunning(), false);
 }
 
 void AppStateFacadeTest::exposesResolverAndDialogCompatibility()

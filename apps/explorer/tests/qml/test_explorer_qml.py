@@ -13,6 +13,56 @@ FILES_MODULE_ROOT = REPO_ROOT / "shared" / "qml" / "Astrea" / "Files"
 
 
 class ExplorerQmlFeatureRemovalTests(unittest.TestCase):
+    def test_properties_use_shared_async_directory_metrics_state(self):
+        app_state = (APP_ROOT / "AppState.qml").read_text(encoding="utf-8")
+        context_menu = (
+            APP_ROOT / "components" / "common" / "FileContextMenu.qml"
+        ).read_text(encoding="utf-8")
+        sidebar = (
+            APP_ROOT / "components" / "layout" / "Sidebar.qml"
+        ).read_text(encoding="utf-8")
+        file_list = (
+            APP_ROOT / "components" / "views" / "FileListView.qml"
+        ).read_text(encoding="utf-8")
+        preview = (
+            APP_ROOT / "components" / "layout" / "PreviewPanel.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("requestDirectoryMetrics", app_state)
+        self.assertIn("cancelDirectoryMetrics", app_state)
+        for source in [context_menu, sidebar]:
+            self.assertIn("AppState.requestDirectoryMetrics", source)
+            self.assertIn("AppState.cancelDirectoryMetrics", source)
+            self.assertIn("onDirectoryMetricsStateChanged", source)
+            self.assertIn("apps.explorer.properties.text.calculating", source)
+            self.assertIn("apps.explorer.properties.text.at_least", source)
+            self.assertNotIn("targetPaths[0]", source)
+
+        self.assertIn("sizeKnown", context_menu)
+        self.assertIn("sizeKnown", sidebar)
+        self.assertIn("fileSize", file_list)
+        self.assertIn("itemIsDir ?", file_list)
+        self.assertIn("selectedIsDir ?", preview)
+        self.assertNotIn("requestDirectoryMetrics", file_list)
+        self.assertNotIn("requestDirectoryMetrics", preview)
+
+    def test_properties_keep_basic_files_immediate_and_folder_size_unknown(self):
+        utility = (
+            EXPLORER_ROOT / "backend" / "src" / "utility.rs"
+        ).read_text(encoding="utf-8")
+        context_menu = (
+            APP_ROOT / "components" / "common" / "FileContextMenu.qml"
+        ).read_text(encoding="utf-8")
+        sidebar = (
+            APP_ROOT / "components" / "layout" / "Sidebar.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("sizeKnown", utility)
+        self.assertIn("data.sizeKnown !== false", context_menu)
+        self.assertIn("data.sizeKnown !== false", sidebar)
+        self.assertIn("propertiesWin.metricsRequestId", context_menu)
+        self.assertIn("sidebarProperties.metricsRequestId", sidebar)
+
     def test_preview_state_converts_nested_icon_model_before_native_call(self):
         qml6 = shutil.which("qml6")
         if qml6 is None:

@@ -38,6 +38,7 @@
 #include "runtime/explorer_runtime_paths.h"
 #include "services/clipboard_service.h"
 #include "services/archive_operation_service.h"
+#include "services/directory_metrics_service.h"
 #include "services/directory_watch_service.h"
 #include "services/desktop_application_catalog.h"
 #include "services/file_operation_service.h"
@@ -196,6 +197,14 @@ int ExplorerApplication::run(int argc, char **argv)
     archiveTransportOptions.requestTimeoutMs = 0;
     PersistentWorkerTransport archiveTransport(archiveTransportOptions, &application);
     RustBackendClient archiveBackendClient(&archiveTransport, &application);
+    PersistentWorkerTransportOptions directoryMetricsTransportOptions = transportOptions;
+    directoryMetricsTransportOptions.requestTimeoutMs = 0;
+    PersistentWorkerTransport directoryMetricsTransport(
+        directoryMetricsTransportOptions,
+        &application);
+    RustBackendClient directoryMetricsBackendClient(
+        &directoryMetricsTransport,
+        &application);
     DirectoryModel directoryModel(&application);
     DirectoryWatchService directoryWatcher(&application);
     SettingsService settings(
@@ -210,6 +219,9 @@ int ExplorerApplication::run(int argc, char **argv)
     FileOperationService fileOperationService(&backendClient, &application);
     FilesystemService filesystemService(&backendClient, &application);
     ArchiveOperationService archiveOperationService(&archiveBackendClient, &application);
+    DirectoryMetricsService directoryMetricsService(
+        &directoryMetricsBackendClient,
+        &application);
     FileOperationsController fileOperations(
         &fileOperationService,
         &clipboard,
@@ -260,6 +272,7 @@ int ExplorerApplication::run(int argc, char **argv)
     appStateDependencies.devices = &devices;
     appStateDependencies.recent = &recentController;
     appStateDependencies.filesystem = &filesystemService;
+    appStateDependencies.directoryMetrics = &directoryMetricsService;
     appStateDependencies.openWith = &openWith;
     appStateDependencies.launch = &launchService;
     appStateDependencies.windowsLaunch = &windowsLaunchController;

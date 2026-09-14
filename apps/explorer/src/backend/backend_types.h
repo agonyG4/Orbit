@@ -171,6 +171,37 @@ struct UtilityResult
     QString errorMessage;
 };
 
+struct DirectoryMetricsRequest
+{
+    QStringList paths;
+};
+
+struct DirectoryMetricsProgress
+{
+    BackendRequestId requestId = 0;
+    QString operation;
+    QString state;
+    qint64 bytes = 0;
+    qint64 fileCount = 0;
+    qint64 directoryCount = 0;
+    qint64 unreadableCount = 0;
+    qint64 scannedEntryCount = 0;
+};
+
+struct DirectoryMetricsResult
+{
+    BackendRequestId requestId = 0;
+    QString operation;
+    QString state;
+    qint64 bytes = 0;
+    qint64 fileCount = 0;
+    qint64 directoryCount = 0;
+    qint64 unreadableCount = 0;
+    qint64 scannedEntryCount = 0;
+    QString errorCode;
+    QString errorMessage;
+};
+
 struct ArchiveOperationRequest
 {
     QString kind;
@@ -248,6 +279,9 @@ Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::FileOperationItemR
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::FileOperationResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::UtilityResult)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DirectoryMetricsRequest)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DirectoryMetricsProgress)
+Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::DirectoryMetricsResult)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveOperationRequest)
 Q_DECLARE_METATYPE(Astrea::Explorer::Native::Backend::ArchiveCapability)
 Q_DECLARE_METATYPE(QVector<Astrea::Explorer::Native::Backend::ArchiveCapability>)

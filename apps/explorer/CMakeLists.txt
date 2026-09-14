@@ -184,6 +184,8 @@ add_library(astrea_explorer_native_operations STATIC
     src/services/file_operation_service.cpp
     src/services/archive_operation_service.h
     src/services/archive_operation_service.cpp
+    src/services/directory_metrics_service.h
+    src/services/directory_metrics_service.cpp
     src/services/filesystem_service.h
     src/services/filesystem_service.cpp
     src/services/desktop_file_id.h
@@ -587,6 +589,22 @@ target_link_libraries(tst_archive_operation_service PRIVATE
 )
 
 add_test(NAME archive_operation_service COMMAND tst_archive_operation_service)
+
+qt_add_executable(tst_directory_metrics_service
+    tests/cpp/tst_directory_metrics_service.cpp
+)
+
+target_include_directories(tst_directory_metrics_service PRIVATE
+    src
+)
+
+target_link_libraries(tst_directory_metrics_service PRIVATE
+    Qt6::Core
+    Qt6::Test
+    astrea_explorer_native_operations
+)
+
+add_test(NAME directory_metrics_service COMMAND tst_directory_metrics_service)
 
 qt_add_executable(tst_selection_controller
     tests/cpp/tst_selection_controller.cpp

@@ -56,6 +56,13 @@ BackendRequestId FakeRustBackendClient::archiveOperation(
     return nextRequestId();
 }
 
+BackendRequestId FakeRustBackendClient::directoryMetrics(
+    const DirectoryMetricsRequest &request)
+{
+    m_directoryMetricsRequests.append(request);
+    return nextRequestId();
+}
+
 BackendRequestId FakeRustBackendClient::utility(const UtilityRequest &request)
 {
     const BackendRequestId requestId = nextRequestId();
@@ -126,6 +133,24 @@ void FakeRustBackendClient::completeArchiveOperation(
     emit archiveOperationReady(requestId, completed);
 }
 
+void FakeRustBackendClient::completeDirectoryMetricsProgress(
+    BackendRequestId requestId,
+    const DirectoryMetricsProgress &progress)
+{
+    DirectoryMetricsProgress completed = progress;
+    completed.requestId = requestId;
+    emit directoryMetricsProgress(requestId, completed);
+}
+
+void FakeRustBackendClient::completeDirectoryMetrics(
+    BackendRequestId requestId,
+    const DirectoryMetricsResult &result)
+{
+    DirectoryMetricsResult completed = result;
+    completed.requestId = requestId;
+    emit directoryMetricsReady(requestId, completed);
+}
+
 void FakeRustBackendClient::completeUtility(
     BackendRequestId requestId,
     const UtilityResult &result)
@@ -171,6 +196,12 @@ const QVector<ArchiveOperationRequest> &
 FakeRustBackendClient::archiveOperationRequests() const
 {
     return m_archiveOperationRequests;
+}
+
+const QVector<DirectoryMetricsRequest> &
+FakeRustBackendClient::directoryMetricsRequests() const
+{
+    return m_directoryMetricsRequests;
 }
 
 const QVector<UtilityRequest> &FakeRustBackendClient::utilityRequests() const

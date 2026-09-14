@@ -1,5 +1,7 @@
 #include "backend/rust_backend_client.h"
 
+#include <cmath>
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,6 +20,18 @@ QString boolArg(bool value)
 QString jsonValueError(const QString &fieldName, const QString &expectedType)
 {
     return QStringLiteral("field '%1' must be %2").arg(fieldName, expectedType);
+}
+
+bool validNonNegativeInteger(const QJsonValue &value)
+{
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double number = value.toDouble();
+    return std::isfinite(number)
+        && number >= 0
+        && number < 9223372036854775808.0
+        && std::floor(number) == number;
 }
 
 } // namespace
@@ -119,6 +133,25 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 return;
             }
 
+            if (kind == RequestKind::DirectoryMetrics) {
+                BackendError error;
+                QVector<DirectoryMetricsProgress> progresses;
+                const DirectoryMetricsResult result = decodeDirectoryMetrics(
+                    requestId,
+                    payload,
+                    &error,
+                    &progresses);
+                if (!error.code.isEmpty()) {
+                    emit failed(error);
+                } else {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        emit directoryMetricsProgress(requestId, progresses.at(index));
+                    }
+                    emit directoryMetricsReady(requestId, result);
+                }
+                return;
+            }
+
             if (kind == RequestKind::Utility) {
                 BackendError error;
                 const UtilityResult result = decodeUtility(requestId, payload, &error);
@@ -195,6 +228,23 @@ RustBackendClient::RustBackendClient(BackendTransport *transport, QObject *paren
                 }
             }
 
+            if (kind == RequestKind::DirectoryMetrics && !transportError.stdoutData.isEmpty()) {
+                BackendError decodeError;
+                QVector<DirectoryMetricsProgress> progresses;
+                const DirectoryMetricsResult result = decodeDirectoryMetrics(
+                    requestId,
+                    transportError.stdoutData,
+                    &decodeError,
+                    &progresses);
+                if (decodeError.code.isEmpty()) {
+                    for (int index = streamedProgressCount; index < progresses.size(); ++index) {
+                        emit directoryMetricsProgress(requestId, progresses.at(index));
+                    }
+                    emit directoryMetricsReady(requestId, result);
+                    return;
+                }
+            }
+
             BackendError error;
             error.code = transportError.code;
             error.message = transportError.message;
@@ -211,7 +261,8 @@ void RustBackendClient::handleStreamed(
     auto pending = m_pendingRequests.find(requestId);
     if (pending == m_pendingRequests.end()
         || (pending->kind != RequestKind::FileOperation
-            && pending->kind != RequestKind::ArchiveOperation)) {
+            && pending->kind != RequestKind::ArchiveOperation
+            && pending->kind != RequestKind::DirectoryMetrics)) {
         return;
     }
 
@@ -235,6 +286,18 @@ void RustBackendClient::handleStreamed(
         }
         ++pending->streamedProgressCount;
         emit fileOperationProgress(requestId, progress);
+        return;
+    }
+
+    if (pending->kind == RequestKind::DirectoryMetrics) {
+        DirectoryMetricsProgress progress;
+        if (!decodeDirectoryMetricsProgress(requestId, document.object(), &progress, &error)) {
+            m_pendingRequests.erase(pending);
+            emit failed(error);
+            return;
+        }
+        ++pending->streamedProgressCount;
+        emit directoryMetricsProgress(requestId, progress);
         return;
     }
 
@@ -306,6 +369,13 @@ BackendRequestId RustBackendClient::archiveOperation(const ArchiveOperationReque
         archiveOperationArguments(request),
         request.password.toUtf8());
     m_pendingRequests.insert(requestId, {RequestKind::ArchiveOperation, 0});
+    return requestId;
+}
+
+BackendRequestId RustBackendClient::directoryMetrics(const DirectoryMetricsRequest &request)
+{
+    const BackendRequestId requestId = m_transport->start(directoryMetricsArguments(request));
+    m_pendingRequests.insert(requestId, PendingRequest {RequestKind::DirectoryMetrics});
     return requestId;
 }
 
@@ -399,6 +469,19 @@ QStringList RustBackendClient::archiveOperationArguments(
     };
     return {
         QStringLiteral("archive-operation"),
+        QStringLiteral("--json"),
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)),
+    };
+}
+
+QStringList RustBackendClient::directoryMetricsArguments(
+    const DirectoryMetricsRequest &request) const
+{
+    const QJsonObject object {
+        {QStringLiteral("paths"), QJsonArray::fromStringList(request.paths)},
+    };
+    return {
+        QStringLiteral("directory-metrics"),
         QStringLiteral("--json"),
         QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)),
     };
@@ -856,6 +939,158 @@ ArchiveOperationResult RustBackendClient::decodeArchiveOperation(
             *error = makeDecodeError(
                 requestId,
                 QStringLiteral("archive operation did not produce a terminal event"));
+        }
+        return {};
+    }
+    return result;
+}
+
+bool RustBackendClient::decodeDirectoryMetricsProgress(
+    BackendRequestId requestId,
+    const QJsonObject &object,
+    DirectoryMetricsProgress *progress,
+    BackendError *error) const
+{
+    const QJsonValue operation = object.value(QStringLiteral("operation"));
+    const QJsonValue state = object.value(QStringLiteral("state"));
+    const QJsonValue bytes = object.value(QStringLiteral("bytes"));
+    const QJsonValue fileCount = object.value(QStringLiteral("fileCount"));
+    const QJsonValue directoryCount = object.value(QStringLiteral("directoryCount"));
+    const QJsonValue unreadableCount = object.value(QStringLiteral("unreadableCount"));
+    const QJsonValue scannedEntryCount = object.value(QStringLiteral("scannedEntryCount"));
+    if (!operation.isString()
+        || operation.toString() != QStringLiteral("directory-metrics")
+        || !state.isString()
+        || state.toString() != QStringLiteral("running")
+        || !validNonNegativeInteger(bytes)
+        || !validNonNegativeInteger(fileCount)
+        || !validNonNegativeInteger(directoryCount)
+        || !validNonNegativeInteger(unreadableCount)
+        || !validNonNegativeInteger(scannedEntryCount)) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("directory metrics progress fields have incompatible types"));
+        }
+        return false;
+    }
+    if (progress == nullptr) {
+        return true;
+    }
+    progress->requestId = requestId;
+    progress->operation = operation.toString();
+    progress->state = state.toString();
+    progress->bytes = bytes.toInteger();
+    progress->fileCount = fileCount.toInteger();
+    progress->directoryCount = directoryCount.toInteger();
+    progress->unreadableCount = unreadableCount.toInteger();
+    progress->scannedEntryCount = scannedEntryCount.toInteger();
+    return true;
+}
+
+DirectoryMetricsResult RustBackendClient::decodeDirectoryMetrics(
+    BackendRequestId requestId,
+    const QByteArray &payload,
+    BackendError *error,
+    QVector<DirectoryMetricsProgress> *progresses) const
+{
+    DirectoryMetricsResult result;
+    result.requestId = requestId;
+    bool terminal = false;
+    const QList<QByteArray> lines = payload.split('\n');
+    for (const QByteArray &line : lines) {
+        if (line.trimmed().isEmpty()) {
+            continue;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    parseError.error == QJsonParseError::NoError
+                        ? QStringLiteral("directory metrics event must be a JSON object")
+                        : QStringLiteral("JSON parse failed: %1").arg(parseError.errorString()));
+            }
+            return {};
+        }
+        const QJsonObject object = document.object();
+        const QString event = object.value(QStringLiteral("event")).toString();
+        if (terminal) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    QStringLiteral("directory metrics emitted data after its terminal result"));
+            }
+            return {};
+        }
+        if (event == QStringLiteral("progress")) {
+            DirectoryMetricsProgress progress;
+            if (!decodeDirectoryMetricsProgress(requestId, object, &progress, error)) {
+                return {};
+            }
+            if (progresses != nullptr) {
+                progresses->append(progress);
+            }
+            continue;
+        }
+        if (event != QStringLiteral("result")) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    QStringLiteral("directory metrics did not produce one terminal result"));
+            }
+            return {};
+        }
+        const QJsonValue ok = object.value(QStringLiteral("ok"));
+        const QJsonValue operation = object.value(QStringLiteral("operation"));
+        const QJsonValue state = object.value(QStringLiteral("state"));
+        const QJsonValue bytes = object.value(QStringLiteral("bytes"));
+        const QJsonValue fileCount = object.value(QStringLiteral("fileCount"));
+        const QJsonValue directoryCount = object.value(QStringLiteral("directoryCount"));
+        const QJsonValue unreadableCount = object.value(QStringLiteral("unreadableCount"));
+        const QJsonValue scannedEntryCount = object.value(QStringLiteral("scannedEntryCount"));
+        const QString stateText = state.toString();
+        if (!ok.isBool()
+            || !operation.isString()
+            || operation.toString() != QStringLiteral("directory-metrics")
+            || !state.isString()
+            || !QStringList {
+                QStringLiteral("success"),
+                QStringLiteral("partial"),
+                QStringLiteral("cancelled"),
+                QStringLiteral("failed")}
+                   .contains(stateText)
+            || (ok.toBool() != (stateText == QStringLiteral("success")
+                                || stateText == QStringLiteral("partial")))
+            || !validNonNegativeInteger(bytes)
+            || !validNonNegativeInteger(fileCount)
+            || !validNonNegativeInteger(directoryCount)
+            || !validNonNegativeInteger(unreadableCount)
+            || !validNonNegativeInteger(scannedEntryCount)) {
+            if (error != nullptr) {
+                *error = makeDecodeError(
+                    requestId,
+                    QStringLiteral("directory metrics result fields have incompatible types"));
+            }
+            return {};
+        }
+        result.operation = operation.toString();
+        result.state = stateText;
+        result.bytes = bytes.toInteger();
+        result.fileCount = fileCount.toInteger();
+        result.directoryCount = directoryCount.toInteger();
+        result.unreadableCount = unreadableCount.toInteger();
+        result.scannedEntryCount = scannedEntryCount.toInteger();
+        result.errorCode = object.value(QStringLiteral("errorCode")).toString();
+        result.errorMessage = object.value(QStringLiteral("errorMessage")).toString();
+        terminal = true;
+    }
+    if (!terminal) {
+        if (error != nullptr) {
+            *error = makeDecodeError(
+                requestId,
+                QStringLiteral("directory metrics did not produce a terminal result"));
         }
         return {};
     }

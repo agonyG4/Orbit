@@ -204,6 +204,8 @@ Item {
 
     function runShowProperties() {
         closeMenu()
+        if (propertiesWin.visible)
+            propertiesWin.close()
         var selected = AppState.selectedFiles
         var inSelection = AppState.isPathSelected(itemPath)
 
@@ -558,6 +560,7 @@ Item {
         property string propPerms: ""
         property string propContains: ""
         property int propertiesRequestId: 0
+        property int metricsRequestId: 0
 
         readonly property bool isImageFile: {
             if (isMulti) return false
@@ -573,18 +576,84 @@ Item {
             return Qt.formatDateTime(new Date(v * 1000), "dd/MM/yyyy  HH:mm")
         }
 
+        function metricsText(key, fallback, values) {
+            var text = (AstreaI18n.I18n.messages && AstreaI18n.I18n.messages[key]) || fallback
+            for (var i = 0; i < values.length; ++i)
+                text = text.replace("%" + (i + 1), values[i])
+            return text
+        }
+
+        function applyMetricsState() {
+            if (metricsRequestId === 0 || metricsRequestId !== AppState.directoryMetricsRequestId)
+                return
+            var files = Number(AppState.directoryMetricsFileCount)
+            var folders = Number(AppState.directoryMetricsDirectoryCount)
+            var counts = metricsText(
+                "apps.explorer.properties.text.files_and_folders",
+                "%1 files, %2 folders",
+                [files, folders])
+            var state = AppState.directoryMetricsState
+            if (state === "running") {
+                var liveSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
+                propertiesWin.propSize = Number(AppState.directoryMetricsBytes) > 0
+                    ? liveSize + " (" + metricsText("apps.explorer.properties.text.calculating", "Calculating…", []) + ")"
+                    : metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
+                propertiesWin.propContains = counts
+                propertiesWin.errorText = ""
+                return
+            }
+            if (state === "success") {
+                propertiesWin.propSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
+                propertiesWin.propContains = counts
+                propertiesWin.errorText = ""
+                return
+            }
+            if (state === "partial") {
+                propertiesWin.propSize = metricsText(
+                    "apps.explorer.properties.text.at_least",
+                    "At least %1",
+                    [AppState.formatSize(Number(AppState.directoryMetricsBytes))])
+                propertiesWin.propContains = counts
+                propertiesWin.errorText = AppState.directoryMetricsError
+                    || metricsText("apps.explorer.properties.text.some_items_unreadable", "Some items could not be read.", [])
+                return
+            }
+            if (state === "failed") {
+                propertiesWin.errorText = AppState.directoryMetricsError
+                    || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
+            }
+        }
+
         onVisibilityChanged: {
-            if (!visible) return
+            if (!visible) {
+                if (propertiesWin.metricsRequestId !== 0)
+                    AppState.cancelDirectoryMetrics(propertiesWin.metricsRequestId)
+                propertiesWin.metricsRequestId = 0
+                propertiesWin.propertiesRequestId = 0
+                return
+            }
             isLoading = true
             errorText = ""
-            propType = ""
-            propSize = "Carregando..."
+            propType = propertiesWin.isMulti
+                ? metricsText("apps.explorer.properties.text.multiple_items", "Multiple items", [])
+                : ""
+            propSize = (propertiesWin.isMulti || propertiesWin.targetIsDir)
+                ? metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
+                : ""
             propModified = "Carregando..."
             propAccessed = "Carregando..."
             propPerms = "Carregando..."
-            propContains = targetIsDir ? "Carregando..." : ""
-            propertiesWin.propertiesRequestId = AppState.requestProperties(
-                propertiesWin.isMulti ? propertiesWin.targetPaths[0] : propertiesWin.targetPath)
+            propContains = (propertiesWin.isMulti || propertiesWin.targetIsDir)
+                ? metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
+                : ""
+            propertiesWin.propertiesRequestId = propertiesWin.isMulti
+                ? 0
+                : AppState.requestProperties(propertiesWin.targetPath)
+            propertiesWin.metricsRequestId = (propertiesWin.isMulti || propertiesWin.targetIsDir)
+                ? AppState.requestDirectoryMetrics(propertiesWin.isMulti
+                    ? propertiesWin.targetPaths
+                    : [propertiesWin.targetPath])
+                : 0
         }
 
         Rectangle {
@@ -745,17 +814,23 @@ Item {
                     propertiesWin.errorText = error || "Falha ao consultar propriedades."
                     return
                 }
-                propertiesWin.errorText = ""
+                if (!propertiesWin.isMulti
+                    && propertiesWin.metricsRequestId === 0)
+                    propertiesWin.errorText = ""
                 propertiesWin.propType = data.type || (propertiesWin.targetIsDir ? "Pasta" : "Arquivo")
-                propertiesWin.propSize = AppState.formatSize(Number(data.size || 0))
+                if (!propertiesWin.targetIsDir && data.sizeKnown !== false)
+                    propertiesWin.propSize = AppState.formatSize(Number(data.size || 0))
                 propertiesWin.propModified = propertiesWin.fmtDate(Number(data.modifiedMs || 0) / 1000)
                 propertiesWin.propAccessed = propertiesWin.fmtDate(Number(data.accessedMs || 0) / 1000)
                 propertiesWin.propPerms = data.permissions || "--"
-                if (propertiesWin.targetIsDir) {
+                if (propertiesWin.targetIsDir && propertiesWin.metricsRequestId === 0) {
                     var count = Number(data.contains || 0)
                     propertiesWin.propContains = count + (count === 1 ? " item" : " itens")
                 }
                 propertiesWin.isLoading = false
+            }
+            function onDirectoryMetricsStateChanged() {
+                propertiesWin.applyMetricsState()
             }
         }
     }

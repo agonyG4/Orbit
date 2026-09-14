@@ -223,6 +223,7 @@ fn properties(args: &[String]) -> Result<String, String> {
         .map_err(|error| format!("metadata {}: {error}", path.display()))?;
     let is_dir = metadata.is_dir();
     let item_type = if is_dir { "Pasta" } else { "Arquivo" };
+    let size_known = !is_dir;
     let size = if is_dir { 0 } else { metadata.len() };
     let modified = metadata
         .modified()
@@ -243,9 +244,10 @@ fn properties(args: &[String]) -> Result<String, String> {
         0
     };
     Ok(format!(
-        "{{\"ok\":true,\"operation\":\"properties\",\"type\":\"{}\",\"size\":{},\"modifiedMs\":{},\"accessedMs\":{},\"permissions\":\"{}\",\"contains\":{}}}",
+        "{{\"ok\":true,\"operation\":\"properties\",\"type\":\"{}\",\"size\":{},\"sizeKnown\":{},\"modifiedMs\":{},\"accessedMs\":{},\"permissions\":\"{}\",\"contains\":{}}}",
         escape_json(item_type),
         size,
+        size_known,
         modified,
         accessed,
         escape_json(&permissions),
@@ -1269,6 +1271,33 @@ mod tests {
         assert!(safe_child_name("../escape", "name").is_err());
         assert!(safe_child_name("nested/name", "name").is_err());
         assert!(safe_child_name("safe name", "name").is_ok());
+    }
+
+    #[test]
+    fn properties_mark_directory_size_as_unknown_but_keep_file_size_known() {
+        let root = tempfile_path("properties-size-known");
+        fs::create_dir_all(&root).unwrap();
+        let directory = root.join("folder");
+        fs::create_dir(&directory).unwrap();
+        let file = root.join("file");
+        fs::write(&file, "payload").unwrap();
+
+        let directory_result = properties(&vec![
+            "properties".into(),
+            directory.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(directory_result.contains("\"size\":0"));
+        assert!(directory_result.contains("\"sizeKnown\":false"));
+
+        let file_result = properties(&vec![
+            "properties".into(),
+            file.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(file_result.contains("\"size\":7"));
+        assert!(file_result.contains("\"sizeKnown\":true"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

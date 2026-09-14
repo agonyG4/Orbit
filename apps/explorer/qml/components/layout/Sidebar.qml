@@ -100,6 +100,8 @@ Item {
     function showSidebarProperties() {
         var target = sidebarMenuPath
         closeMenus()
+        if (sidebarProperties.visible)
+            sidebarProperties.close()
         sidebarProperties.targetPath = target
         sidebarProperties.targetIsDir = true
         sidebarProperties.show()
@@ -578,6 +580,7 @@ Item {
         property string propPerms: ""
         property string propContains: ""
         property int propertiesRequestId: 0
+        property int metricsRequestId: 0
 
         function fmtDate(epochSeconds) {
             var v = Number(epochSeconds)
@@ -585,16 +588,73 @@ Item {
             return Qt.formatDateTime(new Date(v * 1000), "dd/MM/yyyy  HH:mm")
         }
 
+        function metricsText(key, fallback, values) {
+            var text = (AstreaI18n.I18n.messages && AstreaI18n.I18n.messages[key]) || fallback
+            for (var i = 0; i < values.length; ++i)
+                text = text.replace("%" + (i + 1), values[i])
+            return text
+        }
+
+        function applyMetricsState() {
+            if (metricsRequestId === 0 || metricsRequestId !== AppState.directoryMetricsRequestId)
+                return
+            var counts = metricsText(
+                "apps.explorer.properties.text.files_and_folders",
+                "%1 files, %2 folders",
+                [Number(AppState.directoryMetricsFileCount), Number(AppState.directoryMetricsDirectoryCount)])
+            var state = AppState.directoryMetricsState
+            if (state === "running") {
+                var liveSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
+                sidebarProperties.propSize = Number(AppState.directoryMetricsBytes) > 0
+                    ? liveSize + " (" + metricsText("apps.explorer.properties.text.calculating", "Calculating…", []) + ")"
+                    : metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
+                sidebarProperties.propContains = counts
+                sidebarProperties.errorText = ""
+                return
+            }
+            if (state === "success") {
+                sidebarProperties.propSize = AppState.formatSize(Number(AppState.directoryMetricsBytes))
+                sidebarProperties.propContains = counts
+                sidebarProperties.errorText = ""
+                return
+            }
+            if (state === "partial") {
+                sidebarProperties.propSize = metricsText(
+                    "apps.explorer.properties.text.at_least",
+                    "At least %1",
+                    [AppState.formatSize(Number(AppState.directoryMetricsBytes))])
+                sidebarProperties.propContains = counts
+                sidebarProperties.errorText = AppState.directoryMetricsError
+                    || metricsText("apps.explorer.properties.text.some_items_unreadable", "Some items could not be read.", [])
+                return
+            }
+            if (state === "failed") {
+                sidebarProperties.errorText = AppState.directoryMetricsError
+                    || metricsText("apps.explorer.properties.text.metrics_failed", "Could not calculate folder size.", [])
+            }
+        }
+
         onVisibilityChanged: {
-            if (!visible) return
+            if (!visible) {
+                if (sidebarProperties.metricsRequestId !== 0)
+                    AppState.cancelDirectoryMetrics(sidebarProperties.metricsRequestId)
+                sidebarProperties.metricsRequestId = 0
+                sidebarProperties.propertiesRequestId = 0
+                return
+            }
             isLoading = true
             errorText = ""
             propType = ""
-            propSize = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
+            propSize = targetIsDir
+                ? metricsText("apps.explorer.properties.text.calculating", "Calculating…", [])
+                : ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
             propModified = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
             propPerms = ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...")
-            propContains = targetIsDir ? ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.text.loading"]) || "Loading...") : ""
+            propContains = targetIsDir ? metricsText("apps.explorer.properties.text.calculating", "Calculating…", []) : ""
             sidebarProperties.propertiesRequestId = AppState.requestProperties(sidebarProperties.targetPath)
+            sidebarProperties.metricsRequestId = targetIsDir
+                ? AppState.requestDirectoryMetrics([sidebarProperties.targetPath])
+                : 0
         }
 
         Rectangle {
@@ -727,13 +787,21 @@ Item {
                     sidebarProperties.errorText = error || ((AstreaI18n.I18n.messages && AstreaI18n.I18n.messages["apps.explorer.components.layout.sidebar.error.failed_to_load"]) || "Failed to load.")
                     return
                 }
-                sidebarProperties.errorText = ""
+                if (!sidebarProperties.targetIsDir
+                    && sidebarProperties.metricsRequestId === 0)
+                    sidebarProperties.errorText = ""
                 sidebarProperties.propType = data.type || "Item"
-                sidebarProperties.propSize = AppState.formatSize(Number(data.size || 0))
+                if (!sidebarProperties.targetIsDir && data.sizeKnown !== false)
+                    sidebarProperties.propSize = AppState.formatSize(Number(data.size || 0))
                 sidebarProperties.propModified = sidebarProperties.fmtDate(Number(data.modifiedMs || 0) / 1000)
                 sidebarProperties.propPerms = data.permissions || "--"
-                var count = Number(data.contains || 0)
-                sidebarProperties.propContains = count > 0 ? (count + (count === 1 ? " item" : " itens")) : "--"
+                if (!sidebarProperties.targetIsDir || sidebarProperties.metricsRequestId === 0) {
+                    var count = Number(data.contains || 0)
+                    sidebarProperties.propContains = count > 0 ? (count + (count === 1 ? " item" : " itens")) : "--"
+                }
+            }
+            function onDirectoryMetricsStateChanged() {
+                sidebarProperties.applyMetricsState()
             }
         }
     }

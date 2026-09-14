@@ -21,6 +21,7 @@ public:
     BackendRequestId remount(const QString &devicePath) override;
     BackendRequestId fileOperation(const FileOperationRequest &request) override;
     BackendRequestId archiveOperation(const ArchiveOperationRequest &request) override;
+    BackendRequestId directoryMetrics(const DirectoryMetricsRequest &request) override;
     BackendRequestId utility(const UtilityRequest &request) override;
 
 public slots:
@@ -45,6 +46,12 @@ public:
     void completeArchiveOperation(
         BackendRequestId requestId,
         const ArchiveOperationResult &result);
+    void completeDirectoryMetricsProgress(
+        BackendRequestId requestId,
+        const DirectoryMetricsProgress &progress);
+    void completeDirectoryMetrics(
+        BackendRequestId requestId,
+        const DirectoryMetricsResult &result);
     void completeUtility(
         BackendRequestId requestId,
         const UtilityResult &result);
@@ -55,6 +62,7 @@ public:
     const QVector<QStringList> &deviceRequests() const;
     const QVector<FileOperationRequest> &fileOperationRequests() const;
     const QVector<ArchiveOperationRequest> &archiveOperationRequests() const;
+    const QVector<DirectoryMetricsRequest> &directoryMetricsRequests() const;
     const QVector<UtilityRequest> &utilityRequests() const;
     const QVector<BackendRequestId> &cancelledRequests() const;
 
@@ -67,6 +75,7 @@ private:
     QVector<QStringList> m_deviceRequests;
     QVector<FileOperationRequest> m_fileOperationRequests;
     QVector<ArchiveOperationRequest> m_archiveOperationRequests;
+    QVector<DirectoryMetricsRequest> m_directoryMetricsRequests;
     QVector<UtilityRequest> m_utilityRequests;
     QVector<BackendRequestId> m_cancelledRequests;
 };

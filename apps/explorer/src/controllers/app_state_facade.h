@@ -12,6 +12,7 @@
 namespace Astrea::Explorer::Native::Services {
 
 class FilesystemService;
+class DirectoryMetricsService;
 class IconThemeService;
 class LaunchService;
 class MimeAppsService;
@@ -50,6 +51,7 @@ struct AppStateFacadeDependencies
     DeviceController *devices = nullptr;
     RecentController *recent = nullptr;
     Services::FilesystemService *filesystem = nullptr;
+    Services::DirectoryMetricsService *directoryMetrics = nullptr;
     OpenWithController *openWith = nullptr;
     Services::LaunchService *launch = nullptr;
     Services::WindowsLaunchController *windowsLaunch = nullptr;
@@ -77,6 +79,15 @@ class AppStateFacade final : public QObject
     Q_PROPERTY(QString windowsLaunchRunner READ windowsLaunchRunner NOTIFY windowsLaunchStateChanged)
     Q_PROPERTY(QString windowsLaunchMachine READ windowsLaunchMachine NOTIFY windowsLaunchStateChanged)
     Q_PROPERTY(QStringList windowsLaunchWarnings READ windowsLaunchWarnings NOTIFY windowsLaunchStateChanged)
+    Q_PROPERTY(quint64 directoryMetricsRequestId READ directoryMetricsRequestId NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(bool directoryMetricsRunning READ directoryMetricsRunning NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(QString directoryMetricsState READ directoryMetricsState NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(qint64 directoryMetricsBytes READ directoryMetricsBytes NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(qint64 directoryMetricsFileCount READ directoryMetricsFileCount NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(qint64 directoryMetricsDirectoryCount READ directoryMetricsDirectoryCount NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(qint64 directoryMetricsUnreadableCount READ directoryMetricsUnreadableCount NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(qint64 directoryMetricsScannedEntryCount READ directoryMetricsScannedEntryCount NOTIFY directoryMetricsStateChanged)
+    Q_PROPERTY(QString directoryMetricsError READ directoryMetricsError NOTIFY directoryMetricsStateChanged)
     Q_PROPERTY(QString networkRootPath READ networkRootPath CONSTANT)
     Q_PROPERTY(QString trashFilesPath READ trashFilesPath CONSTANT)
     Q_PROPERTY(QString trashInfoPath READ trashInfoPath CONSTANT)
@@ -198,6 +209,15 @@ public:
     QString windowsLaunchRunner() const;
     QString windowsLaunchMachine() const;
     QStringList windowsLaunchWarnings() const;
+    quint64 directoryMetricsRequestId() const;
+    bool directoryMetricsRunning() const;
+    QString directoryMetricsState() const;
+    qint64 directoryMetricsBytes() const;
+    qint64 directoryMetricsFileCount() const;
+    qint64 directoryMetricsDirectoryCount() const;
+    qint64 directoryMetricsUnreadableCount() const;
+    qint64 directoryMetricsScannedEntryCount() const;
+    QString directoryMetricsError() const;
     QString networkRootPath() const;
     QString trashFilesPath() const;
     QString trashInfoPath() const;
@@ -345,6 +365,8 @@ public:
         const QString &prefix);
     Q_INVOKABLE BackendRequestId checkExecutable(const QString &program);
     Q_INVOKABLE BackendRequestId requestProperties(const QString &path);
+    Q_INVOKABLE BackendRequestId requestDirectoryMetrics(const QStringList &paths);
+    Q_INVOKABLE void cancelDirectoryMetrics(BackendRequestId requestId);
     Q_INVOKABLE BackendRequestId createDesktopShortcut(const QString &path);
     Q_INVOKABLE BackendRequestId requestNetworkMountProbe(const QString &rootPath);
     Q_INVOKABLE BackendRequestId connectToNetwork(const QString &address);
@@ -542,6 +564,7 @@ signals:
     void archiveCapabilitiesChanged();
     void wallpaperStateChanged();
     void windowsLaunchStateChanged();
+    void directoryMetricsStateChanged();
     void iconThemeChanged();
     void filesystemActionFinished(
         Astrea::Explorer::Native::Backend::BackendRequestId requestId,
@@ -567,6 +590,7 @@ private:
     DeviceController *m_devices = nullptr;
     RecentController *m_recentController = nullptr;
     Services::FilesystemService *m_filesystemService = nullptr;
+    Services::DirectoryMetricsService *m_directoryMetricsService = nullptr;
     bool m_appImageInstallRunning = false;
     bool m_wallpaperApplyRunning = false;
     OpenWithController *m_openWith = nullptr;
@@ -581,6 +605,15 @@ private:
     bool m_dialogActive = false;
     QString m_dialogMode {QStringLiteral("browse")};
     QStringList m_dialogFilePatterns;
+    BackendRequestId m_directoryMetricsRequestId = 0;
+    bool m_directoryMetricsRunning = false;
+    QString m_directoryMetricsState;
+    qint64 m_directoryMetricsBytes = 0;
+    qint64 m_directoryMetricsFileCount = 0;
+    qint64 m_directoryMetricsDirectoryCount = 0;
+    qint64 m_directoryMetricsUnreadableCount = 0;
+    qint64 m_directoryMetricsScannedEntryCount = 0;
+    QString m_directoryMetricsError;
 };
 
 } // namespace Astrea::Explorer::Native::Backend

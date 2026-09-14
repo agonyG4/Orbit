@@ -23,6 +23,15 @@ QtObject {
     readonly property string windowsLaunchRunner: nativeAppState.windowsLaunchRunner
     readonly property string windowsLaunchMachine: nativeAppState.windowsLaunchMachine
     readonly property var windowsLaunchWarnings: nativeAppState.windowsLaunchWarnings
+    readonly property int directoryMetricsRequestId: nativeAppState.directoryMetricsRequestId
+    readonly property bool directoryMetricsRunning: nativeAppState.directoryMetricsRunning
+    readonly property string directoryMetricsState: nativeAppState.directoryMetricsState
+    readonly property real directoryMetricsBytes: nativeAppState.directoryMetricsBytes
+    readonly property real directoryMetricsFileCount: nativeAppState.directoryMetricsFileCount
+    readonly property real directoryMetricsDirectoryCount: nativeAppState.directoryMetricsDirectoryCount
+    readonly property real directoryMetricsUnreadableCount: nativeAppState.directoryMetricsUnreadableCount
+    readonly property real directoryMetricsScannedEntryCount: nativeAppState.directoryMetricsScannedEntryCount
+    readonly property string directoryMetricsError: nativeAppState.directoryMetricsError
     readonly property string networkRootPath: nativeAppState.networkRootPath
     readonly property string trashFilesPath: nativeAppState.trashFilesPath
     readonly property string trashInfoPath: nativeAppState.trashInfoPath
@@ -462,6 +471,8 @@ QtObject {
     }
     function checkExecutable(program) { return nativeAppState.checkExecutable(program) }
     function requestProperties(path) { return nativeAppState.requestProperties(path) }
+    function requestDirectoryMetrics(paths) { return nativeAppState.requestDirectoryMetrics(paths) }
+    function cancelDirectoryMetrics(requestId) { nativeAppState.cancelDirectoryMetrics(requestId) }
     function createDesktopShortcut(path) { return nativeAppState.createDesktopShortcut(path) }
     function requestNetworkMountProbe(rootPath) { return nativeAppState.requestNetworkMountProbe(rootPath) }
     function openWithApplications(path) { return nativeAppState.openWithApplications(path) }
